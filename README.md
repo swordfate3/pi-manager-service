@@ -17,7 +17,7 @@ node dist/hub/pi-web-hub.mjs serve --config /tmp/pi-manager/config.json
 
 打包安装后，等价入口名为 `pi-manager`，命令仍是原有的 `init`、`serve`、`issue`、`revoke`、`pair` 和 `revoke-management`。`init` 会独占创建私有配置及状态目录；不要把真实生产配置、凭据或状态复制到测试目录。
 
-构建输出是 `dist/hub/pi-web-hub.mjs`，`dist/build-manifest.json` 绑定当前 Manager、Gate 和 runtime 源码。验证命令：
+构建输出是 `dist/hub/pi-web-hub.mjs`。`dist/build-manifest.json` 绑定打包后仍存在的 Manager、Gate 和 runtime 可执行源码及构建输出；它有意排除测试、锁文件和 TypeScript/Vite 开发配置，因此解压真实 tarball 后仍可运行 `verify:dist`。验证命令：
 
 ```bash
 npm run typecheck
@@ -37,13 +37,19 @@ npm run test:gate:socket
 
 这些测试只应使用临时配置和临时状态。真实 Docker/浏览器验收保留在 `integration-tests/runtime-updater/`，必须按原有显式环境变量启用；普通测试不会调用生产 Docker。
 
-## 产品边界
+## 当前可用边界
 
-- 管理器先启动，随后才启动 Pi；零个 Pi 运行时也能打开管理页面。
-- 管理会话、创建/停止 Pi、更新/回退 Pi，以及管理扩展安装和更新任务。
-- 设计中的 MCP 是管理器的一种调用入口，不是管理器的生命周期宿主；本阶段没有实现该入口。
-- 浏览器中的聊天由独立的 Pi Web 扩展负责。不安装管理器，也能使用单会话 Web 扩展。
-- 用户管理一个产品；内部保留低权限入口与受限执行器边界，不把容器控制权限直接交给聊天扩展。
+- Hub CLI 可以独立初始化和启动；零个 Pi 时管理页面和空会话 API 可用。
+- 已提取的 Hub 可以签发/撤销单会话登记凭据、接受现有兼容 Pi Web 适配器登记，并提供多会话门户及已有管理页面。
+- Gate/runtime 源码和校验工具随包分发，但 CLI 不会自动启动、部署或编排它们；遗留更新来源默认未配置。
+- 浏览器中的聊天仍由独立的 Pi Web 扩展负责。不安装 Manager，也能使用单会话 Web 扩展。
+
+## 后续设计目标（本阶段未实现）
+
+- 统一管理受管 Pi 的创建、停止、更新和回退。
+- 通过同一任务模型管理扩展安装与更新。
+- 提供独立的 MCP 调用入口、原生/Docker 后端和受限执行器，并完成跨平台隔离验收。
+- 形成一个对用户统一、内部维持低权限入口与受限执行器边界的 Manager 产品。
 
 ## 文档
 

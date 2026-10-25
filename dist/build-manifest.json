@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "source": {
-    "count": 85,
-    "sha256": "b5d34855719b32ad3f622029d087575caff29740a1d4dc3c114604e3e357475f",
+    "count": 73,
+    "sha256": "67ef73c781656dfb86e436e92874306694798462c4fae8bfafee9c586812f8a4",
     "files": [
       {
         "path": "bin/pi-web-hub.mjs",
@@ -209,12 +209,8 @@
         "sha256": "537b306082b44df576d7bc5e630a81ce5de15ae29572192963c060e517edcb40"
       },
       {
-        "path": "package-lock.json",
-        "sha256": "694748d93726f3ee4ea250e79e6a830fc89fa98278468807d25db75315f1da64"
-      },
-      {
         "path": "package.json",
-        "sha256": "6a3076e61859b68d6ee8f88494a9810a387af23c6e9e3ae06185221227b21fdb"
+        "sha256": "1101fb158586b934a358130b3974342dbf19a2acbd26cf48c35a218ff80f7a3b"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -257,22 +253,6 @@
         "sha256": "799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282"
       },
       {
-        "path": "runtime/__pycache__/pi_supervisor.cpython-314.pyc",
-        "sha256": "ca96bd2ae2078bc6ee13fc76d0e75111ad3a6ac5b8da75265dde9090279a066b"
-      },
-      {
-        "path": "runtime/__pycache__/runtime_identity.cpython-314.pyc",
-        "sha256": "0d35a80c289da30c580ac96a03d4a32782ffefe3499d9854ec128903dffc469e"
-      },
-      {
-        "path": "runtime/__pycache__/runtime_probe.cpython-314.pyc",
-        "sha256": "8f73d23344623b7b06c50a88971b4954ae08b36a4d51c82dcc6fbb89881450b9"
-      },
-      {
-        "path": "runtime/__pycache__/runtime_session.cpython-314.pyc",
-        "sha256": "8cfae1ed8273433431eeb19a4b61f9eafe10e71a8c6616761dd6b327617a7df7"
-      },
-      {
         "path": "runtime/pi-session-control",
         "sha256": "87d83da37bdcccd72024b94266c3d68f8ce6c0380108d532459fec430655c34c"
       },
@@ -313,46 +293,18 @@
         "sha256": "e219a94b2fcd13628f2e29d576cf801b1a162876377ff0d3fd86d2727f9b45c7"
       },
       {
-        "path": "runtime/source-provenance.json",
-        "sha256": "76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82"
-      },
-      {
-        "path": "runtime/tests/test_runtime_probe.py",
-        "sha256": "95a2813f3e14dd9919a333f7e85646b67a6c17fa2f3b46bb12e5897f18d5106a"
-      },
-      {
-        "path": "runtime/tests/test_runtime_probe_driver.py",
-        "sha256": "ac9bd867ef7e775c19f10e250542332dc5d1fa83fbf5db0f457a3931cc0a6169"
-      },
-      {
-        "path": "runtime/tests/test_runtime_probe_real.py",
-        "sha256": "5c05a4f4c7e18102180b991a05f3c67d43a5a7e53d87bd81d5d1c1a9e4afd597"
-      },
-      {
-        "path": "runtime/tests/test_runtime_probe_regressions.py",
-        "sha256": "9786aa7a19ba4c2904558af613d90a83d308d3c09b5c08fb35ab3ac67c7e94c5"
-      },
-      {
         "path": "scripts/manager-dist.mjs",
-        "sha256": "5380743669514a15e7c577fbf5b3100799954a0680a7888b2ef59610a7790417"
-      },
-      {
-        "path": "tsconfig.json",
-        "sha256": "b4d4142a0a36b5eec673ba6a96323db01148c467e10eb8ff4ae3ebed0fdd6679"
-      },
-      {
-        "path": "vite.config.ts",
-        "sha256": "abd34e2a076f460656eeebc462d534f38d6f74cd3e19dc2c45382f0fcd7f1bca"
+        "sha256": "b4d78b437d6546a6023fd2a4c41c41c655c96c34b05506aac8edd7ccc89e8cbe"
       }
     ]
   },
   "outputs": {
     "count": 1,
-    "sha256": "e2836e18118fea39d97d264f2c16c2f44004c9a83df245e4eae9af9cc3e61b2e",
+    "sha256": "c54ef645bb7adc813e01cb3aa7c990ab65dc213f3878f885e7894e7f26423980",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "5a627b3350e593afd97001013341326a52d68e5680ba43842eb32d39d9409976"
+        "sha256": "2b9730ae687dc72ab1393e1586a27d07cb520ad3ce161428f95c7919ca577a54"
       }
     ]
   }

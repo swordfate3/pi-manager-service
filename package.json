@@ -43,6 +43,7 @@
     "gate/gatectl",
     "runtime/*.py",
     "runtime/*.mjs",
+    "runtime/runtime_probe_provider.ts",
     "runtime/pi-session-control",
     "dist/",
     "scripts/manager-dist.mjs",

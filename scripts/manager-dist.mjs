@@ -6,14 +6,25 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 const MANIFEST = "build-manifest.json";
-const SOURCE_DIRECTORIES = ["bin", "hub", "protocol", "gate/gate", "runtime"];
+// The manifest is intentionally reproducible from an installed tarball. It
+// binds shipped executable/source inputs, not checkout-only tests, lockfiles,
+// or TypeScript/Vite development configuration.
+const SOURCE_DIRECTORIES = ["bin", "hub", "protocol", "gate/gate"];
 const SOURCE_FILES = [
   "gate/gatectl",
   "package.json",
-  "package-lock.json",
+  "runtime/README.md",
+  "runtime/pi-session-control",
+  "runtime/pi_launch_policy.py",
+  "runtime/pi_model_sync.py",
+  "runtime/pi_stdin_guard.mjs",
+  "runtime/pi_supervisor.py",
+  "runtime/runtime_identity.py",
+  "runtime/runtime_probe.py",
+  "runtime/runtime_probe_provider.ts",
+  "runtime/runtime_probe_ws.mjs",
+  "runtime/runtime_session.py",
   "scripts/manager-dist.mjs",
-  "tsconfig.json",
-  "vite.config.ts",
 ];
 const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs"];
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;

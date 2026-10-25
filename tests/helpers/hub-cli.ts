@@ -1,6 +1,6 @@
 // Exercise the packaged CLI, never the source server/config or the caller's real hub state.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,6 +15,20 @@ export type HubCliHarness = {
 };
 
 type Ready = { localUrl: string; socketPath: string };
+
+export function isolatedHubCliEnvironment(directory: string): NodeJS.ProcessEnv {
+  const { HOME: _home, PI_MANAGER_CONFIG: _manager, PI_WEB_UI_HUB_CONFIG: _legacy, ...inherited } = process.env;
+  const home = path.join(directory, "home");
+  const fallback = path.join(directory, "fallback");
+  mkdirSync(home, { recursive: true, mode: 0o700 });
+  mkdirSync(fallback, { recursive: true, mode: 0o700 });
+  return {
+    ...inherited,
+    HOME: home,
+    PI_MANAGER_CONFIG: path.join(fallback, "manager.json"),
+    PI_WEB_UI_HUB_CONFIG: path.join(fallback, "legacy-hub.json"),
+  };
+}
 
 async function stopChild(child: ChildProcess) {
   if (!child.pid || child.exitCode !== null || child.signalCode !== null) return;
@@ -43,7 +57,7 @@ export async function startHubCli(options: { repositoryRoot: string; runtimeDir?
   const cli = path.join(runtimeDir, "dist/hub/pi-web-hub.mjs");
   const dir = mkdtempSync(path.join(tmpdir(), "pi-hub-cli-e2e-"));
   const config = path.join(dir, "config.json");
-  const env = { ...process.env, PI_WEB_UI_HUB_CONFIG: config };
+  const env = isolatedHubCliEnvironment(dir);
   let child: ChildProcess | undefined;
   let ready: Ready | undefined;
   let capabilityIndex = 0;

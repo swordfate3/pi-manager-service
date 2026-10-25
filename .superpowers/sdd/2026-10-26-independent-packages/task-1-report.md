@@ -72,8 +72,9 @@ The old Gate source/repository and entrypoint pins in `sources.py`, `registry.py
 The final generated `docs/migration-inventory.json` records:
 
 - 254 migrated source-to-target entries
-- 37 adapted targets
+- 38 adapted targets
 - 89 entries sourced from the original `e2e/` tree
+- four explicit replaced/documentary dispositions
 - source commit and per-file source/target SHA-256 values
 
 The complete original `e2e/` tree is preserved verbatim under `integration-tests/legacy-web/e2e/`, including:
@@ -92,14 +93,14 @@ These archived integration/e2e files were **not run and are not claimed as passi
 Final inventory verification recomputed every immutable source hash and current target hash:
 
 ```text
-{"count":254,"adapted":37,"e2e":89,"mismatches":0}
+{"schemaVersion":2,"count":254,"adapted":38,"e2e":89,"dispositions":4,"mismatches":0,"dispositionMismatches":0}
 ```
 
 ## Test classification
 
 ### Manager Node tests
 
-- default TypeScript units: 12 files in `tests/*.test.ts`
+- default TypeScript units: 13 files in `tests/*.test.ts` after adding the focused helper-environment regression
 - package/distribution regressions: 3 files in `tests/*.test.mjs`
 - temporary socket tests: 11 files in `tests/socket/*.test.ts`
 - mixed Web/Hub tests: 11 files in `integration-tests/legacy-web/tests/`, excluded from defaults
@@ -289,10 +290,14 @@ node tests/gate-test-classification.test.mjs
 
 ### Manager offline units
 
+Initial broad run before the focused review regression was added:
+
 ```text
 npm run test:unit
 12 files passed, 0 failed
 ```
+
+The thirteenth file, `tests/helper-environment.test.ts`, was run directly in the review fix round and passed 1/1; the broad unit command was intentionally not rerun.
 
 ### Gate offline
 
@@ -431,3 +436,139 @@ The smoke proved:
 - The nine-file Gate socket class was intentionally not run at the extraction boundary.
 - Gate offline retained eight original environment/opt-in skips; runtime offline retained four original opt-in skips. Skips are not counted as passes.
 - The original RED test safety incident created `/home/fate/.pi/web-hub/config.json`; it remains untouched pending controller/user remediation.
+
+## Review fix round 1
+
+Review input: `.superpowers/sdd/2026-10-26-independent-packages/task-1-review.md`.
+
+All four findings were addressed without rerunning the broad Gate/runtime/unit suites.
+
+### Packed runtime probe closure and extracted verifier
+
+Focused regressions were written before implementation. Initial command:
+
+```text
+node tests/manager-dist.test.mjs
+```
+
+It was run with permission limited to local scripts-disabled/offline `npm pack`, temporary tar extraction, and the extracted verifier. RED output retained both blocking findings:
+
+```text
+contains all three fixed runtime probe files as regular non-symlink files
+ENOENT: .../runtime/runtime_probe_provider.ts
+
+runs the shipped distribution verifier from the extracted tarball
+Manager distribution verification failed: ENOENT: .../package/package-lock.json
+
+# tests 5
+# pass 2
+# fail 3
+```
+
+Correction:
+
+- `package.json` explicitly includes `runtime/runtime_probe_provider.ts`.
+- `scripts/manager-dist.mjs` now inventories only executable/source inputs intentionally present in the packed distribution: `bin/`, `hub/`, `protocol/`, `gate/gate/`, `gate/gatectl`, the explicit production runtime file set, `package.json`, and the shipped verifier itself.
+- Checkout-only tests, `package-lock.json`, `tsconfig.json`, and `vite.config.ts` are deliberately excluded from the build manifest. They are development/test inputs, not files an installed tarball can verify.
+- Mutation detection and no-symlink traversal rules are unchanged.
+
+Final focused command:
+
+```text
+node tests/manager-dist.test.mjs
+```
+
+GREEN output:
+
+```text
+distribution verification rejects source drift after the bundle manifest is written: ok
+distribution inventory refuses source symlinks: ok
+actual packed artifact contains runtime_probe.py, runtime_probe_provider.ts and runtime_probe_ws.mjs: ok
+shipped verifier runs from the extracted tarball: ok
+
+# tests 5
+# pass 5
+# fail 0
+```
+
+The tarball regression invokes:
+
+```text
+npm pack --ignore-scripts --offline --json --pack-destination <temporary-directory>
+```
+
+It performs no lifecycle scripts or network access, extracts into its own temporary directory, requires all three probe files to be regular non-symlink files, and invokes only the verifier shipped in that extracted artifact.
+
+### Hub CLI helper fallback isolation
+
+RED command:
+
+```text
+node --import ./tests/register-ts.mjs --test tests/helper-environment.test.ts
+```
+
+RED output:
+
+```text
+SyntaxError: The requested module './helpers/hub-cli.ts' does not provide an export named 'isolatedHubCliEnvironment'
+# pass 0
+# fail 1
+```
+
+Correction: `tests/helpers/hub-cli.ts` now creates a private temporary HOME and separate fallback paths below the helper root, removes inherited `HOME`, `PI_MANAGER_CONFIG`, and `PI_WEB_UI_HUB_CONFIG` values before constructing the child environment, and still passes explicit `--config` to every state-initializing CLI command.
+
+Focused environment GREEN:
+
+```text
+node --import ./tests/register-ts.mjs --test tests/helper-environment.test.ts
+# tests 1
+# pass 1
+# fail 0
+```
+
+Focused real helper lifecycle GREEN, using only temporary loopback/Unix listeners and isolated temporary state:
+
+```text
+node --import ./tests/register-ts.mjs tests/socket/hub-cli.test.ts
+# tests 11
+# pass 11
+# fail 0
+```
+
+No host configuration path or contents were accessed by this fix round.
+
+### README capability correction
+
+The README now separates current extraction capabilities from future architecture. Current claims are limited to zero-Pi Hub initialization/serving, existing registration/session routing/portal behavior, and distribution of unconnected Gate/runtime sources. Pi lifecycle management, extension tasks, MCP, native/Docker backends, and a unified Manager remain explicitly future and unimplemented.
+
+The README also documents the packed-source manifest policy and states that `verify:dist` is designed to run after extracting the real tarball.
+
+### Configuration/document disposition accounting for Task 2
+
+`docs/migration-inventory.json` is now schema version 2 and contains a separate four-entry `dispositions` section, without copying or enabling additional runtime behavior:
+
+- `hub/package.json`, source SHA-256 `3ca9d4afd21425087cf31893b8f9f63c81b0b8408db5e343ca76e5f8aa26ab9a`: old embedded-Hub package boundary replaced by root `package.json`.
+- `vite.hub.config.ts`, source SHA-256 `3a3cc7544f33de42889bc6bfd03e02b68b76bdca8b67c56a7bc05d1c67b20acd`: old Web-repository Hub build entry replaced by root `vite.config.ts`.
+- `integrations/runtime-updater/README.md`, source SHA-256 `799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282`: documentary migration to `runtime/README.md`; no runtime wiring claim.
+- `integrations/runtime-updater/provenance.json`, source SHA-256 `76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82`: documentary migration to `runtime/source-provenance.json`; legacy deployment remains unconfigured.
+
+Final inventory verification:
+
+```text
+{"schemaVersion":2,"count":254,"adapted":38,"e2e":89,"dispositions":4,"mismatches":0,"dispositionMismatches":0}
+```
+
+### Final focused build verification
+
+```text
+npm run build
+tsc --noEmit
+vite v8.0.14
+33 modules transformed
+dist/hub/pi-web-hub.mjs 278.28 kB | gzip 73.99 kB
+
+npm run verify:dist
+exit 0
+```
+
+Broad Gate/runtime/default-unit suites were not rerun because the fix touched only package inclusion, the shipped inventory policy, a test helper environment, focused tests, README wording, and migration accounting. Gate socket tests and the unresolved aggregate socket-runner evidence boundary remain unchanged. Controller-owned documentation and `integration-tests/protocol-compatibility.test.mjs` are excluded from this fix commit.

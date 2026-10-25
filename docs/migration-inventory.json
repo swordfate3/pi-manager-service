@@ -1,8 +1,39 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "sourceRepository": "pi-web-ui-hub-approvals",
   "sourceCommit": "27326a8cbea8331cac29e6b6b41f98f2b69fa05b",
   "count": 254,
+  "dispositionCount": 4,
+  "dispositions": [
+    {
+      "source": "hub/package.json",
+      "sha256": "3ca9d4afd21425087cf31893b8f9f63c81b0b8408db5e343ca76e5f8aa26ab9a",
+      "disposition": "replaced",
+      "target": "package.json",
+      "rationale": "The old embedded-Hub package boundary is retired and replaced by the independent Manager package metadata; it is not shipped as a nested package."
+    },
+    {
+      "source": "vite.hub.config.ts",
+      "sha256": "3a3cc7544f33de42889bc6bfd03e02b68b76bdca8b67c56a7bc05d1c67b20acd",
+      "disposition": "replaced",
+      "target": "vite.config.ts",
+      "rationale": "The old Web-repository Hub build entry is retired and replaced by the independent Manager build configuration."
+    },
+    {
+      "source": "integrations/runtime-updater/README.md",
+      "sha256": "799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282",
+      "disposition": "documentary-migration",
+      "target": "runtime/README.md",
+      "rationale": "Documentation was copied for provenance and operational context; this disposition does not claim new runtime wiring."
+    },
+    {
+      "source": "integrations/runtime-updater/provenance.json",
+      "sha256": "76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82",
+      "disposition": "documentary-migration",
+      "target": "runtime/source-provenance.json",
+      "rationale": "Provenance metadata was copied without changing or enabling the legacy deployment integration."
+    }
+  ],
   "entries": [
     {
       "source": "bin/pi-web-hub.mjs",
@@ -1611,8 +1642,8 @@
       "source": "e2e/harness/hub-cli.ts",
       "target": "tests/helpers/hub-cli.ts",
       "sha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
-      "targetSha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
-      "adapted": false
+      "targetSha256": "974505d9f4488723cbc7d2d38d8492e71fd346c719b8942ebc4a5e033b10e66f",
+      "adapted": true
     },
     {
       "source": "tests/hub-approvals-portal.test.ts",

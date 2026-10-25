@@ -642,4 +642,3 @@ Allow this one focused socket CLI test to create only temporary loopback and Uni
 ```
 
 The updated mapped target SHA-256 for `tests/socket/hub-cli.test.ts` is `c423390ffbf49f952d8737f983a5899cd897775778ff236b9c24d76b357458d0`. No broad suite, Gate test, build, or distribution rebuild was run because no shipped or production file changed. Controller-owned documentation and `integration-tests/protocol-compatibility.test.mjs` remain excluded.
-

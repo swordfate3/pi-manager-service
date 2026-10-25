@@ -10,4 +10,3 @@ Evidence:
 - `docs/migration-inventory.json` records target SHA-256 `c423390ffbf49f952d8737f983a5899cd897775778ff236b9c24d76b357458d0`, matching the current `tests/socket/hub-cli.test.ts` bytes.
 
 Verification boundary: the already-recorded focused result is 11/11 passing; it was not rerun as instructed. The four fix-round-1 findings remain accepted as PASS and were not reopened. No full review or packed-source-policy review was performed.
-

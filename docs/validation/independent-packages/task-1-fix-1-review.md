@@ -31,4 +31,3 @@ Scope: focused re-review of `.superpowers/sdd/2026-10-26-independent-packages/re
 ## Evidence limit
 
 No commands that build, pack, run tests, open listeners, or inspect external state were executed in this re-review. Reported GREEN results in `task-1-report.md` were treated as supplied fix evidence; this verdict is based on the scoped diff and static file/line inspection only.
-

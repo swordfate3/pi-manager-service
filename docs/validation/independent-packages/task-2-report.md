@@ -306,4 +306,3 @@ Exact tracked deletion list:
 - The Manager 2,000-rotation stress test was not rerun. Controller established the same 60-second cancellation on immutable source `27326a8` (7 passed, 1 cancelled, 62.73 seconds), so it is recorded as baseline rather than an extraction regression.
 - Manager build/dist was not rerun after the companion commits. A controller check found current Manager `verify:dist` drift only because the two focused Python fixture runs emitted 18 ignored `gate/gate/__pycache__/*.pyc` files that the source walker sees. No shipped Manager source/runtime changed; this task did not delete those untracked caches, rebuild Manager to include them, or claim a hidden pass.
 - Historical validation documents and `docs/hub.md` remain as provenance/history and were not treated as current Web package contents.
-

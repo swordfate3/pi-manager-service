@@ -158,4 +158,3 @@ There is no source-level proof that the socket aggregate anomaly also affects `t
 ## Final decision
 
 Task 1 should not be accepted as an independently distributable Manager package until the two packed-artifact closure defects and the remaining fallback-test isolation defect are fixed and reviewed. After those fixes, a focused re-review should verify an extracted tarball, including the runtime probe trio and `verify:dist`, plus the corrected helper environment. The unresolved aggregate socket runner should remain an explicit evidence limitation unless a complete 11-file aggregate is later captured; it should not be converted into a code-failure claim without proof.
-

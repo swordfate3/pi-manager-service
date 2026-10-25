@@ -21,6 +21,7 @@ import { initializeHub, issueSession, readGrant, readHubConfig, revokeSession } 
 import { issueManagementCode, revokeManagement } from "../../hub/management.ts";
 import { startHub } from "../../hub/server.ts";
 import { storageDiagnostics, withStateWriter } from "../../hub/state-budget.ts";
+import { isolatedHubCliEnvironment } from "../helpers/hub-cli.ts";
 
 function fixture(t: test.TestContext) {
   const dir = mkdtempSync(path.join(tmpdir(), "bounded-state-"));
@@ -29,7 +30,7 @@ function fixture(t: test.TestContext) {
   initializeHub(file, { port: 0 });
   const config = readHubConfig(file);
   const credential = issueSession(config, path.join(dir, "first.json"), { label: "live" });
-  return { dir, file, config, credential };
+  return { dir, file, config, credential, cliEnvironment: isolatedHubCliEnvironment(dir) };
 }
 
 function seedActiveGrants(config: { stateDir: string }, total: number) {
@@ -217,7 +218,7 @@ test("a crashed writer lock blocks CLI and authentication writers, without auto-
       "--output",
       path.join(f.dir, "blocked.json"),
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: f.cliEnvironment },
   );
   assert.equal(result.status, 1);
   assert.equal(existsSync(path.join(f.dir, "blocked.json")), false);
@@ -270,7 +271,7 @@ test("separate CLI issuers cannot oversubscribe the final grant slot", async (t)
           "--output",
           path.join(f.dir, `race-${index}.json`),
         ],
-        { stdio: "ignore" },
+        { stdio: "ignore", env: f.cliEnvironment },
       );
       child.once("error", reject);
       child.once("exit", resolve);
@@ -313,7 +314,7 @@ test("live writer ownership excludes every administrative process, then releases
     const revoke = spawnSync(
       process.execPath,
       ["bin/pi-web-hub.mjs", "revoke", "--config", f.file, "--run-id", f.credential.run_id],
-      { encoding: "utf8" },
+      { encoding: "utf8", env: f.cliEnvironment },
     );
     assert.equal(revoke.status, 1);
     assert.equal(readGrant(f.config, f.credential.run_id).revoked, false);

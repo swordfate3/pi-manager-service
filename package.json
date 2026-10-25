@@ -39,7 +39,7 @@
     "bin/",
     "hub/",
     "protocol/",
-    "gate/gate/",
+    "gate/gate/*.py",
     "gate/gatectl",
     "runtime/*.py",
     "runtime/*.mjs",

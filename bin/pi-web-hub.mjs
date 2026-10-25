@@ -7,16 +7,16 @@ import { startHub } from "../hub/server.ts";
 
 const help = `Pi Web Hub — independent multi-session portal
 
-  pi-web-hub init [--port 16180] [--public-url https://pi.example.com/]
+  pi-manager init [--port 16180] [--public-url https://pi.example.com/]
     [--management-port 16181] [--management-public-url https://admin.example.com/]
-  pi-web-hub serve
-  pi-web-hub issue --label "Project A" --output /private/session-a.json [--backend-host 127.0.0.1]
-  pi-web-hub revoke --run-id <session-capability-id>
-  pi-web-hub pair                     Generate a single-use management code (10 minutes)
-  pi-web-hub revoke-management        Revoke all browser management sessions
+  pi-manager serve
+  pi-manager issue --label "Project A" --output /private/session-a.json [--backend-host 127.0.0.1]
+  pi-manager revoke --run-id <session-capability-id>
+  pi-manager pair                     Generate a single-use management code (10 minutes)
+  pi-manager revoke-management        Revoke all browser management sessions
 
 All commands accept --config <file> (default ~/.config/pi-manager/config.json).
-The hub never launches agents or deploys SSH/TLS/login. See docs/hub.md.
+The hub never launches agents or deploys SSH/TLS/login. See README.md.
 Mount only the runtime directory and the individual credential into a Pi container;
 never expose the hub administrator state directory to agents.
 `;

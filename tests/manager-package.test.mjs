@@ -108,6 +108,17 @@ test("the detached bundle runs with only declared runtime dependencies", () => {
   }
 });
 
+test("installed CLI help advertises the shipped pi-manager command and README", () => {
+  const result = spawnSync(process.execPath, [cli, "--help"], { encoding: "utf8" });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /pi-manager init/);
+  assert.match(result.stdout, /README\.md/);
+  assert.doesNotMatch(result.stdout, /pi-web-hub\s/);
+  assert.doesNotMatch(result.stdout, /docs\/hub\.md/);
+});
+
 test("invalid CLI arguments fail without echoing secret input", () => {
   const directory = temporaryDirectory("pi-manager-invalid-");
   const home = path.join(directory, "home");

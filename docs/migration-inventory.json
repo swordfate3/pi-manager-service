@@ -39,7 +39,7 @@
       "source": "bin/pi-web-hub.mjs",
       "target": "bin/pi-web-hub.mjs",
       "sha256": "baf368e8f64e69f2795401c15eb0801b78b5369a3860bd7bb97adb8570a4f760",
-      "targetSha256": "d990cd6ffdf84789d3f76a692aa39b5e6b2dc42f51806cac6ffe167c250fc847",
+      "targetSha256": "72aed9f51729dcd59aa396f611e2ed7177d7410fb9426d3c383b723aafa1be5e",
       "adapted": true
     },
     {
@@ -1733,7 +1733,7 @@
       "source": "tests/hub-bounded-registry.test.ts",
       "target": "tests/socket/hub-bounded-registry.test.ts",
       "sha256": "d933fd5b6e7f1cdf021fb710df08c8e2d0d9980ae7b31b6d8291c7fc188dd26b",
-      "targetSha256": "f427b90d1980b67a9b204272cff09c492583238021e5ec98c4313e95be621162",
+      "targetSha256": "918b69c8607e9df5c7539b7b3aedb2dd329f418031a0167ef1d44728458041d5",
       "adapted": true
     },
     {
@@ -1803,7 +1803,7 @@
       "source": "tests/hub-state-budget.test.ts",
       "target": "tests/socket/hub-state-budget.test.ts",
       "sha256": "9a356add9ac52c8c227cfaff8277cd4554bc4d40602c6eb1bf99d256a97594e8",
-      "targetSha256": "a2e26ce16445f6a65be3fbaa88d3a687e1d789fac7f21afa51e3e0116fe53593",
+      "targetSha256": "d17ccd970920b333b3cda93effbb266bccb03a3919c8891aa82b5936c4d85064",
       "adapted": true
     },
     {

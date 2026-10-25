@@ -28,6 +28,7 @@ const SOURCE_FILES = [
 ];
 const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs"];
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const PYTHON_BYTECODE = /\.(?:pyc|pyo)$/u;
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const compare = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
@@ -92,6 +93,8 @@ async function walk(root, key, records, prefix = "") {
   for (const entry of entries) {
     const child = `${key}/${entry.name}`;
     if (entry.isSymbolicLink()) fail(`Refusing to follow symlink: ${child}`);
+    if ((entry.isDirectory() && entry.name === "__pycache__") || (entry.isFile() && PYTHON_BYTECODE.test(entry.name)))
+      continue;
     if (entry.isDirectory()) await walk(root, child, records, prefix);
     else if (entry.isFile()) records.push({ path: `${prefix}${child}`, sha256: await hashFile(root, child) });
     else fail(`Unsupported source entry: ${child}`);

@@ -9,6 +9,7 @@ import path from "node:path";
 import test from "node:test";
 import { initializeHub, issueSession, readHubConfig, revokeSession } from "../../hub/config.ts";
 import { startHub } from "../../hub/server.ts";
+import { isolatedHubCliEnvironment } from "../helpers/hub-cli.ts";
 
 const protocol = "bounded-v2";
 async function fixture(t: test.TestContext) {
@@ -64,6 +65,7 @@ async function fixture(t: test.TestContext) {
     file,
     config,
     credential,
+    cliEnvironment: isolatedHubCliEnvironment(dir),
     port,
     exchange,
     get hub() {
@@ -276,7 +278,7 @@ test("a separate CLI revoke during proof wins before registration memory publica
   const revoked = spawnSync(
     process.execPath,
     ["bin/pi-web-hub.mjs", "revoke", "--config", f.file, "--run-id", f.credential.run_id],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: f.cliEnvironment },
   );
   release();
   assert.equal(revoked.status, 0, revoked.stderr);

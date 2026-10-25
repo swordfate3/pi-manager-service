@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "source": {
     "count": 73,
-    "sha256": "67ef73c781656dfb86e436e92874306694798462c4fae8bfafee9c586812f8a4",
+    "sha256": "f2de543148aae1627dfb104aa7e2f33ec24aa6b8e1fd65b90a2fc231632a4ceb",
     "files": [
       {
         "path": "bin/pi-web-hub.mjs",
-        "sha256": "d990cd6ffdf84789d3f76a692aa39b5e6b2dc42f51806cac6ffe167c250fc847"
+        "sha256": "72aed9f51729dcd59aa396f611e2ed7177d7410fb9426d3c383b723aafa1be5e"
       },
       {
         "path": "gate/gate/__init__.py",
@@ -210,7 +210,7 @@
       },
       {
         "path": "package.json",
-        "sha256": "1101fb158586b934a358130b3974342dbf19a2acbd26cf48c35a218ff80f7a3b"
+        "sha256": "599e04c6235b6e7025a10b97d2afe072037f1783e7e50065b0fabab95499e731"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -294,17 +294,17 @@
       },
       {
         "path": "scripts/manager-dist.mjs",
-        "sha256": "b4d78b437d6546a6023fd2a4c41c41c655c96c34b05506aac8edd7ccc89e8cbe"
+        "sha256": "3e611d36bc6561aa072cb631be4fc631e1f3df53e989ad10cbe858ecc392c562"
       }
     ]
   },
   "outputs": {
     "count": 1,
-    "sha256": "c54ef645bb7adc813e01cb3aa7c990ab65dc213f3878f885e7894e7f26423980",
+    "sha256": "256ddd7123a90e636e86e879fd0cb7285cf5169c85a8f46135e3e96a3dfb69e0",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "2b9730ae687dc72ab1393e1586a27d07cb520ad3ce161428f95c7919ca577a54"
+        "sha256": "8ac83c6e6468317648bdd8bacc01008b925166e916f2dc27a2079d77508482e1"
       }
     ]
   }

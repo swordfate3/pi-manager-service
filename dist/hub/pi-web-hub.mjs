@@ -4180,7 +4180,7 @@ function captureHubMetadata(moduleUrl = import.meta.url) {
 	{
 		const embedded = {
 			"version": "0.1.0",
-			"build": "67ef73c781656dfb86e436e92874306694798462c4fae8bfafee9c586812f8a4"
+			"build": "f2de543148aae1627dfb104aa7e2f33ec24aa6b8e1fd65b90a2fc231632a4ceb"
 		};
 		if (embedded && isStableSemver(embedded.version) && SHA256.test(embedded.build)) return Object.freeze({
 			version: embedded.version,
@@ -5379,16 +5379,16 @@ async function startLockedHub(config, options) {
 init_config();
 var help = `Pi Web Hub — independent multi-session portal
 
-  pi-web-hub init [--port 16180] [--public-url https://pi.example.com/]
+  pi-manager init [--port 16180] [--public-url https://pi.example.com/]
     [--management-port 16181] [--management-public-url https://admin.example.com/]
-  pi-web-hub serve
-  pi-web-hub issue --label "Project A" --output /private/session-a.json [--backend-host 127.0.0.1]
-  pi-web-hub revoke --run-id <session-capability-id>
-  pi-web-hub pair                     Generate a single-use management code (10 minutes)
-  pi-web-hub revoke-management        Revoke all browser management sessions
+  pi-manager serve
+  pi-manager issue --label "Project A" --output /private/session-a.json [--backend-host 127.0.0.1]
+  pi-manager revoke --run-id <session-capability-id>
+  pi-manager pair                     Generate a single-use management code (10 minutes)
+  pi-manager revoke-management        Revoke all browser management sessions
 
 All commands accept --config <file> (default ~/.config/pi-manager/config.json).
-The hub never launches agents or deploys SSH/TLS/login. See docs/hub.md.
+The hub never launches agents or deploys SSH/TLS/login. See README.md.
 Mount only the runtime directory and the individual credential into a Pi container;
 never expose the hub administrator state directory to agents.
 `;

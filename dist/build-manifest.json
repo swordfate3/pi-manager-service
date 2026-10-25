@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "count": 85,
+    "sha256": "b5d34855719b32ad3f622029d087575caff29740a1d4dc3c114604e3e357475f",
+    "files": [
+      {
+        "path": "bin/pi-web-hub.mjs",
+        "sha256": "d990cd6ffdf84789d3f76a692aa39b5e6b2dc42f51806cac6ffe167c250fc847"
+      },
+      {
+        "path": "gate/gate/__init__.py",
+        "sha256": "0e63bade30e31a774fdef26ff4b787cface555ec1916736d71fc2150d46d00e4"
+      },
+      {
+        "path": "gate/gate/admin.py",
+        "sha256": "9f9ef4c86747a5d3ca7f8f41e170630fb2490d0f9caef809de3b92db54ec35b9"
+      },
+      {
+        "path": "gate/gate/artifacts.py",
+        "sha256": "1727a4cad842f4aee2ed73922c459a20a62146e0948a244fa86dd8cb1d8879d3"
+      },
+      {
+        "path": "gate/gate/client.py",
+        "sha256": "34ea130d0a10ae4e9bd1629393100924d15fb91af4b5f85b5cd2be2e201d47da"
+      },
+      {
+        "path": "gate/gate/deploy.py",
+        "sha256": "24c5a44b74ae4f845531fdf5fc8389965e59026a82356e0a6b024afc385a94b5"
+      },
+      {
+        "path": "gate/gate/engine.py",
+        "sha256": "9b0f253629bb0c49edb349184f58f6a68e8169da7bca9992385231ac24eda42a"
+      },
+      {
+        "path": "gate/gate/errors.py",
+        "sha256": "e20be673cedf6da458411471ef363fb0a5bb7f9ce10e9678e65f484692079664"
+      },
+      {
+        "path": "gate/gate/hostseal.py",
+        "sha256": "6013397c8a47ca004fb08502ac1682d63522cb0889d3a6fe2c8594c0efa1dd7b"
+      },
+      {
+        "path": "gate/gate/hub_management.py",
+        "sha256": "9fbc6277b1f12daba93869497c4c3a066ec9b584081469f70a55dcbede953874"
+      },
+      {
+        "path": "gate/gate/image_deploy.py",
+        "sha256": "2d3e5a742c2b6d86cacaf16786094fc780ccdaa15527661d31dfbfbbed518abb"
+      },
+      {
+        "path": "gate/gate/lifecycle.py",
+        "sha256": "807f14b482ac40a29606b3b310ff0c84be0ebbb54eca3acf8197bd3e582d4d5c"
+      },
+      {
+        "path": "gate/gate/lifecycle_contract.py",
+        "sha256": "a4b4f80a49e3f3c4734fbbb8fc37aef14dfab99813c47c0b7e48373d8318be22"
+      },
+      {
+        "path": "gate/gate/pi_launch_engine.py",
+        "sha256": "36bd0bc471b2e6576aed17ef2ba9c393179e02508c1ea8c7415e5f5f3b24b12b"
+      },
+      {
+        "path": "gate/gate/pi_launches.py",
+        "sha256": "aefa1a0b5ffd25616d998a90a5c5aab5bb866a7c0341db037db3cf62c8f06d82"
+      },
+      {
+        "path": "gate/gate/registry.py",
+        "sha256": "a30b1733e5fdba67a6cd205141d6cce41c3ae60e939014c513066380325beb48"
+      },
+      {
+        "path": "gate/gate/router.py",
+        "sha256": "c455cf5ae62e0b9aa379ab3f76e0c114521ccc9c3918ffffe4b02505ea789dfe"
+      },
+      {
+        "path": "gate/gate/runtime_catalog.py",
+        "sha256": "36ac7641b48f6b42afab441f91ac61d938b2206b5b6911a1a981b40974824123"
+      },
+      {
+        "path": "gate/gate/runtime_engine.py",
+        "sha256": "2bc1cc2e7f1d669409fd8720c4cdf929755f6a735b12f3839a132f9395152f5c"
+      },
+      {
+        "path": "gate/gate/runtime_install.py",
+        "sha256": "821d0b04318dbe34ba1a369c7822ddcc592dab43f494e4f2087909e86f8269a7"
+      },
+      {
+        "path": "gate/gate/runtime_restore.py",
+        "sha256": "ef10d6ec49b8ed1ab5ab261696fa2d781efb5458eb02ee4cffaecb478d44b99a"
+      },
+      {
+        "path": "gate/gate/runtime_updates.py",
+        "sha256": "ea291d3362e0be4cc4b5911edbbe575f773661146b912a9dbe83e83dc0c5554c"
+      },
+      {
+        "path": "gate/gate/service.py",
+        "sha256": "78731e24044dad4b62d1ceeed2f4c7421c28b57808f367aeefedf9c579c3dda5"
+      },
+      {
+        "path": "gate/gate/sources.py",
+        "sha256": "39ed8f830e2b408a9bb1a0ab4f06bc266afe226fe765ca342f8a5579a7ee9038"
+      },
+      {
+        "path": "gate/gate/store.py",
+        "sha256": "4d5cd4ed6956b7e89635af76d9d4bb60f158281bce65f7edbcdb25941dc38143"
+      },
+      {
+        "path": "gate/gate/terminal_contract.py",
+        "sha256": "d59923ef076e5a9bef9055345d52a0532c2fbcc72d5619ebd330373f8655bd2b"
+      },
+      {
+        "path": "gate/gate/terminal_provider.py",
+        "sha256": "087c98ca4c523db7494588fb5393f2c1c089da01882f05b0be698fc2aed245d1"
+      },
+      {
+        "path": "gate/gatectl",
+        "sha256": "ca0f7d1fc9f8f286e9f9bccf0ebfc75829d85fa6b619ee7f50c12e186d27c37f"
+      },
+      {
+        "path": "hub/approvals-portal.ts",
+        "sha256": "07dd51d867172e458dc04de0e514e59c784d72b81fbde39d5b464c3eaf64069b"
+      },
+      {
+        "path": "hub/asset-transfer.ts",
+        "sha256": "caddd274bb7124d88f13f706650388d1e2cc0dc44afe9016cde0a4f7bef486e9"
+      },
+      {
+        "path": "hub/bounded-registry.ts",
+        "sha256": "ad21dffbf9d93d7e90b626e4ad6cac3c3336497882eff554c056589f7498ae29"
+      },
+      {
+        "path": "hub/config.ts",
+        "sha256": "d5b439722fdc9491b9c724fdaf4403767f5c2afbc42c0505225d0746048ac44e"
+      },
+      {
+        "path": "hub/forward-queue.ts",
+        "sha256": "437ac2eef32eb04f11cfeef0a17ca9eb103f656376fa06fd7de83e9f7a1aafc1"
+      },
+      {
+        "path": "hub/gate-management.ts",
+        "sha256": "b450da21e047701e542c1f64370b33a59bcabd73c4f4b04a3c5c8cf486a25a1c"
+      },
+      {
+        "path": "hub/gateway-auth.ts",
+        "sha256": "4bfa613df73edd4182657f2622d8f92ad454df61a9e62e44a9b9fede20eaee02"
+      },
+      {
+        "path": "hub/interaction-control.ts",
+        "sha256": "2d1d443e02d7633b91bd16f308ff59a95ad554e279b129c24f88f067a254a8e4"
+      },
+      {
+        "path": "hub/interaction-page.ts",
+        "sha256": "41aec3a3f1786234bfe37bc5104bfc2e24e0e9f33a49514f027b9da40d599266"
+      },
+      {
+        "path": "hub/interaction-signing.ts",
+        "sha256": "016b9b5ec2ff518c4bf93f2a637914a5a7fbcd85320344def96bc8973c0b2733"
+      },
+      {
+        "path": "hub/interactions.ts",
+        "sha256": "d408ed4c136cd0dd22e80f6725b0b989e057c9866a6975ff6fe184ba7a838874"
+      },
+      {
+        "path": "hub/launch-portal.ts",
+        "sha256": "ae1580aaf4e2d35a625b28a5c70fd8a4c256382ca36f3ce981cb81979ee84fdf"
+      },
+      {
+        "path": "hub/lifecycle.ts",
+        "sha256": "4322eac00208d1fc3e4f10cc8dd846e600a4211138dc16b854fd20283d72bbed"
+      },
+      {
+        "path": "hub/limits.ts",
+        "sha256": "00fbbfa392d756e1517323c5e22d83378dc2caa76e29d443796bedcad75c249a"
+      },
+      {
+        "path": "hub/management.ts",
+        "sha256": "98b2a02864f713bcbd888a2a25205f2a6fdce2c223cc6d53b33aed7d279f7ecc"
+      },
+      {
+        "path": "hub/pi-launches.ts",
+        "sha256": "f6e4cdcb24e8d2387a5ea96dee01a203f5721e2a1c7a74488058a966bb49e706"
+      },
+      {
+        "path": "hub/portal.ts",
+        "sha256": "5d2196701a83f50680274e38a44953b52b4c8f07fa2e1edddc4f23c47c0f1cc0"
+      },
+      {
+        "path": "hub/restart-api.ts",
+        "sha256": "b5451e3fbcf46e02b4ebfff47c906d3d391b447af87df846b68457bccdd234b2"
+      },
+      {
+        "path": "hub/runtime-portal.ts",
+        "sha256": "2cbc9420e737a3677202396008614fdecbbdb418863c1f57afd2a25b737d473d"
+      },
+      {
+        "path": "hub/runtime-updates.ts",
+        "sha256": "001e7e9480d9e7621c73dd2157c36c5bec9cd51e326eec9d03a60b3f81c9eebd"
+      },
+      {
+        "path": "hub/server.ts",
+        "sha256": "556391d0a83828d255da5f3fabfc8a004752a4f0b953ac2404b11594fa95eeba"
+      },
+      {
+        "path": "hub/state-budget.ts",
+        "sha256": "7757ce44b7c380340a985b176ceecacbb1859bf1acfd56cc4b1b6e7fcde4d19b"
+      },
+      {
+        "path": "hub/version-status.ts",
+        "sha256": "537b306082b44df576d7bc5e630a81ce5de15ae29572192963c060e517edcb40"
+      },
+      {
+        "path": "package-lock.json",
+        "sha256": "694748d93726f3ee4ea250e79e6a830fc89fa98278468807d25db75315f1da64"
+      },
+      {
+        "path": "package.json",
+        "sha256": "6a3076e61859b68d6ee8f88494a9810a387af23c6e9e3ae06185221227b21fdb"
+      },
+      {
+        "path": "protocol/connection-config.ts",
+        "sha256": "6e1a16d0b1a1deaeddfa993de0b5e47503abd17b857af343ddfcb830d8e7783e"
+      },
+      {
+        "path": "protocol/hub-generation.ts",
+        "sha256": "a9de7ea35f32282acfc29ed5e34bdd298094d7bf862d12638be22fb0b3ebd46c"
+      },
+      {
+        "path": "protocol/interactions/broker.ts",
+        "sha256": "c9bc65a383afdd7be57bc69b0723c423b1ec95897414b0f69af4f877c9eaf8a8"
+      },
+      {
+        "path": "protocol/interactions/control.ts",
+        "sha256": "8c6b71d74129ac60aade99737ee1a36c273e90a9f04c4c94692586dee618e604"
+      },
+      {
+        "path": "protocol/interactions/enrollment.ts",
+        "sha256": "cf1a736985abb672eea9c3094492ddeb5240fb6350036b6025c4f3a7c0c22560"
+      },
+      {
+        "path": "protocol/interactions/proof.ts",
+        "sha256": "ab8e1fff639cbe8a36765711e9c5c3785c076ebfa57df3cab8cbc19fee998a70"
+      },
+      {
+        "path": "protocol/interactions/protocol.ts",
+        "sha256": "71ec7621ae13750c6343a83e673401f203aff36f63e834eb2d0734c7a2ed1edf"
+      },
+      {
+        "path": "protocol/runtime-metadata.ts",
+        "sha256": "059978a8dbed83a89975c75d80fb45d06e3a2ff331f119d74e73e67d94d4fc06"
+      },
+      {
+        "path": "protocol/software-metadata.ts",
+        "sha256": "5aa12f2d5a29ebeedeb783ea4d20bdb8533a7b85015fae3ae31dba8e81f8c438"
+      },
+      {
+        "path": "runtime/README.md",
+        "sha256": "799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282"
+      },
+      {
+        "path": "runtime/__pycache__/pi_supervisor.cpython-314.pyc",
+        "sha256": "ca96bd2ae2078bc6ee13fc76d0e75111ad3a6ac5b8da75265dde9090279a066b"
+      },
+      {
+        "path": "runtime/__pycache__/runtime_identity.cpython-314.pyc",
+        "sha256": "0d35a80c289da30c580ac96a03d4a32782ffefe3499d9854ec128903dffc469e"
+      },
+      {
+        "path": "runtime/__pycache__/runtime_probe.cpython-314.pyc",
+        "sha256": "8f73d23344623b7b06c50a88971b4954ae08b36a4d51c82dcc6fbb89881450b9"
+      },
+      {
+        "path": "runtime/__pycache__/runtime_session.cpython-314.pyc",
+        "sha256": "8cfae1ed8273433431eeb19a4b61f9eafe10e71a8c6616761dd6b327617a7df7"
+      },
+      {
+        "path": "runtime/pi-session-control",
+        "sha256": "87d83da37bdcccd72024b94266c3d68f8ce6c0380108d532459fec430655c34c"
+      },
+      {
+        "path": "runtime/pi_launch_policy.py",
+        "sha256": "2aad1a4dd2bf7d94cc6c67922cc87491f0b594e456bb7a2f15d99c7d98b2be98"
+      },
+      {
+        "path": "runtime/pi_model_sync.py",
+        "sha256": "89f6cbc54e838e6b521bb5beabeae73d1719a846d3b01fd76e44ef823d1ef045"
+      },
+      {
+        "path": "runtime/pi_stdin_guard.mjs",
+        "sha256": "f966e83a5f0e7c9e446488e7ede6d0bd0ec2477878bdfaa14a00667eaa92c223"
+      },
+      {
+        "path": "runtime/pi_supervisor.py",
+        "sha256": "da51564d8716d4e3300f80b1313a8f65813e72ed67cac31050d0730d48ecc607"
+      },
+      {
+        "path": "runtime/runtime_identity.py",
+        "sha256": "e5c4c609300ec2b55e32dd668041b86b06900a02c715ba512f31f8de560843f7"
+      },
+      {
+        "path": "runtime/runtime_probe.py",
+        "sha256": "8d182a7bb0a4f68290cc8b8229b9edf8a792a8d41942338804d05af27f7fb6b6"
+      },
+      {
+        "path": "runtime/runtime_probe_provider.ts",
+        "sha256": "0cb42210c7610adc34146a15294b9ad36de09559986420c9eb4cf1019aff74ab"
+      },
+      {
+        "path": "runtime/runtime_probe_ws.mjs",
+        "sha256": "296751318350e8ad323b9ef499720480c3bc24c000531f2e691024a24870abb4"
+      },
+      {
+        "path": "runtime/runtime_session.py",
+        "sha256": "e219a94b2fcd13628f2e29d576cf801b1a162876377ff0d3fd86d2727f9b45c7"
+      },
+      {
+        "path": "runtime/source-provenance.json",
+        "sha256": "76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82"
+      },
+      {
+        "path": "runtime/tests/test_runtime_probe.py",
+        "sha256": "95a2813f3e14dd9919a333f7e85646b67a6c17fa2f3b46bb12e5897f18d5106a"
+      },
+      {
+        "path": "runtime/tests/test_runtime_probe_driver.py",
+        "sha256": "ac9bd867ef7e775c19f10e250542332dc5d1fa83fbf5db0f457a3931cc0a6169"
+      },
+      {
+        "path": "runtime/tests/test_runtime_probe_real.py",
+        "sha256": "5c05a4f4c7e18102180b991a05f3c67d43a5a7e53d87bd81d5d1c1a9e4afd597"
+      },
+      {
+        "path": "runtime/tests/test_runtime_probe_regressions.py",
+        "sha256": "9786aa7a19ba4c2904558af613d90a83d308d3c09b5c08fb35ab3ac67c7e94c5"
+      },
+      {
+        "path": "scripts/manager-dist.mjs",
+        "sha256": "5380743669514a15e7c577fbf5b3100799954a0680a7888b2ef59610a7790417"
+      },
+      {
+        "path": "tsconfig.json",
+        "sha256": "b4d4142a0a36b5eec673ba6a96323db01148c467e10eb8ff4ae3ebed0fdd6679"
+      },
+      {
+        "path": "vite.config.ts",
+        "sha256": "abd34e2a076f460656eeebc462d534f38d6f74cd3e19dc2c45382f0fcd7f1bca"
+      }
+    ]
+  },
+  "outputs": {
+    "count": 1,
+    "sha256": "e2836e18118fea39d97d264f2c16c2f44004c9a83df245e4eae9af9cc3e61b2e",
+    "files": [
+      {
+        "path": "hub/pi-web-hub.mjs",
+        "sha256": "5a627b3350e593afd97001013341326a52d68e5680ba43842eb32d39d9409976"
+      }
+    ]
+  }
+}

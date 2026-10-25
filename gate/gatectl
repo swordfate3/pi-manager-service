@@ -1,0 +1,567 @@
+#!/usr/bin/python3
+"""Host-only deployment gate management. Never install in ordinary Pi."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+import tempfile
+import stat
+import selectors
+
+from gate.hostseal import build, verified_image
+
+ROOT = Path(__file__).resolve().parent
+GATE = 'pi-deploy-gate'
+
+
+def terminal_preflight(image):
+    """One absolute host budget includes the fixed admin exec and all reads."""
+    from gate.terminal_contract import pairs, nonfinite
+    if not re.fullmatch('sha256:[0-9a-f]{64}', image):
+        raise ValueError('immutable terminal image required')
+    deadline = time.monotonic() + 2
+    process = subprocess.Popen([os.environ.get('PI_PIRUN_DOCKER_BIN', 'docker'), 'exec', '-i', GATE, '/usr/bin/python3', '-m',
+                                'gate.admin', 'terminal-preflight', '--json-stdin'],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        process.stdin.write(json.dumps({'image': image}).encode())
+        process.stdin.close()
+        raw = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stdout, selectors.EVENT_READ)
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise ValueError('terminal preflight unavailable')
+                block = os.read(process.stdout.fileno(), 4097 - len(raw))
+                if not block:
+                    break
+                raw.extend(block)
+                if len(raw) > 4096:
+                    raise ValueError('terminal preflight limit')
+        if process.wait(timeout=max(0.001, deadline-time.monotonic())) or time.monotonic() >= deadline:
+            raise ValueError('terminal preflight unavailable')
+        value = json.loads(raw.decode('utf-8', 'strict'), object_pairs_hook=pairs, parse_constant=nonfinite)
+        if (not isinstance(value, dict) or set(value) != {'v', 'profile', 'image', 'instanceId', 'ready'} or
+                type(value['v']) is not int or value['v'] != 1 or value['profile'] != 'web-terminal-v1' or
+                value['image'] != image or value['ready'] is not True or
+                not isinstance(value['instanceId'], str) or not re.fullmatch('[0-9a-f]{32}', value['instanceId'])):
+            raise ValueError('terminal preflight unavailable')
+        return value
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        process.stdout.close()
+        if not process.stdin.closed:
+            process.stdin.close()
+
+
+def docker(*args, data=None, timeout=30):
+    result = subprocess.run(['docker', *args], input=data, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, timeout=timeout)
+    if result.returncode:
+        raise RuntimeError('Docker/admin operation failed; use gatectl status and container health for diagnosis')
+    return result.stdout
+
+
+def admin(command, identifier=None, commit=None, plan=None, payload=None):
+    args = ['exec', GATE, '/usr/bin/python3', '-m', 'gate.admin', command]
+    if payload is not None:
+        args.insert(1, '-i')
+        args.append('--json-stdin')
+    if identifier:
+        args.append(identifier)
+    if commit:
+        args.extend(('--commit', commit))
+    if plan:
+        args.extend(('--plan', plan))
+    return json.loads(docker(*args, data=json.dumps(payload).encode() if payload is not None else None))
+
+
+def read_definition(path):
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('definition must be a regular file')
+        raw = stream.read(65537)
+    if len(raw) > 65536:
+        raise ValueError('definition exceeds limit')
+    return json.loads(raw)
+
+
+def check_upgrade_ready():
+    # An inaccessible daemon is not the same as an absent gate.
+    existing = docker('ps', '-a', '--filter', 'name=^/' + GATE + '$', '--format', '{{.ID}}').split()
+    if not existing:
+        return
+    if len(existing) != 1:
+        raise RuntimeError('ambiguous gate identity')
+    info = json.loads(docker('inspect', GATE))
+    if not info[0]['State']['Running']:
+        raise RuntimeError('existing gate is stopped; restore the reviewed gate and inspect state before upgrade')
+    status = admin('status')
+    jobs = status.get('active', status['requests'])
+    if (status.get('lifecycle_active') or status.get('runtime_active') or
+            any(job['status'] in ('deploying', 'recovering', 'recovery_required') for job in jobs)):
+        raise RuntimeError('deployment or recovery active; do not replace gate')
+    return True
+
+
+def finish_upgrade(identifier):
+    status = admin('upgrade-status')
+    reservation = status.get('reservation')
+    if not reservation or reservation['id'] != identifier:
+        raise RuntimeError('upgrade reservation changed')
+    info = json.loads(docker('inspect', GATE))
+    if (len(info) != 1 or info[0]['State']['Running'] is not True or
+            info[0]['Image'] != reservation['image']):
+        raise RuntimeError('replacement image is not the reserved image')
+    return admin('upgrade-finish', payload={'id': identifier})
+
+
+def export_lifecycle(destination):
+    export_credential(destination, 'lifecycle-export')
+
+
+def export_credential(destination, command):
+    """Create once under a non-symlinked private host directory; never echo token."""
+    if command not in ('lifecycle-export', 'hub-management-export'):
+        raise ValueError('invalid credential export')
+    path = Path(destination)
+    if not path.is_absolute() or '..' in path.parts or path.name in ('', '.', '..'):
+        raise ValueError('absolute new credential path required')
+    directory = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        info = os.fstat(directory)
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError('credential directory must be owned and not writable by others')
+        descriptor = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+        with os.fdopen(descriptor, 'w') as stream:
+            value = admin(command, payload={})
+            if (not isinstance(value, dict) or set(value) != {'token'} or
+                    not isinstance(value['token'], str) or not re.fullmatch('[0-9a-f]{64}', value['token'])):
+                raise ValueError('invalid exported credential')
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(value, stream)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+    print('独立凭据已写入指定的0600文件；不会显示凭据，不会启用策略。')
+
+
+def install_client(container):
+    if not re.fullmatch('pi-docker-pi-run-[0-9a-f]+', container):
+        raise ValueError('choose an existing ordinary pirun container')
+    info = json.loads(docker('inspect', '--format', '{{json .Mounts}}', container))
+    if not any(m.get('Name') == 'pi-home' and m['Destination'] == '/home/node/.pi' for m in info):
+        raise ValueError('selected Pi does not use the expected shared agent volume')
+    credential = admin('export-client')
+    payload = {'credential': credential, 'script': (ROOT / 'gate/client.py').read_text()}
+    installer = r'''
+import json,os,pathlib,sys,tempfile
+data=json.load(sys.stdin)
+base=pathlib.Path('/home/node/.pi/agent/deploy-gate')
+base.mkdir(mode=0o700,exist_ok=True)
+if base.resolve()!=base: raise ValueError('symlinked client directory refused')
+for name,text in [('client.json',json.dumps(data['credential'])+'\n'),('pi-gate.py',data['script'])]:
+ fd,tmp=tempfile.mkstemp(prefix='.install-',dir=base)
+ with os.fdopen(fd,'w') as stream: stream.write(text)
+ os.chmod(tmp,0o700 if name=='pi-gate.py' else 0o600)
+ os.replace(tmp,base/name)
+bindir=pathlib.Path('/home/node/.local/bin')
+if bindir.resolve()!=bindir: raise ValueError('symlinked executable directory refused')
+link=bindir/'pi-gate'
+if link.exists() and not link.is_symlink(): raise ValueError('existing pi-gate executable refused')
+temporary=bindir/('.pi-gate-'+os.urandom(8).hex())
+temporary.symlink_to(base/'pi-gate.py')
+os.replace(temporary,link)
+print('Request-only client installed; no administrator credential was copied.')
+'''
+    docker('exec', '-i', '--user', '1000:1000', container, '/usr/bin/python3', '-c', installer,
+           data=json.dumps(payload).encode())
+    print('Pi 申请客户端已安装到共享 pi-home；已有及新 Pi 均可使用，无需重启。')
+
+
+def main():
+    formatting = {'formatter_class': argparse.RawDescriptionHelpFormatter}
+    parser = argparse.ArgumentParser(
+        prog='gatectl', description='Pi 部署门控管理工具：仅在能管理 Docker 的宿主机执行。',
+        epilog='''常用操作（在本工具所在目录执行）：
+  ./gatectl services                     查看已登记服务与审批模式
+  ./gatectl status                       查看最近100条申请及全部活跃任务
+  ./gatectl status <申请ID>              查看某一申请及 plan_hash
+  ./gatectl policy pi-web-hub auto        设置 Hub 自动审批
+  ./gatectl policy pi-web-hub manual      改为逐次人工审批
+  ./gatectl policy pi-web-hub disabled    暂停更新
+  ./gatectl approve <申请ID> --plan <plan_hash>
+  ./gatectl register /绝对路径/service.json
+  ./gatectl policy --help                查看模式边界与更多示例
+
+使用流程：
+  管理员登记固定模板 → Pi 提交申请 → 人工批准或按 auto 策略验证部署。
+  新服务默认 manual；auto 仍需明确申请，不监听推送、不追溯执行旧待批。
+  设置保存在 pi-deploy-gate-state 卷，重建门控不覆盖已保存策略。
+
+安全边界：
+  Pi 容器只使用 pi-gate 申请／查询，不应安装本工具或获得 Docker socket。
+  连续三次自动部署失败暂停该服务；检查原因后使用 resume。
+  回滚只恢复容器，不撤销数据卷写入；数据迁移应另做备份。
+  仅支持现有 Hub 和已登记的受限单容器镜像，不执行任意脚本或 Compose。
+  帮助可离线查看；查看子命令用 ./gatectl <命令> --help。
+  <...> 都是占位符，使用时替换为真实值，不保留尖括号。更多说明见同目录 README.md。''',
+        **formatting)
+    sub = parser.add_subparsers(dest='command', required=True, title='子命令', metavar='命令')
+    status = sub.add_parser(
+        'status', help='查询最近100条申请与全部活跃任务，或指定申请详情',
+        description='只读查看申请状态；列表含最近100条申请及全部活跃任务。新申请的 plan_hash 用于精确批准或回滚。',
+        epilog='''示例：
+  ./gatectl status
+  ./gatectl status <完整32位申请ID>
+pending=待批；queued=等待自动执行；deploying=部署中；deployed=完成。
+recovery_required 表示需要检查，不能靠反复重启或删除账本解锁。''', **formatting)
+    status.add_argument('id', nargs='?', metavar='ID', help='完整32位申请 ID；不填则列出最近100条及全部活跃任务')
+    sub.add_parser(
+        'up', help='核对封存并启动／重建门控，不更新 Hub 或 Pi',
+        description='使用封存的精确镜像启动／重建门控，保留状态卷。源码变更后必须先 build。',
+        epilog='''示例：./gatectl up
+重复执行也使用 --force-recreate 重建 Gate，即使镜像／配置相同；门控接口会短暂中断。
+已有 Gate 必须先取得持久化预留；Compose 完成后核对精确镜像和新实例才恢复准入。
+失败或结果未知不自动释放预留；不支持预留 API 的旧 Gate 必须显式人工迁移。
+有部署或待恢复任务时拒绝升级；现有门控已停止时也拒绝直接升级。
+先核查状态并备份，不要绕过封存直接使用 Compose 启动。''', **formatting)
+    sub.add_parser(
+        'build', help='构建并封存门控镜像，不启动或更新任何服务',
+        description='源码、policy.json 或 Compose 变更后重新构建并封存可信门控镜像。',
+        epilog='''示例：
+  ./gatectl build
+  ./gatectl up
+build 只构建；up 才启动／替换门控。更新 Hub 应由 Pi 提交版本申请。''', **formatting)
+    for name in ('approve', 'rollback'):
+        action = '批准部署' if name == 'approve' else '回滚当前部署'
+        item = sub.add_parser(
+            name, help=action + '，必须确认精确 plan_hash；旧 Hub 用 commit',
+            description=action + '：先核实 status 返回的申请、版本和目标，再确认精确摘要。',
+            epilog=f'''示例：
+  ./gatectl status <申请ID>
+  ./gatectl {name} <申请ID> --plan <完整64位plan_hash>
+
+仅迁移前没有快照的旧 Hub 记录使用：
+  ./gatectl {name} <旧Hub申请ID> --commit <完整40位commit>
+
+新申请（包括 Hub）必须用 --plan，不能用 --commit 绕过快照确认。
+命令会等待并显示结果；超时后先查 status，不要盲目重复执行。
+回滚仅适用于可恢复的当前部署；不撤销数据卷写入，不删除数据卷。''', **formatting)
+        item.add_argument('id', metavar='ID', help='完整32位申请 ID')
+        confirm = item.add_mutually_exclusive_group(required=True)
+        confirm.add_argument('--commit', metavar='SHA', help='仅旧版无快照 Hub 记录：完整40位commit')
+        confirm.add_argument('--plan', metavar='HASH', help='status 返回的完整64位 plan_hash，新申请必用')
+    reject = sub.add_parser(
+        'reject', help='拒绝待审批更新申请', description='拒绝指定待批申请，不停止容器。',
+        epilog='示例：./gatectl reject <完整32位申请ID>', **formatting)
+    reject.add_argument('id', metavar='ID', help='待批申请的完整32位 ID')
+    install = sub.add_parser(
+        'install-client', help='向共享卷安装申请客户端，无需重启 Pi',
+        description='选择一个使用共享 pi-home 的现有普通 Pi，安装 pi-gate 和申请凭据。',
+        epilog='''示例：./gatectl install-client --container pi-docker-pi-run-<真实后缀>
+容器名可用 docker ps 查看。共享卷只需安装一次，现有及新 Pi 均可使用。
+不复制管理员凭据或 Docker socket，不重启 Pi。不要手工导出申请 token。''', **formatting)
+    install.add_argument('--container', required=True, metavar='NAME', help='现有 pi-docker-pi-run-* 容器的完整名称')
+    for name, summary in (
+            ('services', '查看已登记服务、允许来源、审批模式与失败暂停状态'),
+            ('intents', '查看待管理员审核的服务接入意向'),
+            ('events', '查看服务登记、模式变化及部署结果等审计事件')):
+        sub.add_parser(name, help=summary, description=summary + '，只读操作。',
+                       epilog=f'示例：./gatectl {name}', **formatting)
+    register = sub.add_parser(
+        'register', help='登记／更新管理员审核的固定服务模板',
+        description='登记来源、目标、固定运行模板及健康检查；新服务未指定模式时默认为 manual。',
+        epilog='''示例：./gatectl register /绝对路径/service.json
+模板格式见同目录 README.md；文件须为不超过 65536 字节的普通 JSON 文件，不能是软链接。
+只支持固定模板的已有单容器镜像；支持已有普通本地命名卷，不接受宿主机绝对路径 bind（包括只读）。
+不支持任意脚本、整组 Compose、特权容器或新增私有仓库认证。
+模板含环境值时按秘密文件保护，不贴入聊天。Pi 的接入意向不等于运行模板。''', **formatting)
+    register.add_argument('file', metavar='FILE', help='管理员审核的完整服务定义 JSON 路径')
+    policy = sub.add_parser(
+        'policy', help='为某个已登记服务持久化设置审批模式',
+        description='设置具体服务的策略，不按镜像标签授权，也不接管其他容器。',
+        epilog='''示例：
+  ./gatectl policy pi-web-hub auto
+  ./gatectl policy pi-web-hub manual
+  ./gatectl policy pi-web-hub disabled
+
+manual：每次等待管理员批准或拒绝。
+auto：Pi 明确提交申请后，符合固定来源和模板才验证部署；不是代码安全审计。
+disabled：不接收新更新，不执行尚未开始的更新，仍允许恢复与回滚。
+auto 不监听推送、不追溯执行旧待批，需重新申请；Hub 须匹配固定仓库 main 当前完整提交。
+模式保存在 pi-deploy-gate-state 卷，重建后保留；策略变更可使未执行申请失效。
+已在切换中的任务需完成部署或恢复，不会强杀到一半。''', **formatting)
+    policy.add_argument('service', metavar='SERVICE', help='services 列出的已登记服务 ID')
+    policy.add_argument('mode', choices=('auto', 'manual', 'disabled'), help='审批模式：auto / manual / disabled')
+    resume = sub.add_parser(
+        'resume', help='检查故障后清零失败计数并解除自动暂停',
+        description='连续三次自动部署失败会暂停服务。先检查失败原因，再明确恢复调度。',
+        epilog='''示例：./gatectl resume pi-web-hub
+不改变审批模式，不自动重试历史失败申请，也不消除 recovery_required 冲突。''', **formatting)
+    resume.add_argument('service', metavar='SERVICE', help='需要恢复的已登记服务 ID')
+    reject_intent = sub.add_parser(
+        'reject-intent', help='拒绝服务接入意向，不操作已有容器',
+        description='先通过 intents 核对意向 ID，再拒绝不需要或不支持的接入申请。',
+        epilog='示例：./gatectl reject-intent <意向ID>', **formatting)
+    reject_intent.add_argument('id', metavar='ID', help='intents 列出的意向 ID')
+    resolve = sub.add_parser(
+        'resolve', help='核实目标身份后，仅结案未切换的恢复冲突',
+        description='高风险恢复操作：仅允许尚未切换且保存了目标基线的 recovery_required 请求。',
+        epilog='''示例：./gatectl resolve <申请ID> --target-id <完整目标容器ID>
+必须核实保存的 baseline_id、当前目标、提交的完整 ID 三者一致。
+缺少基线或已发生正式切换时不能用本命令；走回滚／人工恢复，不强制删除未知对象。''', **formatting)
+    resolve.add_argument('id', metavar='ID', help='待结案申请的完整 ID')
+    resolve.add_argument('--target-id', required=True, metavar='CONTAINER_ID', help='核实后填写的完整目标容器 ID')
+    export = sub.add_parser(
+        'export-services', help='导出私有权限的脱敏摘要，不是完整恢复备份',
+        description='导出服务摘要，不含运行模板或凭据；不能直接作为 register 的输入。',
+        epilog='''示例：./gatectl export-services /绝对路径/services-summary.json
+目标文件必须不存在，以 0600 权限创建；此摘要不可用于完整还原。''', **formatting)
+    export.add_argument('file', metavar='FILE', help='新的脱敏摘要文件路径（不覆盖现有文件）')
+    lifecycle = sub.add_parser(
+        'lifecycle', help='只读查询独立Pi子进程重启策略和任务',
+        description='查询生命周期策略、最近100条任务和全部未结案任务；不显示凭据、容器ID或内部路径。',
+        epilog='示例：./gatectl lifecycle\n      ./gatectl lifecycle <32位任务ID>', **formatting)
+    lifecycle.add_argument('id', nargs='?', metavar='ID')
+    lifecycle_policy = sub.add_parser(
+        'lifecycle-policy', help='独立设置Pi子进程重启策略及允许镜像ID',
+        description='默认disabled，不继承Hub部署auto。每次命令完整替换独立镜像白名单。',
+        epilog='''示例：
+  ./gatectl lifecycle-policy manual --image sha256:<64位镜像ID>
+  ./gatectl lifecycle-policy auto --image sha256:<64位镜像ID>
+  ./gatectl lifecycle-policy disabled
+使用不可变Docker镜像ID，不是标签或仓库digest。--image可重复。
+策略变更使旧待批/排队任务失效；已开始的操作只查询结果，不重复重启。
+仅调用固定Pi子进程控制，不重启容器、不安装软件、不执行shell。''', **formatting)
+    lifecycle_policy.add_argument('mode', choices=('disabled', 'manual', 'auto'))
+    lifecycle_policy.add_argument('--image', action='append', default=[], metavar='SHA256_ID')
+    for name in ('lifecycle-approve', 'lifecycle-reject'):
+        action = '批准' if name.endswith('approve') else '拒绝'
+        command = sub.add_parser(name, help=action + '指定生命周期任务',
+                                 description=action + '已核实的完整任务ID；批准后由工作线程异步执行。',
+                                 epilog=f'先 ./gatectl lifecycle <ID> 核对身份，然后 ./{"gatectl"} {name} <ID>。\n'
+                                        '未知结果必须检查，不能通过重复批准或拒绝清除。', **formatting)
+        command.add_argument('id', metavar='ID')
+    lifecycle_resolve = sub.add_parser(
+        'lifecycle-resolve', help='明确记录宿主机检查并解除失败/未知任务阻塞',
+        description='高风险人工结案：保留原failed/recovery_required状态和审计，不宣称重启成功。',
+        epilog='''示例：./gatectl lifecycle-resolve <ID> --runtime-id <核实的当前runtime> --acknowledge inspected_no_retry
+先人工检查目标，再核实当前run/session/leaf、idle状态与不可变容器ID。
+不重试、不停止任何进程。目标已消失或不能核实时拒绝自动结案，保持阻塞。''', **formatting)
+    lifecycle_resolve.add_argument('id', metavar='ID')
+    lifecycle_resolve.add_argument('--runtime-id', required=True)
+    lifecycle_resolve.add_argument('--acknowledge', choices=('inspected_no_retry',), required=True)
+    lifecycle_export = sub.add_parser(
+        'lifecycle-export', help='将独立生命周期凭据写入新的宿主机0600文件',
+        description='显式导出供受信Hub使用的凭据，不打印token，不复制部署凭据，不启用策略。',
+        epilog='''示例：./gatectl lifecycle-export /绝对路径/私有目录/pi-lifecycle.json
+目标必须不存在；拒绝软链接和覆盖。父目录须由当前用户所有且不可被其他用户写入。
+文件为{"token":"..."}。勿放入普通Pi可写工作区或发送到聊天。
+导出失败可能留下空0600文件；检查后选择新文件名，不自动覆盖。''', **formatting)
+    lifecycle_export.add_argument('file', metavar='FILE')
+    management_export = sub.add_parser(
+        'hub-management-export', help='将独立Hub审批凭据写入新的私有0600文件',
+        description='一次性引导受信Hub审批门户；仅导出固定管理协议凭据，不打印token。',
+        epilog='''示例：./gatectl hub-management-export /绝对路径/私有目录/gate-management.json
+目标必须不存在；拒绝软链接和覆盖。父目录须由当前用户所有且不可被其他用户写入。
+文件为{"token":"..."}。仅供受信Hub私有配置使用，不要放入Pi工作区或聊天。
+此命令不启用策略；导出失败后检查目标，选择新文件名。''', **formatting)
+    management_export.add_argument('file', metavar='FILE')
+    runtime_updates = sub.add_parser(
+        'runtime-updates', help='只读查询全局Pi runtime策略和更新任务',
+        description='查询独立runtime策略、最近任务和全部活跃任务，或查看指定任务详情。',
+        epilog='''示例：
+  ./gatectl runtime-updates
+  ./gatectl runtime-updates <完整32位任务ID>
+列表响应包含policy、jobs、active；单任务包含version、status、stage和targets等进度。''',
+        **formatting)
+    runtime_updates.add_argument('id', nargs='?', metavar='ID', help='可选的完整32位runtime任务ID')
+    runtime_policy = sub.add_parser(
+        'runtime-policy', help='独立设置全局Pi runtime更新策略和可信镜像',
+        description='默认disabled；每次命令完整替换策略模式和不可变Docker镜像ID白名单。',
+        epilog='''示例：
+  ./gatectl runtime-policy manual --image sha256:<64位镜像ID>
+  ./gatectl runtime-policy auto --image sha256:<64位镜像ID>
+  ./gatectl runtime-policy disabled
+--image可重复，必须是不可变本地Docker image ID，不是标签或registry digest。
+初始部署应由宿主机使用已核验Pi镜像配置manual；不继承Hub或生命周期策略。''', **formatting)
+    runtime_policy.add_argument('mode', choices=('disabled', 'manual', 'auto'))
+    runtime_policy.add_argument('--image', action='append', default=[], metavar='SHA256_ID')
+    for name in ('runtime-approve', 'runtime-reject'):
+        action = '批准' if name.endswith('approve') else '拒绝'
+        command = sub.add_parser(
+            name, help=action + '指定全局Pi runtime更新任务',
+            description=action + '已核实的完整runtime任务ID；不会授予普通Pi管理员能力。',
+            epilog=f'先 ./gatectl runtime-updates <ID> 核对精确版本和目标，再 ./gatectl {name} <ID>。',
+            **formatting)
+        command.add_argument('id', metavar='ID')
+    runtime_resolve = sub.add_parser(
+        'runtime-resolve', help='记录已检查的runtime失败结果并在证据允许时解除准入阻塞',
+        description='不重试、不执行更新、不把失败记为成功；仅在core证据检查通过后解除准入。',
+        epilog='''示例：
+  ./gatectl runtime-updates <完整32位任务ID>
+  ./gatectl runtime-resolve <完整32位任务ID> --acknowledge inspected_no_mutation
+先检查安装helper、共享入口和会话采用情况，确认没有未知变更后再提交固定回执。
+本命令只记录检查结果；解除后由操作员另行提交新的精确版本任务，不提供resume命令。''',
+        **formatting)
+    runtime_resolve.add_argument('id', metavar='ID')
+    runtime_resolve.add_argument('--acknowledge', choices=('inspected_no_mutation',), required=True)
+    sub.add_parser('upgrade-status', help='查看持久化升级预留（不自动释放）',
+                   description='预留阻止全部生命周期/部署准入；重启门控或失败不会清除。', **formatting)
+    finish = sub.add_parser('upgrade-finish', help='核对替换镜像和新门控实例后完成升级预留',
+                            description='通常up成功后自动完成；连接失败后先人工核查，再以精确预留ID重试。', **formatting)
+    finish.add_argument('id', metavar='RESERVATION_ID')
+    abort = sub.add_parser('upgrade-abort', help='确认没有待执行替换进程后显式取消升级预留',
+                           description='必须先停止/确认退出原up进程并检查无未决工作；不删除任务或未知结果。', **formatting)
+    abort.add_argument('id', metavar='RESERVATION_ID')
+    abort.add_argument('--acknowledge', choices=('inspected_no_replacement',), required=True)
+    preflight = sub.add_parser('terminal-preflight', help='Host-only read-only live terminal image check (2s budget)')
+    preflight.add_argument('--image', required=True)
+    args = parser.parse_args()
+    if args.command == 'terminal-preflight':
+        if not re.fullmatch('sha256:[0-9a-f]{64}', args.image):
+            parser.error('full immutable image ID required')
+        try:
+            print(json.dumps(terminal_preflight(args.image)))
+        except Exception:
+            parser.exit(1, 'Terminal preflight unavailable. No run was admitted.\n')
+    elif args.command == 'upgrade-status':
+        print(json.dumps(admin('upgrade-status'), indent=2, ensure_ascii=False))
+    elif args.command in ('upgrade-finish', 'upgrade-abort'):
+        if not re.fullmatch('[0-9a-f]{32}', args.id):
+            parser.error('full upgrade reservation ID required')
+        result = (finish_upgrade(args.id) if args.command == 'upgrade-finish' else
+                  admin('upgrade-abort', payload={'id': args.id, 'acknowledge': args.acknowledge}))
+        print(json.dumps(result, ensure_ascii=False))
+    elif args.command == 'lifecycle-export':
+        export_lifecycle(args.file)
+    elif args.command == 'hub-management-export':
+        export_credential(args.file, 'hub-management-export')
+    elif args.command == 'lifecycle':
+        if args.id and not re.fullmatch('[0-9a-f]{32}', args.id):
+            parser.error('full lifecycle job ID required')
+        print(json.dumps(admin('lifecycle', args.id), indent=2, ensure_ascii=False))
+    elif args.command == 'runtime-updates':
+        if args.id and not re.fullmatch('[0-9a-f]{32}', args.id):
+            parser.error('full runtime update job ID required')
+        print(json.dumps(admin('runtime-updates', args.id), indent=2, ensure_ascii=False))
+    elif args.command.startswith('runtime-'):
+        if args.command == 'runtime-policy':
+            if any(not re.fullmatch('sha256:[0-9a-f]{64}', value) for value in args.image):
+                parser.error('full immutable image IDs required')
+            payload = {'mode': args.mode, 'images': args.image}
+        else:
+            if not re.fullmatch('[0-9a-f]{32}', args.id):
+                parser.error('full runtime update job ID required')
+            payload = {'id': args.id}
+            if args.command == 'runtime-resolve':
+                payload['acknowledge'] = args.acknowledge
+        print(json.dumps(admin(args.command, payload=payload), indent=2, ensure_ascii=False))
+    elif args.command.startswith('lifecycle-'):
+        if args.command == 'lifecycle-policy':
+            if any(not re.fullmatch('sha256:[0-9a-f]{64}', value) for value in args.image):
+                parser.error('full immutable image IDs required')
+            payload = {'mode': args.mode, 'images': args.image}
+        else:
+            if not re.fullmatch('[0-9a-f]{32}', args.id):
+                parser.error('full lifecycle job ID required')
+            payload = {'id': args.id}
+            if args.command == 'lifecycle-resolve':
+                payload.update(runtime_id=args.runtime_id, acknowledge=args.acknowledge)
+        print(json.dumps(admin(args.command, payload=payload), indent=2, ensure_ascii=False))
+    elif args.command == 'build':
+        build(ROOT, docker)
+        print('可信门控镜像已构建并封存；尚未启动或更新 Hub。')
+    elif args.command == 'up':
+        existing = check_upgrade_ready()
+        image = verified_image(ROOT, docker)
+        reservation = None
+        if existing:
+            try:
+                reservation = admin('upgrade-reserve', payload={'image': image})
+                if (not isinstance(reservation, dict) or reservation.get('image') != image or
+                        not isinstance(reservation.get('id'), str) or not re.fullmatch('[0-9a-f]{32}', reservation['id'])):
+                    raise RuntimeError('invalid upgrade reservation')
+            except Exception:
+                raise RuntimeError('upgrade reservation refused/unavailable; old Gate requires explicit host migration; '
+                                   'never fall back to snapshot-only replacement') from None
+        # Exact ID closes the mutable-tag race. Even unchanged up must replace:
+        # ordinary Compose convergence can no-op and cannot prove a new instance.
+        with tempfile.NamedTemporaryFile(mode='w', prefix='pi-gate-compose-', suffix='.json') as override:
+            json.dump({'services': {'gate': {'image': image}}}, override)
+            override.flush()
+            subprocess.run(['docker', 'compose', '--env-file', '/dev/null', '-f', str(ROOT / 'compose.yaml'),
+                            '-f', override.name, 'up', '-d', '--force-recreate',
+                            '--no-build', '--pull', 'never', 'gate'], check=True)
+        if reservation:
+            finish_upgrade(reservation['id'])
+    elif args.command == 'install-client':
+        install_client(args.container)
+    elif args.command in ('status', 'reject', 'reject-intent', 'services', 'intents', 'events'):
+        print(json.dumps(admin(args.command, getattr(args, 'id', None)), indent=2, ensure_ascii=False))
+    elif args.command in ('register', 'policy', 'resume', 'resolve'):
+        if args.command == 'register':
+            payload = read_definition(args.file)
+        elif args.command == 'policy':
+            payload = {'service': args.service, 'mode': args.mode}
+        elif args.command == 'resume':
+            payload = {'service': args.service}
+        else:
+            payload = {'id': args.id, 'target_id': args.target_id}
+        print(json.dumps(admin(args.command, payload=payload), indent=2, ensure_ascii=False))
+    elif args.command == 'export-services':
+        value = {'sanitized_summary_only': True, **admin('services')}
+        descriptor = os.open(args.file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(value, stream, indent=2, ensure_ascii=False)
+            stream.write('\n')
+        print('已导出脱敏服务摘要；不含运行模板、凭据，不可直接用于还原。')
+    else:
+        if (not re.fullmatch('[0-9a-f]{32}', args.id) or
+                (args.commit and not re.fullmatch('[0-9a-f]{40}', args.commit)) or
+                (args.plan and not re.fullmatch('[0-9a-f]{64}', args.plan))):
+            parser.error('full request ID and exact commit or plan hash required')
+        print('管理员确认：只操作该申请的目标服务；更新期间该服务可能短暂断连，保留数据卷。', flush=True)
+        print(json.dumps(admin(args.command, args.id, args.commit, args.plan), ensure_ascii=False), flush=True)
+        deadline = time.monotonic() + 300
+        last = None
+        while time.monotonic() < deadline:
+            job = admin('status', args.id)
+            marker = (job['status'], job['stage'])
+            if marker != last:
+                print('%s: %s' % marker, flush=True)
+                last = marker
+            if job['status'] not in ('deploying', 'recovering'):
+                print(json.dumps(job, indent=2, ensure_ascii=False))
+                return 0 if job['status'] in ('deployed', 'rolled_back') else 1
+            time.sleep(0.5)
+        raise RuntimeError('operation still pending; inspect gatectl status before retrying')
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except Exception:
+        print('门控操作未完成；请检查门控健康状态及 gatectl status。凭据和内部输出未显示。', file=sys.stderr)
+        if len(sys.argv) > 1 and sys.argv[1] == 'up':
+            print('升级预留不会自动清除；检查 upgrade-status。旧Gate不支持预留API时必须按README人工迁移，不可退回快照检查。',
+                  file=sys.stderr)
+        sys.exit(1)

@@ -1,0 +1,1786 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "pi-web-ui-hub-approvals",
+  "sourceCommit": "27326a8cbea8331cac29e6b6b41f98f2b69fa05b",
+  "count": 254,
+  "entries": [
+    {
+      "source": "bin/pi-web-hub.mjs",
+      "target": "bin/pi-web-hub.mjs",
+      "sha256": "baf368e8f64e69f2795401c15eb0801b78b5369a3860bd7bb97adb8570a4f760",
+      "targetSha256": "d990cd6ffdf84789d3f76a692aa39b5e6b2dc42f51806cac6ffe167c250fc847",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/__init__.py",
+      "target": "gate/gate/__init__.py",
+      "sha256": "0e63bade30e31a774fdef26ff4b787cface555ec1916736d71fc2150d46d00e4",
+      "targetSha256": "0e63bade30e31a774fdef26ff4b787cface555ec1916736d71fc2150d46d00e4",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/admin.py",
+      "target": "gate/gate/admin.py",
+      "sha256": "9f9ef4c86747a5d3ca7f8f41e170630fb2490d0f9caef809de3b92db54ec35b9",
+      "targetSha256": "9f9ef4c86747a5d3ca7f8f41e170630fb2490d0f9caef809de3b92db54ec35b9",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/artifacts.py",
+      "target": "gate/gate/artifacts.py",
+      "sha256": "1727a4cad842f4aee2ed73922c459a20a62146e0948a244fa86dd8cb1d8879d3",
+      "targetSha256": "1727a4cad842f4aee2ed73922c459a20a62146e0948a244fa86dd8cb1d8879d3",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/client.py",
+      "target": "gate/gate/client.py",
+      "sha256": "34ea130d0a10ae4e9bd1629393100924d15fb91af4b5f85b5cd2be2e201d47da",
+      "targetSha256": "34ea130d0a10ae4e9bd1629393100924d15fb91af4b5f85b5cd2be2e201d47da",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/deploy.py",
+      "target": "gate/gate/deploy.py",
+      "sha256": "24c5a44b74ae4f845531fdf5fc8389965e59026a82356e0a6b024afc385a94b5",
+      "targetSha256": "24c5a44b74ae4f845531fdf5fc8389965e59026a82356e0a6b024afc385a94b5",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/engine.py",
+      "target": "gate/gate/engine.py",
+      "sha256": "9b0f253629bb0c49edb349184f58f6a68e8169da7bca9992385231ac24eda42a",
+      "targetSha256": "9b0f253629bb0c49edb349184f58f6a68e8169da7bca9992385231ac24eda42a",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/errors.py",
+      "target": "gate/gate/errors.py",
+      "sha256": "e20be673cedf6da458411471ef363fb0a5bb7f9ce10e9678e65f484692079664",
+      "targetSha256": "e20be673cedf6da458411471ef363fb0a5bb7f9ce10e9678e65f484692079664",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/hostseal.py",
+      "target": "gate/gate/hostseal.py",
+      "sha256": "6013397c8a47ca004fb08502ac1682d63522cb0889d3a6fe2c8594c0efa1dd7b",
+      "targetSha256": "6013397c8a47ca004fb08502ac1682d63522cb0889d3a6fe2c8594c0efa1dd7b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/hub_management.py",
+      "target": "gate/gate/hub_management.py",
+      "sha256": "9fbc6277b1f12daba93869497c4c3a066ec9b584081469f70a55dcbede953874",
+      "targetSha256": "9fbc6277b1f12daba93869497c4c3a066ec9b584081469f70a55dcbede953874",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/image_deploy.py",
+      "target": "gate/gate/image_deploy.py",
+      "sha256": "2d3e5a742c2b6d86cacaf16786094fc780ccdaa15527661d31dfbfbbed518abb",
+      "targetSha256": "2d3e5a742c2b6d86cacaf16786094fc780ccdaa15527661d31dfbfbbed518abb",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/lifecycle_contract.py",
+      "target": "gate/gate/lifecycle_contract.py",
+      "sha256": "a4b4f80a49e3f3c4734fbbb8fc37aef14dfab99813c47c0b7e48373d8318be22",
+      "targetSha256": "a4b4f80a49e3f3c4734fbbb8fc37aef14dfab99813c47c0b7e48373d8318be22",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/lifecycle.py",
+      "target": "gate/gate/lifecycle.py",
+      "sha256": "807f14b482ac40a29606b3b310ff0c84be0ebbb54eca3acf8197bd3e582d4d5c",
+      "targetSha256": "807f14b482ac40a29606b3b310ff0c84be0ebbb54eca3acf8197bd3e582d4d5c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/pi_launch_engine.py",
+      "target": "gate/gate/pi_launch_engine.py",
+      "sha256": "36bd0bc471b2e6576aed17ef2ba9c393179e02508c1ea8c7415e5f5f3b24b12b",
+      "targetSha256": "36bd0bc471b2e6576aed17ef2ba9c393179e02508c1ea8c7415e5f5f3b24b12b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/pi_launches.py",
+      "target": "gate/gate/pi_launches.py",
+      "sha256": "aefa1a0b5ffd25616d998a90a5c5aab5bb866a7c0341db037db3cf62c8f06d82",
+      "targetSha256": "aefa1a0b5ffd25616d998a90a5c5aab5bb866a7c0341db037db3cf62c8f06d82",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/registry.py",
+      "target": "gate/gate/registry.py",
+      "sha256": "a30b1733e5fdba67a6cd205141d6cce41c3ae60e939014c513066380325beb48",
+      "targetSha256": "a30b1733e5fdba67a6cd205141d6cce41c3ae60e939014c513066380325beb48",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/router.py",
+      "target": "gate/gate/router.py",
+      "sha256": "c455cf5ae62e0b9aa379ab3f76e0c114521ccc9c3918ffffe4b02505ea789dfe",
+      "targetSha256": "c455cf5ae62e0b9aa379ab3f76e0c114521ccc9c3918ffffe4b02505ea789dfe",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/runtime_catalog.py",
+      "target": "gate/gate/runtime_catalog.py",
+      "sha256": "36ac7641b48f6b42afab441f91ac61d938b2206b5b6911a1a981b40974824123",
+      "targetSha256": "36ac7641b48f6b42afab441f91ac61d938b2206b5b6911a1a981b40974824123",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/runtime_engine.py",
+      "target": "gate/gate/runtime_engine.py",
+      "sha256": "2cefbc52e26f9c5189aaea694d56708d81d27ab58d2530d4ceb6fd33f20fe367",
+      "targetSha256": "2bc1cc2e7f1d669409fd8720c4cdf929755f6a735b12f3839a132f9395152f5c",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/runtime_install.py",
+      "target": "gate/gate/runtime_install.py",
+      "sha256": "821d0b04318dbe34ba1a369c7822ddcc592dab43f494e4f2087909e86f8269a7",
+      "targetSha256": "821d0b04318dbe34ba1a369c7822ddcc592dab43f494e4f2087909e86f8269a7",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/runtime_restore.py",
+      "target": "gate/gate/runtime_restore.py",
+      "sha256": "ef10d6ec49b8ed1ab5ab261696fa2d781efb5458eb02ee4cffaecb478d44b99a",
+      "targetSha256": "ef10d6ec49b8ed1ab5ab261696fa2d781efb5458eb02ee4cffaecb478d44b99a",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/runtime_updates.py",
+      "target": "gate/gate/runtime_updates.py",
+      "sha256": "ea291d3362e0be4cc4b5911edbbe575f773661146b912a9dbe83e83dc0c5554c",
+      "targetSha256": "ea291d3362e0be4cc4b5911edbbe575f773661146b912a9dbe83e83dc0c5554c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/service.py",
+      "target": "gate/gate/service.py",
+      "sha256": "78731e24044dad4b62d1ceeed2f4c7421c28b57808f367aeefedf9c579c3dda5",
+      "targetSha256": "78731e24044dad4b62d1ceeed2f4c7421c28b57808f367aeefedf9c579c3dda5",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/sources.py",
+      "target": "gate/gate/sources.py",
+      "sha256": "39ed8f830e2b408a9bb1a0ab4f06bc266afe226fe765ca342f8a5579a7ee9038",
+      "targetSha256": "39ed8f830e2b408a9bb1a0ab4f06bc266afe226fe765ca342f8a5579a7ee9038",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/store.py",
+      "target": "gate/gate/store.py",
+      "sha256": "4d5cd4ed6956b7e89635af76d9d4bb60f158281bce65f7edbcdb25941dc38143",
+      "targetSha256": "4d5cd4ed6956b7e89635af76d9d4bb60f158281bce65f7edbcdb25941dc38143",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/terminal_contract.py",
+      "target": "gate/gate/terminal_contract.py",
+      "sha256": "d59923ef076e5a9bef9055345d52a0532c2fbcc72d5619ebd330373f8655bd2b",
+      "targetSha256": "d59923ef076e5a9bef9055345d52a0532c2fbcc72d5619ebd330373f8655bd2b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gate/terminal_provider.py",
+      "target": "gate/gate/terminal_provider.py",
+      "sha256": "087c98ca4c523db7494588fb5393f2c1c089da01882f05b0be698fc2aed245d1",
+      "targetSha256": "087c98ca4c523db7494588fb5393f2c1c089da01882f05b0be698fc2aed245d1",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/gatectl",
+      "target": "gate/gatectl",
+      "sha256": "ca0f7d1fc9f8f286e9f9bccf0ebfc75829d85fa6b619ee7f50c12e186d27c37f",
+      "targetSha256": "ca0f7d1fc9f8f286e9f9bccf0ebfc75829d85fa6b619ee7f50c12e186d27c37f",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_gate.py",
+      "target": "gate/tests/test_gate.py",
+      "sha256": "13b808ca7ffdfcd747d98e47aaee5d457878b901e5e922fe99ce2b658c33efb1",
+      "targetSha256": "13b808ca7ffdfcd747d98e47aaee5d457878b901e5e922fe99ce2b658c33efb1",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_hub_management.py",
+      "target": "gate/tests/test_hub_management.py",
+      "sha256": "caf59b6c0c8c7ae247561a04260f489fc9f68a16ebc48f1209573f2589f98ae6",
+      "targetSha256": "caf59b6c0c8c7ae247561a04260f489fc9f68a16ebc48f1209573f2589f98ae6",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_lifecycle_round1.py",
+      "target": "gate/tests/test_lifecycle_round1.py",
+      "sha256": "2f15ff487241d577b7168000f9b8e027c0eeccfb9f955fbcf8ba44535b3e096e",
+      "targetSha256": "2f15ff487241d577b7168000f9b8e027c0eeccfb9f955fbcf8ba44535b3e096e",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_lifecycle_round2.py",
+      "target": "gate/tests/test_lifecycle_round2.py",
+      "sha256": "9d6a56bdaa460d5364165fb0865860fc4ec8d85d373053656e0b9597d9ca9ba9",
+      "targetSha256": "9d6a56bdaa460d5364165fb0865860fc4ec8d85d373053656e0b9597d9ca9ba9",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_lifecycle_round3.py",
+      "target": "gate/tests/test_lifecycle_round3.py",
+      "sha256": "eede6cab4099ae7e81aca86279508a6d617d36274c18a8c03b9c2d79f7936828",
+      "targetSha256": "eede6cab4099ae7e81aca86279508a6d617d36274c18a8c03b9c2d79f7936828",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_lifecycle_source_evidence.py",
+      "target": "gate/tests/test_lifecycle_source_evidence.py",
+      "sha256": "a70200a0c111c4fcde51e3316b6e9e32c3c1e96ba02fb756b534297ba2ecca2a",
+      "targetSha256": "a70200a0c111c4fcde51e3316b6e9e32c3c1e96ba02fb756b534297ba2ecca2a",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_lifecycle.py",
+      "target": "gate/tests/test_lifecycle.py",
+      "sha256": "3006eef6308705bc1261c2a3b8b3b01671512c60ed8135a0d5ab80ac5f6d20b3",
+      "targetSha256": "3006eef6308705bc1261c2a3b8b3b01671512c60ed8135a0d5ab80ac5f6d20b3",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_multiservice.py",
+      "target": "gate/tests/test_multiservice.py",
+      "sha256": "40915740b5dd4b07464a1e8444108068155d73dd1fac425b7ace1e629633b761",
+      "targetSha256": "40915740b5dd4b07464a1e8444108068155d73dd1fac425b7ace1e629633b761",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_pi_launch_engine.py",
+      "target": "gate/tests/test_pi_launch_engine.py",
+      "sha256": "331a15f6a26f32505427fe9e82037dddcecc3c514de07eea7b3eb90fa58bf844",
+      "targetSha256": "8b4e8a1f7a133d718369bb25a0b3cd73476d5d606d097ebe7ec7d1101c1dbe2d",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_pi_launches.py",
+      "target": "gate/tests/test_pi_launches.py",
+      "sha256": "7da28d75ae932d55ddac5d6f1af640cdad9d527f56b7eaed70e850cb9b335966",
+      "targetSha256": "fa76fd68ab167c9422b7fd69442e16038fb6d6482098fde5993e39b8c98748f3",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_registry.py",
+      "target": "gate/tests/test_registry.py",
+      "sha256": "3d7ffe89032eaf36b7c6089b7997691e795be98757ef136f173ac9670c102454",
+      "targetSha256": "3d7ffe89032eaf36b7c6089b7997691e795be98757ef136f173ac9670c102454",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_catalog.py",
+      "target": "gate/tests/test_runtime_catalog.py",
+      "sha256": "a6b31045a26d2dd1ce6db2ebc57f516bd1efa717d7c1c766f731e5549477ee62",
+      "targetSha256": "a6b31045a26d2dd1ce6db2ebc57f516bd1efa717d7c1c766f731e5549477ee62",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_clients.py",
+      "target": "gate/tests/test_runtime_clients.py",
+      "sha256": "56b51e5f7e980210a7881d59ec651623b0e0386e41735f6c8e72bc5addde66a1",
+      "targetSha256": "56b51e5f7e980210a7881d59ec651623b0e0386e41735f6c8e72bc5addde66a1",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_discovery_http.py",
+      "target": "gate/tests/test_runtime_discovery_http.py",
+      "sha256": "a753cdd540f94182b45c6eae256f1ccb6f34ba992cf7dc68d1b4b204ff9faa7b",
+      "targetSha256": "a753cdd540f94182b45c6eae256f1ccb6f34ba992cf7dc68d1b4b204ff9faa7b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_engine.py",
+      "target": "gate/tests/test_runtime_engine.py",
+      "sha256": "acb3b6f203a96d7d93d6c2a6c90cfa2d9ec20f7da569161a8ccbea7406183aa2",
+      "targetSha256": "acb3b6f203a96d7d93d6c2a6c90cfa2d9ec20f7da569161a8ccbea7406183aa2",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_exit_confirmation.py",
+      "target": "gate/tests/test_runtime_exit_confirmation.py",
+      "sha256": "294b2da954cd0c38d29d55f4e65e0b88dfb0fb59befe855bd2c06ec635fe89f1",
+      "targetSha256": "294b2da954cd0c38d29d55f4e65e0b88dfb0fb59befe855bd2c06ec635fe89f1",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_http.py",
+      "target": "gate/tests/test_runtime_http.py",
+      "sha256": "3b369e88cd98df98edd17eac2f1383529ae390b3774695046d9888d8e3dd5bee",
+      "targetSha256": "3b369e88cd98df98edd17eac2f1383529ae390b3774695046d9888d8e3dd5bee",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_inspect_transport.py",
+      "target": "gate/tests/test_runtime_inspect_transport.py",
+      "sha256": "86a17c44c9efb112bef6e52b6d6015c499c021e9fe32e0332b25e6c61973038a",
+      "targetSha256": "86a17c44c9efb112bef6e52b6d6015c499c021e9fe32e0332b25e6c61973038a",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_install.py",
+      "target": "gate/tests/test_runtime_install.py",
+      "sha256": "180f85e92fd6de862ea8217709b92cce58b052c5b99b5d9fecee12a2e0bdac62",
+      "targetSha256": "180f85e92fd6de862ea8217709b92cce58b052c5b99b5d9fecee12a2e0bdac62",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_installed_version.py",
+      "target": "gate/tests/test_runtime_installed_version.py",
+      "sha256": "e925e42e50bb905a187c3514e616517e376814192f6147644c86c294d0c0949e",
+      "targetSha256": "abf24fefbdcd56e99ee9ee62eae5e02957e9274bf3e826788e3be49fa1d01459",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_inventory_obligations.py",
+      "target": "gate/tests/test_runtime_inventory_obligations.py",
+      "sha256": "07249d2b2469a07f877fd81a2d441cbb0c6c35a18652eb637f5a88dbfa2c7ac5",
+      "targetSha256": "07249d2b2469a07f877fd81a2d441cbb0c6c35a18652eb637f5a88dbfa2c7ac5",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_inventory_retry.py",
+      "target": "gate/tests/test_runtime_inventory_retry.py",
+      "sha256": "43f50c2e69c05e559fd5dc4654b9ccbe113249b27e8701b7063f14a22d55c999",
+      "targetSha256": "43f50c2e69c05e559fd5dc4654b9ccbe113249b27e8701b7063f14a22d55c999",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_namespace.py",
+      "target": "gate/tests/test_runtime_namespace.py",
+      "sha256": "fa053b4ebe5f24102885b948cac2bbca7c8e1860e2fe90e8236e526ade05ed70",
+      "targetSha256": "fa053b4ebe5f24102885b948cac2bbca7c8e1860e2fe90e8236e526ade05ed70",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_npm_origin.py",
+      "target": "gate/tests/test_runtime_npm_origin.py",
+      "sha256": "a011159280c9a944599a93fd336e5d8911b73bf27059546e318161232f79651f",
+      "targetSha256": "a011159280c9a944599a93fd336e5d8911b73bf27059546e318161232f79651f",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_npm_transport.py",
+      "target": "gate/tests/test_runtime_npm_transport.py",
+      "sha256": "293bafbf10bf73f22162c6d7a39d228d9232f18e9eaef7a11c05b455a2793915",
+      "targetSha256": "293bafbf10bf73f22162c6d7a39d228d9232f18e9eaef7a11c05b455a2793915",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_poll_reconciliation.py",
+      "target": "gate/tests/test_runtime_poll_reconciliation.py",
+      "sha256": "7932d2d829c60164fcfb0ff87ab0cfbed7aec2c40153775cf76b7cc4002d7908",
+      "targetSha256": "7932d2d829c60164fcfb0ff87ab0cfbed7aec2c40153775cf76b7cc4002d7908",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_probe_launcher.py",
+      "target": "gate/tests/test_runtime_probe_launcher.py",
+      "sha256": "062a86c540116518cdf1be4cd0ac290e745ad4361a8a34fd3025926818231da0",
+      "targetSha256": "d918b1ddfcd225431c33231874a48bc790277ad2f3f8a465862b92e50ffb4551",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_regressions.py",
+      "target": "gate/tests/test_runtime_regressions.py",
+      "sha256": "001930339db92ae928babc0870c95222724fe08fd12411059f106388406239bc",
+      "targetSha256": "001930339db92ae928babc0870c95222724fe08fd12411059f106388406239bc",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_restore_contract.py",
+      "target": "gate/tests/test_runtime_restore_contract.py",
+      "sha256": "195cfc4d7d722c1e935b7c2d4230a6fc98e268fac5eb7a496f127bed2e85f88d",
+      "targetSha256": "195cfc4d7d722c1e935b7c2d4230a6fc98e268fac5eb7a496f127bed2e85f88d",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_restore_control.py",
+      "target": "gate/tests/test_runtime_restore_control.py",
+      "sha256": "505a2514c93a76c2e4710ca494d5b7f5fe5dfc1b6db9fbfd277ba32d456d01ee",
+      "targetSha256": "42c44aef0d823c466152b54d39ecc3d40f671c83c2db5fbfdaf44a6ee7be95a2",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_restore_recovery.py",
+      "target": "gate/tests/test_runtime_restore_recovery.py",
+      "sha256": "20d75ddffffad6b1d3bf2fdb347179f22316be3d935845244f60898295536e2c",
+      "targetSha256": "20d75ddffffad6b1d3bf2fdb347179f22316be3d935845244f60898295536e2c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_restore_upload.py",
+      "target": "gate/tests/test_runtime_restore_upload.py",
+      "sha256": "0cba053c013bfa966d0ebef2e415898deee6279905d84c18c14c290e368aecde",
+      "targetSha256": "0cba053c013bfa966d0ebef2e415898deee6279905d84c18c14c290e368aecde",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_restore_validation.py",
+      "target": "gate/tests/test_runtime_restore_validation.py",
+      "sha256": "994d673f9b13b6f49a3ff527399befbd6329761a0cd5e2254eb483140fe01a1d",
+      "targetSha256": "994d673f9b13b6f49a3ff527399befbd6329761a0cd5e2254eb483140fe01a1d",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_security.py",
+      "target": "gate/tests/test_runtime_security.py",
+      "sha256": "931436567f23cdd706452dcaafe816632b08f198d896be13c84aaf01b5cbfe96",
+      "targetSha256": "931436567f23cdd706452dcaafe816632b08f198d896be13c84aaf01b5cbfe96",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_session_capture.py",
+      "target": "gate/tests/test_runtime_session_capture.py",
+      "sha256": "ddca9725248d7544d1ae2ca807938f076d859699c24640e388f318e483d06ec4",
+      "targetSha256": "803afadd1a7c03b32902330cb20b03394c682941bfedf3b429b4b9fa0fc55ae8",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_source_identity.py",
+      "target": "gate/tests/test_runtime_source_identity.py",
+      "sha256": "17c6f22e0bdf64d21700b15f22c0249c3d79420ba94e33fc431c58d069b1fc98",
+      "targetSha256": "4de20cf3742766c83a212f552b59599d5ae30c70af524a57867dc99191873a7c",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_source_validation.py",
+      "target": "gate/tests/test_runtime_source_validation.py",
+      "sha256": "acc4425447cb643618569cccd57b02c2927d3aa2ebcf1dc366d291325e3b5acc",
+      "targetSha256": "acc4425447cb643618569cccd57b02c2927d3aa2ebcf1dc366d291325e3b5acc",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_supervisor_fences.py",
+      "target": "gate/tests/test_runtime_supervisor_fences.py",
+      "sha256": "27b5014153f7d6592c7accee4bf0df6020cff85218a1d925c9aa86da43310f71",
+      "targetSha256": "67149e6410a6c063e5f1cbdcc9b023971131b9c2f90e8604663a629bd833cf62",
+      "adapted": true
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_updates.py",
+      "target": "gate/tests/test_runtime_updates.py",
+      "sha256": "ae62ebfe4c1e53a0393b4330ed4ac59a277f22a6c5477ca9d9f28a7f565e8f8d",
+      "targetSha256": "ae62ebfe4c1e53a0393b4330ed4ac59a277f22a6c5477ca9d9f28a7f565e8f8d",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_validation_flow.py",
+      "target": "gate/tests/test_runtime_validation_flow.py",
+      "sha256": "1c32c4b45ca6a191694a508fd57de56c3d8551a3b8bfb17a338d8c1025bf6fed",
+      "targetSha256": "1c32c4b45ca6a191694a508fd57de56c3d8551a3b8bfb17a338d8c1025bf6fed",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/gate/tests/test_runtime_versions.py",
+      "target": "gate/tests/test_runtime_versions.py",
+      "sha256": "a39fc2dfabb956da88d98fa9c669e000c9e290b28c150e97807cc13f770f671c",
+      "targetSha256": "a39fc2dfabb956da88d98fa9c669e000c9e290b28c150e97807cc13f770f671c",
+      "adapted": false
+    },
+    {
+      "source": "hub/approvals-portal.ts",
+      "target": "hub/approvals-portal.ts",
+      "sha256": "07dd51d867172e458dc04de0e514e59c784d72b81fbde39d5b464c3eaf64069b",
+      "targetSha256": "07dd51d867172e458dc04de0e514e59c784d72b81fbde39d5b464c3eaf64069b",
+      "adapted": false
+    },
+    {
+      "source": "hub/asset-transfer.ts",
+      "target": "hub/asset-transfer.ts",
+      "sha256": "caddd274bb7124d88f13f706650388d1e2cc0dc44afe9016cde0a4f7bef486e9",
+      "targetSha256": "caddd274bb7124d88f13f706650388d1e2cc0dc44afe9016cde0a4f7bef486e9",
+      "adapted": false
+    },
+    {
+      "source": "hub/bounded-registry.ts",
+      "target": "hub/bounded-registry.ts",
+      "sha256": "dc5a6ee0ab111aa14dcd2b9d92b510aea29f281d3d24be4157cc483c1cc9c5c9",
+      "targetSha256": "ad21dffbf9d93d7e90b626e4ad6cac3c3336497882eff554c056589f7498ae29",
+      "adapted": true
+    },
+    {
+      "source": "hub/config.ts",
+      "target": "hub/config.ts",
+      "sha256": "86be7821b3efba89a7811df834f7835673f8caa17a7e1584e7bd72c452ab45ea",
+      "targetSha256": "d5b439722fdc9491b9c724fdaf4403767f5c2afbc42c0505225d0746048ac44e",
+      "adapted": true
+    },
+    {
+      "source": "hub/forward-queue.ts",
+      "target": "hub/forward-queue.ts",
+      "sha256": "437ac2eef32eb04f11cfeef0a17ca9eb103f656376fa06fd7de83e9f7a1aafc1",
+      "targetSha256": "437ac2eef32eb04f11cfeef0a17ca9eb103f656376fa06fd7de83e9f7a1aafc1",
+      "adapted": false
+    },
+    {
+      "source": "hub/gate-management.ts",
+      "target": "hub/gate-management.ts",
+      "sha256": "b450da21e047701e542c1f64370b33a59bcabd73c4f4b04a3c5c8cf486a25a1c",
+      "targetSha256": "b450da21e047701e542c1f64370b33a59bcabd73c4f4b04a3c5c8cf486a25a1c",
+      "adapted": false
+    },
+    {
+      "source": "hub/gateway-auth.ts",
+      "target": "hub/gateway-auth.ts",
+      "sha256": "4bfa613df73edd4182657f2622d8f92ad454df61a9e62e44a9b9fede20eaee02",
+      "targetSha256": "4bfa613df73edd4182657f2622d8f92ad454df61a9e62e44a9b9fede20eaee02",
+      "adapted": false
+    },
+    {
+      "source": "hub/interaction-control.ts",
+      "target": "hub/interaction-control.ts",
+      "sha256": "79648bec6ae2ade7efb43a2792ee377ab0193add5ce38a3548fe3958b7891ec9",
+      "targetSha256": "2d1d443e02d7633b91bd16f308ff59a95ad554e279b129c24f88f067a254a8e4",
+      "adapted": true
+    },
+    {
+      "source": "hub/interaction-page.ts",
+      "target": "hub/interaction-page.ts",
+      "sha256": "68fc0a502c491841e97183084b440d7dc718018007a99f5273bb06d3f6e24d78",
+      "targetSha256": "41aec3a3f1786234bfe37bc5104bfc2e24e0e9f33a49514f027b9da40d599266",
+      "adapted": true
+    },
+    {
+      "source": "hub/interaction-signing.ts",
+      "target": "hub/interaction-signing.ts",
+      "sha256": "43e1f34799f6decb05436af4b512501161c7ebb374f13070654c02e9a6962acd",
+      "targetSha256": "016b9b5ec2ff518c4bf93f2a637914a5a7fbcd85320344def96bc8973c0b2733",
+      "adapted": true
+    },
+    {
+      "source": "hub/interactions.ts",
+      "target": "hub/interactions.ts",
+      "sha256": "7ffdf1b8b089826ca306f80a3a0b070679c80872484d9891d529e2984d8cc38f",
+      "targetSha256": "d408ed4c136cd0dd22e80f6725b0b989e057c9866a6975ff6fe184ba7a838874",
+      "adapted": true
+    },
+    {
+      "source": "hub/launch-portal.ts",
+      "target": "hub/launch-portal.ts",
+      "sha256": "d63b1426fce1accd20901a4835a014e51f5dd94119237b695dacba4bf915653a",
+      "targetSha256": "ae1580aaf4e2d35a625b28a5c70fd8a4c256382ca36f3ce981cb81979ee84fdf",
+      "adapted": true
+    },
+    {
+      "source": "hub/lifecycle.ts",
+      "target": "hub/lifecycle.ts",
+      "sha256": "4322eac00208d1fc3e4f10cc8dd846e600a4211138dc16b854fd20283d72bbed",
+      "targetSha256": "4322eac00208d1fc3e4f10cc8dd846e600a4211138dc16b854fd20283d72bbed",
+      "adapted": false
+    },
+    {
+      "source": "hub/limits.ts",
+      "target": "hub/limits.ts",
+      "sha256": "00fbbfa392d756e1517323c5e22d83378dc2caa76e29d443796bedcad75c249a",
+      "targetSha256": "00fbbfa392d756e1517323c5e22d83378dc2caa76e29d443796bedcad75c249a",
+      "adapted": false
+    },
+    {
+      "source": "hub/management.ts",
+      "target": "hub/management.ts",
+      "sha256": "98b2a02864f713bcbd888a2a25205f2a6fdce2c223cc6d53b33aed7d279f7ecc",
+      "targetSha256": "98b2a02864f713bcbd888a2a25205f2a6fdce2c223cc6d53b33aed7d279f7ecc",
+      "adapted": false
+    },
+    {
+      "source": "hub/pi-launches.ts",
+      "target": "hub/pi-launches.ts",
+      "sha256": "f6e4cdcb24e8d2387a5ea96dee01a203f5721e2a1c7a74488058a966bb49e706",
+      "targetSha256": "f6e4cdcb24e8d2387a5ea96dee01a203f5721e2a1c7a74488058a966bb49e706",
+      "adapted": false
+    },
+    {
+      "source": "hub/portal.ts",
+      "target": "hub/portal.ts",
+      "sha256": "88e179550155822fb9d62ca130daa43f4206d670ba647db3269b468dfec7fbf3",
+      "targetSha256": "5d2196701a83f50680274e38a44953b52b4c8f07fa2e1edddc4f23c47c0f1cc0",
+      "adapted": true
+    },
+    {
+      "source": "hub/restart-api.ts",
+      "target": "hub/restart-api.ts",
+      "sha256": "64e53e1fca2a05670d84d4bb95af7f4978b0c5192f81310d187c115345c644a5",
+      "targetSha256": "b5451e3fbcf46e02b4ebfff47c906d3d391b447af87df846b68457bccdd234b2",
+      "adapted": true
+    },
+    {
+      "source": "hub/runtime-portal.ts",
+      "target": "hub/runtime-portal.ts",
+      "sha256": "2cbc9420e737a3677202396008614fdecbbdb418863c1f57afd2a25b737d473d",
+      "targetSha256": "2cbc9420e737a3677202396008614fdecbbdb418863c1f57afd2a25b737d473d",
+      "adapted": false
+    },
+    {
+      "source": "hub/runtime-updates.ts",
+      "target": "hub/runtime-updates.ts",
+      "sha256": "001e7e9480d9e7621c73dd2157c36c5bec9cd51e326eec9d03a60b3f81c9eebd",
+      "targetSha256": "001e7e9480d9e7621c73dd2157c36c5bec9cd51e326eec9d03a60b3f81c9eebd",
+      "adapted": false
+    },
+    {
+      "source": "hub/server.ts",
+      "target": "hub/server.ts",
+      "sha256": "53d9b3547a9a06e2fa4509105afd3931ffe5d1c1801f816fdbd6aaa8eadc35f4",
+      "targetSha256": "556391d0a83828d255da5f3fabfc8a004752a4f0b953ac2404b11594fa95eeba",
+      "adapted": true
+    },
+    {
+      "source": "hub/state-budget.ts",
+      "target": "hub/state-budget.ts",
+      "sha256": "7757ce44b7c380340a985b176ceecacbb1859bf1acfd56cc4b1b6e7fcde4d19b",
+      "targetSha256": "7757ce44b7c380340a985b176ceecacbb1859bf1acfd56cc4b1b6e7fcde4d19b",
+      "adapted": false
+    },
+    {
+      "source": "hub/version-status.ts",
+      "target": "hub/version-status.ts",
+      "sha256": "c7254c76b005b1bd0307d23ee85dbd7182dea1ed0c6ceeef6f59577021ecb598",
+      "targetSha256": "537b306082b44df576d7bc5e630a81ce5de15ae29572192963c060e517edcb40",
+      "adapted": true
+    },
+    {
+      "source": "e2e/date-history.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/date-history.integration.ts",
+      "sha256": "28595be970b8d9b9f53b63b25c9a86bef66ca3006b10559665685c2bd0767407",
+      "targetSha256": "28595be970b8d9b9f53b63b25c9a86bef66ca3006b10559665685c2bd0767407",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/chat-lifecycle.feature",
+      "target": "integration-tests/legacy-web/e2e/features/chat-lifecycle.feature",
+      "sha256": "c511cb495e2a5035d9201024cee517e5528db90c2694741dd63f7de36036440e",
+      "targetSha256": "c511cb495e2a5035d9201024cee517e5528db90c2694741dd63f7de36036440e",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/collapse-regression.feature",
+      "target": "integration-tests/legacy-web/e2e/features/collapse-regression.feature",
+      "sha256": "f85ef55be17da9bb803d0568856eedfa649abd4b1d2832d1504abc8758b08381",
+      "targetSha256": "f85ef55be17da9bb803d0568856eedfa649abd4b1d2832d1504abc8758b08381",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/daily-commands.feature",
+      "target": "integration-tests/legacy-web/e2e/features/daily-commands.feature",
+      "sha256": "ddbcb0f043becd996477cb1982e38283b981a83e7d970611113b527df0d3debc",
+      "targetSha256": "ddbcb0f043becd996477cb1982e38283b981a83e7d970611113b527df0d3debc",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/date-history.feature",
+      "target": "integration-tests/legacy-web/e2e/features/date-history.feature",
+      "sha256": "9793d1ab7e5d4e401fe693a97af158f8851afed2edd25207a8acaa451e2b1e06",
+      "targetSha256": "9793d1ab7e5d4e401fe693a97af158f8851afed2edd25207a8acaa451e2b1e06",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/file-download.feature",
+      "target": "integration-tests/legacy-web/e2e/features/file-download.feature",
+      "sha256": "53717ada602588613f6b1d58c75acf79c66cd5414f2ea368a16c2e10c3a3167f",
+      "targetSha256": "53717ada602588613f6b1d58c75acf79c66cd5414f2ea368a16c2e10c3a3167f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/file-upload.feature",
+      "target": "integration-tests/legacy-web/e2e/features/file-upload.feature",
+      "sha256": "007f59b7f4a0b63985b2ffe5a856eeb62e03f328e532b24eb8f4a5f9746694e6",
+      "targetSha256": "007f59b7f4a0b63985b2ffe5a856eeb62e03f328e532b24eb8f4a5f9746694e6",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/interaction-performance.feature",
+      "target": "integration-tests/legacy-web/e2e/features/interaction-performance.feature",
+      "sha256": "fcd27f54b266afa6ac82d106329e12f01708f46c4b081cc630d420692219b65f",
+      "targetSha256": "fcd27f54b266afa6ac82d106329e12f01708f46c4b081cc630d420692219b65f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/language.feature",
+      "target": "integration-tests/legacy-web/e2e/features/language.feature",
+      "sha256": "dabd880b98a29d7bb6a92798703df354bc4c5f3440256c87063f0d25a47c373b",
+      "targetSha256": "dabd880b98a29d7bb6a92798703df354bc4c5f3440256c87063f0d25a47c373b",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/left-sidebar.feature",
+      "target": "integration-tests/legacy-web/e2e/features/left-sidebar.feature",
+      "sha256": "8d2331899611d3e743d08a42faa28e422b8ba24a72ead3093708c6fea65c9ce6",
+      "targetSha256": "8d2331899611d3e743d08a42faa28e422b8ba24a72ead3093708c6fea65c9ce6",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/long-session-regression.feature",
+      "target": "integration-tests/legacy-web/e2e/features/long-session-regression.feature",
+      "sha256": "bf39eb0ba8678901f2495cca3ef297f927561bc6892ebf470ba32b7e67955b3d",
+      "targetSha256": "bf39eb0ba8678901f2495cca3ef297f927561bc6892ebf470ba32b7e67955b3d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/math-formatting.feature",
+      "target": "integration-tests/legacy-web/e2e/features/math-formatting.feature",
+      "sha256": "873750dcd447eb8b0ba2274ffabc6f7a7b312d8809b9f92e5aedc5204a01117d",
+      "targetSha256": "873750dcd447eb8b0ba2274ffabc6f7a7b312d8809b9f92e5aedc5204a01117d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/message-revision.feature",
+      "target": "integration-tests/legacy-web/e2e/features/message-revision.feature",
+      "sha256": "d14e6489ae5c922b769779fd67f118f3e91a4d3e7267a58735fff6e4150455a9",
+      "targetSha256": "d14e6489ae5c922b769779fd67f118f3e91a4d3e7267a58735fff6e4150455a9",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/portable-connection.feature",
+      "target": "integration-tests/legacy-web/e2e/features/portable-connection.feature",
+      "sha256": "f6b1a08276823103f61a94bfeadcff91ec8757d14273a5cad44023e3cb24442e",
+      "targetSha256": "f6b1a08276823103f61a94bfeadcff91ec8757d14273a5cad44023e3cb24442e",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/remote-access.feature",
+      "target": "integration-tests/legacy-web/e2e/features/remote-access.feature",
+      "sha256": "978549bd68296e91932b4c57c9442875187545610f1b57e14a0fdfa84111cdff",
+      "targetSha256": "978549bd68296e91932b4c57c9442875187545610f1b57e14a0fdfa84111cdff",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/session-hub.feature",
+      "target": "integration-tests/legacy-web/e2e/features/session-hub.feature",
+      "sha256": "717765349d8a83db5a7b75e8eea5789bebe18f0edb3a4adf3cb9beb11fa135c2",
+      "targetSha256": "717765349d8a83db5a7b75e8eea5789bebe18f0edb3a4adf3cb9beb11fa135c2",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/transport-large.feature",
+      "target": "integration-tests/legacy-web/e2e/features/transport-large.feature",
+      "sha256": "659048fbf0593b1087322f84d83e97ec2fe49843626cbd1dea084afc11df73e8",
+      "targetSha256": "659048fbf0593b1087322f84d83e97ec2fe49843626cbd1dea084afc11df73e8",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/whale-companion.feature",
+      "target": "integration-tests/legacy-web/e2e/features/whale-companion.feature",
+      "sha256": "d72c3e49d5a7c9e8f222465bdc84b2532f9752537f1cfd810bae619635d7d32e",
+      "targetSha256": "d72c3e49d5a7c9e8f222465bdc84b2532f9752537f1cfd810bae619635d7d32e",
+      "adapted": false
+    },
+    {
+      "source": "e2e/features/workspace-status.feature",
+      "target": "integration-tests/legacy-web/e2e/features/workspace-status.feature",
+      "sha256": "b08025667c2c32d0aaf79964a5dee61ebd4fd936ea957aa483e1a6e78d06274f",
+      "targetSha256": "b08025667c2c32d0aaf79964a5dee61ebd4fd936ea957aa483e1a6e78d06274f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/file-download.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/file-download.integration.ts",
+      "sha256": "cb8bee4e845dacbb6d6bc29ba6ed4f7f658e27579e257ca7e1c9bf22494562e5",
+      "targetSha256": "cb8bee4e845dacbb6d6bc29ba6ed4f7f658e27579e257ca7e1c9bf22494562e5",
+      "adapted": false
+    },
+    {
+      "source": "e2e/file-upload.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/file-upload.integration.ts",
+      "sha256": "b7680821f1acf7634f6f8cf375fffb28135b08e540d3649de84bc5b626f9aeed",
+      "targetSha256": "b7680821f1acf7634f6f8cf375fffb28135b08e540d3649de84bc5b626f9aeed",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/bounded-tool-toggle.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/bounded-tool-toggle.ts",
+      "sha256": "1e598fef61fea4e381bfc0182e730dba9d2ce4abdfa87c0a1a82c1e72f4a219f",
+      "targetSha256": "1e598fef61fea4e381bfc0182e730dba9d2ce4abdfa87c0a1a82c1e72f4a219f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/connection-lifecycle-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/connection-lifecycle-extension.ts",
+      "sha256": "ec318ee5e42a0ce6974f4bde1af5f38e9c9f394900d2374ec47b019c72bfba7b",
+      "targetSha256": "ec318ee5e42a0ce6974f4bde1af5f38e9c9f394900d2374ec47b019c72bfba7b",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/faux-provider-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/faux-provider-extension.ts",
+      "sha256": "273d11d56a1f4512dbdbdf57a13c7f01de5b68c0b73c9d1fb956aa58eb2bd46f",
+      "targetSha256": "273d11d56a1f4512dbdbdf57a13c7f01de5b68c0b73c9d1fb956aa58eb2bd46f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/large-tool-data.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/large-tool-data.ts",
+      "sha256": "b1d4b31e461cd3cccb027c28a98c20c344763350cfd7efb25779f9b923d7973a",
+      "targetSha256": "b1d4b31e461cd3cccb027c28a98c20c344763350cfd7efb25779f9b923d7973a",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/math-formatting-data.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/math-formatting-data.ts",
+      "sha256": "b7f492f5d8cbbcabc6eaf99135b848ada9521a8da8d1713fbc142a448d4fd3fc",
+      "targetSha256": "b7f492f5d8cbbcabc6eaf99135b848ada9521a8da8d1713fbc142a448d4fd3fc",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/prompts/e2e-prompt.md",
+      "target": "integration-tests/legacy-web/e2e/fixtures/prompts/e2e-prompt.md",
+      "sha256": "225a23d98caee344d147d5e0d7773e0946fcc2c00850e99e32241fc7d3bddb3a",
+      "targetSha256": "225a23d98caee344d147d5e0d7773e0946fcc2c00850e99e32241fc7d3bddb3a",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/chat-lifecycle.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/chat-lifecycle.ts",
+      "sha256": "563f6009c4508157f04199307dd3fc05eadd6582f1840f896265c1a019b78400",
+      "targetSha256": "563f6009c4508157f04199307dd3fc05eadd6582f1840f896265c1a019b78400",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/collapse-regression.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/collapse-regression.ts",
+      "sha256": "f3a128af0b4b94ab141edcb8d99558d923e34dec6adfdd93bfba18aa854f405d",
+      "targetSha256": "f3a128af0b4b94ab141edcb8d99558d923e34dec6adfdd93bfba18aa854f405d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/daily-commands.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/daily-commands.ts",
+      "sha256": "95bd68bd1bfcf37f68294fddedfdc5c5f85b4fe49989bfd77faf0e65039f5942",
+      "targetSha256": "95bd68bd1bfcf37f68294fddedfdc5c5f85b4fe49989bfd77faf0e65039f5942",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/duplicate-artifact.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/duplicate-artifact.ts",
+      "sha256": "9b73b10f2e55e1b37ccf1e68c02e807b2e928ba25ce9b80cd75c768623daaf8a",
+      "targetSha256": "9b73b10f2e55e1b37ccf1e68c02e807b2e928ba25ce9b80cd75c768623daaf8a",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/external-artifact.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/external-artifact.ts",
+      "sha256": "8114314f34c10777468b92727ec0d741c071fbd1f6acce7eb226f5daa4422d0d",
+      "targetSha256": "8114314f34c10777468b92727ec0d741c071fbd1f6acce7eb226f5daa4422d0d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/file-download.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/file-download.ts",
+      "sha256": "ce659ec049738f69a06f8c68373650e9caaa6c20773b88aae775dd6054b43e8d",
+      "targetSha256": "ce659ec049738f69a06f8c68373650e9caaa6c20773b88aae775dd6054b43e8d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/file-upload.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/file-upload.ts",
+      "sha256": "50f8487abd422008c3e54374119c31526f7c9f9e21fe1a1c3eb353561451cd52",
+      "targetSha256": "50f8487abd422008c3e54374119c31526f7c9f9e21fe1a1c3eb353561451cd52",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/language-markdown.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/language-markdown.ts",
+      "sha256": "f62ae968fb7b6f77a510f75611bc5b13781c5b03052fae46f427b9c3e05fadd9",
+      "targetSha256": "f62ae968fb7b6f77a510f75611bc5b13781c5b03052fae46f427b9c3e05fadd9",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/large-tool-output.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/large-tool-output.ts",
+      "sha256": "9d395c3b42c677b73730f0bd98cae6266cf8bd94960b3748f610bd03f83071ef",
+      "targetSha256": "9d395c3b42c677b73730f0bd98cae6266cf8bd94960b3748f610bd03f83071ef",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/math-formatting.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/math-formatting.ts",
+      "sha256": "de8214becc82c6ba6f9fff21f2f0ec9fa7bb0ef9011362b599a00ee3e30204a6",
+      "targetSha256": "de8214becc82c6ba6f9fff21f2f0ec9fa7bb0ef9011362b599a00ee3e30204a6",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/message-revision.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/message-revision.ts",
+      "sha256": "e7612fdbe4d45c655b5e7b9c8f224c66a8fda0b2e4726deafefe3d8136da13ef",
+      "targetSha256": "e7612fdbe4d45c655b5e7b9c8f224c66a8fda0b2e4726deafefe3d8136da13ef",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/tool-failure.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/tool-failure.ts",
+      "sha256": "5b1b515de30f1358a106660de21b13a111eec5c7b60af736f2133cc475407814",
+      "targetSha256": "5b1b515de30f1358a106660de21b13a111eec5c7b60af736f2133cc475407814",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/transport-large.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/transport-large.ts",
+      "sha256": "c1032ca7de0f59ae4931e23e3f8213dcc6378f65899f383e1be6d4412c950633",
+      "targetSha256": "c1032ca7de0f59ae4931e23e3f8213dcc6378f65899f383e1be6d4412c950633",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/responses/workspace-artifact.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/responses/workspace-artifact.ts",
+      "sha256": "6d21acbc7479507da4b75ed963d419ba1233dfcd74d4926b0f571d42cc683015",
+      "targetSha256": "6d21acbc7479507da4b75ed963d419ba1233dfcd74d4926b0f571d42cc683015",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/runtime-update-provider.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/runtime-update-provider.ts",
+      "sha256": "1af2eac3ebcd311fe46f4490c8ba6841265eaceb721106181dae2d0d705e9a32",
+      "targetSha256": "1af2eac3ebcd311fe46f4490c8ba6841265eaceb721106181dae2d0d705e9a32",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/skills/e2e-skill/SKILL.md",
+      "target": "integration-tests/legacy-web/e2e/fixtures/skills/e2e-skill/SKILL.md",
+      "sha256": "90434c88ec088052a3b0b27ccbc82e962150403a6e6791aed25feef39bb4d182",
+      "targetSha256": "90434c88ec088052a3b0b27ccbc82e962150403a6e6791aed25feef39bb4d182",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/slash-command-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/slash-command-extension.ts",
+      "sha256": "a475c3d32b8779143325b1f41fa7519e3b9bdab7bbc6285495b08a340337643d",
+      "targetSha256": "a475c3d32b8779143325b1f41fa7519e3b9bdab7bbc6285495b08a340337643d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/stdin-guard-probe.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/stdin-guard-probe.ts",
+      "sha256": "b642bb5dd2a05b0984e44ab80a1a38105b98423a18a356d6811a3738f6eec59a",
+      "targetSha256": "b642bb5dd2a05b0984e44ab80a1a38105b98423a18a356d6811a3738f6eec59a",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/terminal-prompt-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/terminal-prompt-extension.ts",
+      "sha256": "df0771b90b77070a6106b5b8062b76acd82604bf03772b16a6ef2e2f5761b0fc",
+      "targetSha256": "df0771b90b77070a6106b5b8062b76acd82604bf03772b16a6ef2e2f5761b0fc",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/transport-data.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/transport-data.ts",
+      "sha256": "144652b3d1c7839c5308efa695197a577fbe3fa5a2d548a84818ea9f92b43ee2",
+      "targetSha256": "144652b3d1c7839c5308efa695197a577fbe3fa5a2d548a84818ea9f92b43ee2",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/web-interaction-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/web-interaction-extension.ts",
+      "sha256": "09523632b3182f8e09ce2c6afb8f8e5cdd8a486bdec80ca9bfd435bfe23d3679",
+      "targetSha256": "09523632b3182f8e09ce2c6afb8f8e5cdd8a486bdec80ca9bfd435bfe23d3679",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/web-interaction-lifecycle-extension.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/web-interaction-lifecycle-extension.ts",
+      "sha256": "e0ea7bb386abb37b15917daff7591b9bf86eadce5f2ac8ff2bf1834c712f12e0",
+      "targetSha256": "e0ea7bb386abb37b15917daff7591b9bf86eadce5f2ac8ff2bf1834c712f12e0",
+      "adapted": false
+    },
+    {
+      "source": "e2e/fixtures/whale-gif.ts",
+      "target": "integration-tests/legacy-web/e2e/fixtures/whale-gif.ts",
+      "sha256": "d159d3344a6f5b16ed39ea66ca7a21f94641cd152bcd1ce6f8526e861f87c3fb",
+      "targetSha256": "d159d3344a6f5b16ed39ea66ca7a21f94641cd152bcd1ce6f8526e861f87c3fb",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/browser-managed-restart.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/browser-managed-restart.ts",
+      "sha256": "b804c702075775b7b035616c920dcca23253830e64b4e4a97fcdbda74f478e2d",
+      "targetSha256": "b804c702075775b7b035616c920dcca23253830e64b4e4a97fcdbda74f478e2d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/browser-runtime-version-picker.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/browser-runtime-version-picker.ts",
+      "sha256": "ea3ebc9c9ee4648388e478fa469c1ccbc70756fb96579ba0e2c2ea8c3c344417",
+      "targetSha256": "ea3ebc9c9ee4648388e478fa469c1ccbc70756fb96579ba0e2c2ea8c3c344417",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/Dockerfile.managed-runtime",
+      "target": "integration-tests/legacy-web/e2e/harness/Dockerfile.managed-runtime",
+      "sha256": "751ac67d273b059d26057d2f8923e436048bf862a24722df1fc67e81a7117689",
+      "targetSha256": "751ac67d273b059d26057d2f8923e436048bf862a24722df1fc67e81a7117689",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/hostile-management.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/hostile-management.ts",
+      "sha256": "a039799f10ade19f7f10b2e494a8fe24692996d56964be7850dfde9726b03217",
+      "targetSha256": "a039799f10ade19f7f10b2e494a8fe24692996d56964be7850dfde9726b03217",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/hub-cli.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/hub-cli.ts",
+      "sha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
+      "targetSha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/pi-process.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/pi-process.ts",
+      "sha256": "63f329b433cd3133631c2e34690502f1995ab3196dafd98d8be5c7751de7737f",
+      "targetSha256": "63f329b433cd3133631c2e34690502f1995ab3196dafd98d8be5c7751de7737f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/test-managed-gate.py",
+      "target": "integration-tests/legacy-web/e2e/harness/test-managed-gate.py",
+      "sha256": "c4921454cdf3dd143571f5193892b0a9e31a9230071e7b6298e3f890fc596c7d",
+      "targetSha256": "c4921454cdf3dd143571f5193892b0a9e31a9230071e7b6298e3f890fc596c7d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/test-managed-runtime.py",
+      "target": "integration-tests/legacy-web/e2e/harness/test-managed-runtime.py",
+      "sha256": "ef6db612e65b7c5b56dcb550453148549bbccc832beb5faec354e23952d02bb9",
+      "targetSha256": "ef6db612e65b7c5b56dcb550453148549bbccc832beb5faec354e23952d02bb9",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/test-stdin-guard-tui.py",
+      "target": "integration-tests/legacy-web/e2e/harness/test-stdin-guard-tui.py",
+      "sha256": "178a6a21a902cb71bb55abb016de35e5f4e89ec92d85ab6af8d8c9ef82a0fe71",
+      "targetSha256": "178a6a21a902cb71bb55abb016de35e5f4e89ec92d85ab6af8d8c9ef82a0fe71",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/visual-bounded-hub-state.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/visual-bounded-hub-state.ts",
+      "sha256": "ca4148314ba397ebb3b75566ead6d950e3ce5037481fb2722d3ed4a92e22c526",
+      "targetSha256": "ca4148314ba397ebb3b75566ead6d950e3ce5037481fb2722d3ed4a92e22c526",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/visual-evidence.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/visual-evidence.ts",
+      "sha256": "f2babfc2ede85f18ce74fc51dba365319760b4753caca51172cfe9c6dfe10d9b",
+      "targetSha256": "f2babfc2ede85f18ce74fc51dba365319760b4753caca51172cfe9c6dfe10d9b",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/visual-managed-restart.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/visual-managed-restart.ts",
+      "sha256": "ec506ea0f17dd61981870d1d4d477551c4f7a14d7970c62d2e8808b1a4ad78d0",
+      "targetSha256": "ec506ea0f17dd61981870d1d4d477551c4f7a14d7970c62d2e8808b1a4ad78d0",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/visual-tool-toggle.ts",
+      "target": "integration-tests/legacy-web/e2e/harness/visual-tool-toggle.ts",
+      "sha256": "bca7d794b1ee0aa34b3439a017e2b20e724908f4101b48bd870842967b7ca5c1",
+      "targetSha256": "bca7d794b1ee0aa34b3439a017e2b20e724908f4101b48bd870842967b7ca5c1",
+      "adapted": false
+    },
+    {
+      "source": "e2e/hub-approvals.visual.ts",
+      "target": "integration-tests/legacy-web/e2e/hub-approvals.visual.ts",
+      "sha256": "7eacd65b92f2de84c4eb89f4c8b8cd3546dcbb674278da715a041519201ba617",
+      "targetSha256": "7eacd65b92f2de84c4eb89f4c8b8cd3546dcbb674278da715a041519201ba617",
+      "adapted": false
+    },
+    {
+      "source": "e2e/hub-launches.visual.ts",
+      "target": "integration-tests/legacy-web/e2e/hub-launches.visual.ts",
+      "sha256": "1411ccec2d68137963962f5228182b6dc777b6261b14b25bd67a584edb033a3d",
+      "targetSha256": "1411ccec2d68137963962f5228182b6dc777b6261b14b25bd67a584edb033a3d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/message-revision.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/message-revision.integration.ts",
+      "sha256": "0997f7e7d1ab77c7b1b66838315e2f695084b22299506ba43dcc3c968f0413c1",
+      "targetSha256": "0997f7e7d1ab77c7b1b66838315e2f695084b22299506ba43dcc3c968f0413c1",
+      "adapted": false
+    },
+    {
+      "source": "e2e/playwright.config.ts",
+      "target": "integration-tests/legacy-web/e2e/playwright.config.ts",
+      "sha256": "2f35a691c5f01574391bc437d5d69fc000110260f25807d133dc25f3d5adbf80",
+      "targetSha256": "2f35a691c5f01574391bc437d5d69fc000110260f25807d133dc25f3d5adbf80",
+      "adapted": false
+    },
+    {
+      "source": "e2e/portable-connection.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/portable-connection.integration.ts",
+      "sha256": "4219a0366628da3c17659e80634c49cdc3f231cfbf84be48070c2ba4cfa92634",
+      "targetSha256": "4219a0366628da3c17659e80634c49cdc3f231cfbf84be48070c2ba4cfa92634",
+      "adapted": false
+    },
+    {
+      "source": "e2e/run-perf-baseline.sh",
+      "target": "integration-tests/legacy-web/e2e/run-perf-baseline.sh",
+      "sha256": "ce1ba01ed76d01bbd596c90b0481c08430250425fff7f1d53453bc48f3df201d",
+      "targetSha256": "ce1ba01ed76d01bbd596c90b0481c08430250425fff7f1d53453bc48f3df201d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/session-hub.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/session-hub.integration.ts",
+      "sha256": "308f7014d7adc678b4085d5efc58b652aa6367e0987debe680dbcd21a5fd1e52",
+      "targetSha256": "308f7014d7adc678b4085d5efc58b652aa6367e0987debe680dbcd21a5fd1e52",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/daily-commands.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/daily-commands.steps.ts",
+      "sha256": "8824755fa993f37926e132f483d3b6fd5da5b73a700f26fae250286a9d4a892d",
+      "targetSha256": "8824755fa993f37926e132f483d3b6fd5da5b73a700f26fae250286a9d4a892d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/date-history.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/date-history.steps.ts",
+      "sha256": "fe28a7b52d759bc9a6adf2b43715e9f6fcecc880fda257c48ddd87d84aa9c1eb",
+      "targetSha256": "fe28a7b52d759bc9a6adf2b43715e9f6fcecc880fda257c48ddd87d84aa9c1eb",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/file-download.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/file-download.steps.ts",
+      "sha256": "eac7463ed22427bced4dec4085ef538fa4027391a7122634fc6d1907662e939f",
+      "targetSha256": "eac7463ed22427bced4dec4085ef538fa4027391a7122634fc6d1907662e939f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/file-upload.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/file-upload.steps.ts",
+      "sha256": "7024a91321165c768c3c192d1165bc723e772020e4d9d6d59fa7e20eacefe003",
+      "targetSha256": "7024a91321165c768c3c192d1165bc723e772020e4d9d6d59fa7e20eacefe003",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/interaction-performance.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/interaction-performance.steps.ts",
+      "sha256": "916c4b2a05c167f356b835d4a9c7a474cc0eb1c6e777486cae5122a9c6a05887",
+      "targetSha256": "916c4b2a05c167f356b835d4a9c7a474cc0eb1c6e777486cae5122a9c6a05887",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/language.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/language.steps.ts",
+      "sha256": "91370474413eb5cc389392b5850a8565b49c05057a5dec9ceaf4c878fd159c5e",
+      "targetSha256": "91370474413eb5cc389392b5850a8565b49c05057a5dec9ceaf4c878fd159c5e",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/long-session.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/long-session.steps.ts",
+      "sha256": "a21c595961e21745d640c9baed7c58b33f1d8f32373c35de32d8fbce26e42e96",
+      "targetSha256": "a21c595961e21745d640c9baed7c58b33f1d8f32373c35de32d8fbce26e42e96",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/math-formatting.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/math-formatting.steps.ts",
+      "sha256": "35353256ed07a2cdbeb22dfa056d56aa4992f82def7ffc71959c713c4c071798",
+      "targetSha256": "35353256ed07a2cdbeb22dfa056d56aa4992f82def7ffc71959c713c4c071798",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/message-revision.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/message-revision.steps.ts",
+      "sha256": "30dee0c386eea1fddf87261b43f14decf711ba3260243f95a03d56f488a12c9d",
+      "targetSha256": "30dee0c386eea1fddf87261b43f14decf711ba3260243f95a03d56f488a12c9d",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/portable-connection.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/portable-connection.steps.ts",
+      "sha256": "ea3f40cfd4e36d23b9ba951953ddfa0a278d22cb67737fb94dd4bcc187fb4449",
+      "targetSha256": "ea3f40cfd4e36d23b9ba951953ddfa0a278d22cb67737fb94dd4bcc187fb4449",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/remote-access.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/remote-access.steps.ts",
+      "sha256": "f98c48c32db042e467693243d131475d8d72c0d8f98641023215d4bd6fa4f067",
+      "targetSha256": "f98c48c32db042e467693243d131475d8d72c0d8f98641023215d4bd6fa4f067",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/session-hub.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/session-hub.steps.ts",
+      "sha256": "ff564f25e08e97b84ed21eeb9ee9ce57d2df67fb2785cf558356165938f03784",
+      "targetSha256": "ff564f25e08e97b84ed21eeb9ee9ce57d2df67fb2785cf558356165938f03784",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/slash-commands.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/slash-commands.steps.ts",
+      "sha256": "87c323e0db5caf5a2bd5310c356a3568be2d0407f0d2e5a0e1744b873d26496f",
+      "targetSha256": "87c323e0db5caf5a2bd5310c356a3568be2d0407f0d2e5a0e1744b873d26496f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/transport-large.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/transport-large.steps.ts",
+      "sha256": "94c0d4719bbfe120af32dfc20260463f30a64d01b1e356aae9b1468295f64f13",
+      "targetSha256": "94c0d4719bbfe120af32dfc20260463f30a64d01b1e356aae9b1468295f64f13",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/whale-companion.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/whale-companion.steps.ts",
+      "sha256": "ccc374ac884e88bb945f1ebb73523947c3b6ad3949d9e20afe407c5b445188b3",
+      "targetSha256": "ccc374ac884e88bb945f1ebb73523947c3b6ad3949d9e20afe407c5b445188b3",
+      "adapted": false
+    },
+    {
+      "source": "e2e/steps/workspace-status.steps.ts",
+      "target": "integration-tests/legacy-web/e2e/steps/workspace-status.steps.ts",
+      "sha256": "69bf114eff5521cb7da5364489d4773b4adb450ca10bca79c91628eaeea5f797",
+      "targetSha256": "69bf114eff5521cb7da5364489d4773b4adb450ca10bca79c91628eaeea5f797",
+      "adapted": false
+    },
+    {
+      "source": "e2e/web-interactions.browser.ts",
+      "target": "integration-tests/legacy-web/e2e/web-interactions.browser.ts",
+      "sha256": "7cd34f9922f043d67a625da0dd11e62ff58c936f96554d8775dea571ac264ff2",
+      "targetSha256": "7cd34f9922f043d67a625da0dd11e62ff58c936f96554d8775dea571ac264ff2",
+      "adapted": false
+    },
+    {
+      "source": "e2e/whale-usage.integration.ts",
+      "target": "integration-tests/legacy-web/e2e/whale-usage.integration.ts",
+      "sha256": "8c785aa7be7b74c1a407fc06e9eecef8dca029aa9a728ea7ec94b95b9e73813f",
+      "targetSha256": "8c785aa7be7b74c1a407fc06e9eecef8dca029aa9a728ea7ec94b95b9e73813f",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-interactions.test.ts",
+      "target": "integration-tests/legacy-web/tests/hub-interactions.test.ts",
+      "sha256": "91d35b131029666a0b55a558bb4d86762652a6f1e2af3f5f47c4ea952c54fde9",
+      "targetSha256": "91d35b131029666a0b55a558bb4d86762652a6f1e2af3f5f47c4ea952c54fde9",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-launches.test.ts",
+      "target": "integration-tests/legacy-web/tests/hub-launches.test.ts",
+      "sha256": "df8f05c54d1657199b1cbecc40424129d41b4cc757dd9c481aa6afb6b91513a7",
+      "targetSha256": "df8f05c54d1657199b1cbecc40424129d41b4cc757dd9c481aa6afb6b91513a7",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-transfer.test.ts",
+      "target": "integration-tests/legacy-web/tests/hub-transfer.test.ts",
+      "sha256": "2d9a1b48aa3210123ee857155f068e82a766114831401e3c780b889757a61985",
+      "targetSha256": "2d9a1b48aa3210123ee857155f068e82a766114831401e3c780b889757a61985",
+      "adapted": false
+    },
+    {
+      "source": "tests/interaction-control.test.ts",
+      "target": "integration-tests/legacy-web/tests/interaction-control.test.ts",
+      "sha256": "f619793c218139a82f01416e2c4a9b2a4fe6a8c2877bfad3631db5104f970adb",
+      "targetSha256": "f619793c218139a82f01416e2c4a9b2a4fe6a8c2877bfad3631db5104f970adb",
+      "adapted": false
+    },
+    {
+      "source": "tests/interaction-enrollment.test.ts",
+      "target": "integration-tests/legacy-web/tests/interaction-enrollment.test.ts",
+      "sha256": "677205e70a5cfa7f251bd0d2ca34c43f7f9ece3b302a3b658c90f5d65c179a9f",
+      "targetSha256": "677205e70a5cfa7f251bd0d2ca34c43f7f9ece3b302a3b658c90f5d65c179a9f",
+      "adapted": false
+    },
+    {
+      "source": "tests/pi-client-managed-restart.test.ts",
+      "target": "integration-tests/legacy-web/tests/pi-client-managed-restart.test.ts",
+      "sha256": "f6c28e306a3c57af3bb57d50eec45488a40abb54cce0f2b9e6d0f35acdc7196a",
+      "targetSha256": "f6c28e306a3c57af3bb57d50eec45488a40abb54cce0f2b9e6d0f35acdc7196a",
+      "adapted": false
+    },
+    {
+      "source": "tests/runtime-control.test.ts",
+      "target": "integration-tests/legacy-web/tests/runtime-control.test.ts",
+      "sha256": "201410e71a3f5f29c5536183f547b3ead8d9fb1a63927996dfaef7465a825a00",
+      "targetSha256": "201410e71a3f5f29c5536183f547b3ead8d9fb1a63927996dfaef7465a825a00",
+      "adapted": false
+    },
+    {
+      "source": "tests/runtime-guard-process.test.ts",
+      "target": "integration-tests/legacy-web/tests/runtime-guard-process.test.ts",
+      "sha256": "afe4748519ccee9b11a308d73743a70fbb4e7c84d469a60a4fc2deb55a423366",
+      "targetSha256": "afe4748519ccee9b11a308d73743a70fbb4e7c84d469a60a4fc2deb55a423366",
+      "adapted": false
+    },
+    {
+      "source": "tests/session-hub.test.ts",
+      "target": "integration-tests/legacy-web/tests/session-hub.test.ts",
+      "sha256": "ba4ae874b90047dab51cee521f77d1aa01b27ca38cffa4e3e398c477351016c9",
+      "targetSha256": "ba4ae874b90047dab51cee521f77d1aa01b27ca38cffa4e3e398c477351016c9",
+      "adapted": false
+    },
+    {
+      "source": "tests/web-interactions-integration.test.ts",
+      "target": "integration-tests/legacy-web/tests/web-interactions-integration.test.ts",
+      "sha256": "f3062b6e76a688cd51428a523266b787b76f595cab26bb3ca8488ec01615c211",
+      "targetSha256": "f3062b6e76a688cd51428a523266b787b76f595cab26bb3ca8488ec01615c211",
+      "adapted": false
+    },
+    {
+      "source": "tests/web-interactions-lifecycle.test.ts",
+      "target": "integration-tests/legacy-web/tests/web-interactions-lifecycle.test.ts",
+      "sha256": "d47d4c9064833c8c5ecb15df5bd903b62e1628ea805ad71c6dd38e959faeb5ae",
+      "targetSha256": "d47d4c9064833c8c5ecb15df5bd903b62e1628ea805ad71c6dd38e959faeb5ae",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/candidate_acceptance.py",
+      "target": "integration-tests/runtime-updater/candidate_acceptance.py",
+      "sha256": "566ccd353db09a124654bc435dc827c77f9f48ad8f2d2c6625d6eede9041cf7b",
+      "targetSha256": "566ccd353db09a124654bc435dc827c77f9f48ad8f2d2c6625d6eede9041cf7b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/Dockerfile.acceptance",
+      "target": "integration-tests/runtime-updater/Dockerfile.acceptance",
+      "sha256": "5f3e01e2d286702e6c86908b63a62376ecd989d7308eee7ca86d577cccce460c",
+      "targetSha256": "5f3e01e2d286702e6c86908b63a62376ecd989d7308eee7ca86d577cccce460c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/Dockerfile.acceptance.dockerignore",
+      "target": "integration-tests/runtime-updater/Dockerfile.acceptance.dockerignore",
+      "sha256": "cdee6c0340ea6be9a931114c30f085f7c5a2e16fb616362c3fbd65a514a40f2c",
+      "targetSha256": "cdee6c0340ea6be9a931114c30f085f7c5a2e16fb616362c3fbd65a514a40f2c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/probe_acceptance.py",
+      "target": "integration-tests/runtime-updater/probe_acceptance.py",
+      "sha256": "596f379b488c6920539895b94c7ea20970c990389905ae7085d7be2ada20b2f1",
+      "targetSha256": "596f379b488c6920539895b94c7ea20970c990389905ae7085d7be2ada20b2f1",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/real_launch_acceptance.py",
+      "target": "integration-tests/runtime-updater/real_launch_acceptance.py",
+      "sha256": "f75b548b16f7e6a08db1a97741a3b17d4fa86bb79cef44bf10cc58a979cb3f5b",
+      "targetSha256": "f75b548b16f7e6a08db1a97741a3b17d4fa86bb79cef44bf10cc58a979cb3f5b",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/real_version_acceptance.py",
+      "target": "integration-tests/runtime-updater/real_version_acceptance.py",
+      "sha256": "ece29e51aff7519df88c19f03a2f189912cab0782dcc3403d4a77e583cda3dfa",
+      "targetSha256": "ece29e51aff7519df88c19f03a2f189912cab0782dcc3403d4a77e583cda3dfa",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/runtime_test_bootstrap.py",
+      "target": "integration-tests/runtime-updater/runtime_test_bootstrap.py",
+      "sha256": "44682c5ffd3d8107072dd3ca56d52267f742d43f0665d5b367804668c9c469e9",
+      "targetSha256": "44682c5ffd3d8107072dd3ca56d52267f742d43f0665d5b367804668c9c469e9",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/test_real_launch_acceptance.py",
+      "target": "integration-tests/runtime-updater/test_real_launch_acceptance.py",
+      "sha256": "929f613433aef43347a9ed71695ade2743b214d96fa98edae0148b80401e83fb",
+      "targetSha256": "929f613433aef43347a9ed71695ade2743b214d96fa98edae0148b80401e83fb",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/test_real_version_acceptance_contract.py",
+      "target": "integration-tests/runtime-updater/test_real_version_acceptance_contract.py",
+      "sha256": "ab258dd8bc872bfb4c257cf399556899e0fdbb5c4a3c0730def41ebe8ebe5113",
+      "targetSha256": "ab258dd8bc872bfb4c257cf399556899e0fdbb5c4a3c0730def41ebe8ebe5113",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/tests/test_runtime_test_bootstrap.py",
+      "target": "integration-tests/runtime-updater/test_runtime_test_bootstrap.py",
+      "sha256": "5b96c9cfbe33023f5d606a058893e5d037d94ec5f8037999cb2eddc7975fc855",
+      "targetSha256": "5b96c9cfbe33023f5d606a058893e5d037d94ec5f8037999cb2eddc7975fc855",
+      "adapted": false
+    },
+    {
+      "source": "LICENSE",
+      "target": "LICENSE",
+      "sha256": "21d125f0e080c46808018c7f8c458313fdf9e26322ffeb35ea0df416964ad339",
+      "targetSha256": "21d125f0e080c46808018c7f8c458313fdf9e26322ffeb35ea0df416964ad339",
+      "adapted": false
+    },
+    {
+      "source": "extensions/connection-config.ts",
+      "target": "protocol/connection-config.ts",
+      "sha256": "6e1a16d0b1a1deaeddfa993de0b5e47503abd17b857af343ddfcb830d8e7783e",
+      "targetSha256": "6e1a16d0b1a1deaeddfa993de0b5e47503abd17b857af343ddfcb830d8e7783e",
+      "adapted": false
+    },
+    {
+      "source": "extensions/hub-generation.ts",
+      "target": "protocol/hub-generation.ts",
+      "sha256": "a9de7ea35f32282acfc29ed5e34bdd298094d7bf862d12638be22fb0b3ebd46c",
+      "targetSha256": "a9de7ea35f32282acfc29ed5e34bdd298094d7bf862d12638be22fb0b3ebd46c",
+      "adapted": false
+    },
+    {
+      "source": "extensions/interactions/broker.ts",
+      "target": "protocol/interactions/broker.ts",
+      "sha256": "c9bc65a383afdd7be57bc69b0723c423b1ec95897414b0f69af4f877c9eaf8a8",
+      "targetSha256": "c9bc65a383afdd7be57bc69b0723c423b1ec95897414b0f69af4f877c9eaf8a8",
+      "adapted": false
+    },
+    {
+      "source": "extensions/interactions/control.ts",
+      "target": "protocol/interactions/control.ts",
+      "sha256": "8c6b71d74129ac60aade99737ee1a36c273e90a9f04c4c94692586dee618e604",
+      "targetSha256": "8c6b71d74129ac60aade99737ee1a36c273e90a9f04c4c94692586dee618e604",
+      "adapted": false
+    },
+    {
+      "source": "extensions/interactions/enrollment.ts",
+      "target": "protocol/interactions/enrollment.ts",
+      "sha256": "cf1a736985abb672eea9c3094492ddeb5240fb6350036b6025c4f3a7c0c22560",
+      "targetSha256": "cf1a736985abb672eea9c3094492ddeb5240fb6350036b6025c4f3a7c0c22560",
+      "adapted": false
+    },
+    {
+      "source": "extensions/interactions/proof.ts",
+      "target": "protocol/interactions/proof.ts",
+      "sha256": "ab8e1fff639cbe8a36765711e9c5c3785c076ebfa57df3cab8cbc19fee998a70",
+      "targetSha256": "ab8e1fff639cbe8a36765711e9c5c3785c076ebfa57df3cab8cbc19fee998a70",
+      "adapted": false
+    },
+    {
+      "source": "extensions/interactions/protocol.ts",
+      "target": "protocol/interactions/protocol.ts",
+      "sha256": "71ec7621ae13750c6343a83e673401f203aff36f63e834eb2d0734c7a2ed1edf",
+      "targetSha256": "71ec7621ae13750c6343a83e673401f203aff36f63e834eb2d0734c7a2ed1edf",
+      "adapted": false
+    },
+    {
+      "source": "extensions/runtime-metadata.ts",
+      "target": "protocol/runtime-metadata.ts",
+      "sha256": "059978a8dbed83a89975c75d80fb45d06e3a2ff331f119d74e73e67d94d4fc06",
+      "targetSha256": "059978a8dbed83a89975c75d80fb45d06e3a2ff331f119d74e73e67d94d4fc06",
+      "adapted": false
+    },
+    {
+      "source": "extensions/software-metadata.ts",
+      "target": "protocol/software-metadata.ts",
+      "sha256": "5aa12f2d5a29ebeedeb783ea4d20bdb8533a7b85015fae3ae31dba8e81f8c438",
+      "targetSha256": "5aa12f2d5a29ebeedeb783ea4d20bdb8533a7b85015fae3ae31dba8e81f8c438",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/pi_launch_policy.py",
+      "target": "runtime/pi_launch_policy.py",
+      "sha256": "2aad1a4dd2bf7d94cc6c67922cc87491f0b594e456bb7a2f15d99c7d98b2be98",
+      "targetSha256": "2aad1a4dd2bf7d94cc6c67922cc87491f0b594e456bb7a2f15d99c7d98b2be98",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/pi_model_sync.py",
+      "target": "runtime/pi_model_sync.py",
+      "sha256": "89f6cbc54e838e6b521bb5beabeae73d1719a846d3b01fd76e44ef823d1ef045",
+      "targetSha256": "89f6cbc54e838e6b521bb5beabeae73d1719a846d3b01fd76e44ef823d1ef045",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/pi_stdin_guard.mjs",
+      "target": "runtime/pi_stdin_guard.mjs",
+      "sha256": "f966e83a5f0e7c9e446488e7ede6d0bd0ec2477878bdfaa14a00667eaa92c223",
+      "targetSha256": "f966e83a5f0e7c9e446488e7ede6d0bd0ec2477878bdfaa14a00667eaa92c223",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/pi_supervisor.py",
+      "target": "runtime/pi_supervisor.py",
+      "sha256": "da51564d8716d4e3300f80b1313a8f65813e72ed67cac31050d0730d48ecc607",
+      "targetSha256": "da51564d8716d4e3300f80b1313a8f65813e72ed67cac31050d0730d48ecc607",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/pi-session-control",
+      "target": "runtime/pi-session-control",
+      "sha256": "87d83da37bdcccd72024b94266c3d68f8ce6c0380108d532459fec430655c34c",
+      "targetSha256": "87d83da37bdcccd72024b94266c3d68f8ce6c0380108d532459fec430655c34c",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/README.md",
+      "target": "runtime/README.md",
+      "sha256": "799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282",
+      "targetSha256": "799632fe04ce5562bcc156544b4df7c1002dd757f298eb78cdcd2feebcd8d282",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/runtime_identity.py",
+      "target": "runtime/runtime_identity.py",
+      "sha256": "e5c4c609300ec2b55e32dd668041b86b06900a02c715ba512f31f8de560843f7",
+      "targetSha256": "e5c4c609300ec2b55e32dd668041b86b06900a02c715ba512f31f8de560843f7",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/runtime_probe_provider.ts",
+      "target": "runtime/runtime_probe_provider.ts",
+      "sha256": "0cb42210c7610adc34146a15294b9ad36de09559986420c9eb4cf1019aff74ab",
+      "targetSha256": "0cb42210c7610adc34146a15294b9ad36de09559986420c9eb4cf1019aff74ab",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/runtime_probe_ws.mjs",
+      "target": "runtime/runtime_probe_ws.mjs",
+      "sha256": "296751318350e8ad323b9ef499720480c3bc24c000531f2e691024a24870abb4",
+      "targetSha256": "296751318350e8ad323b9ef499720480c3bc24c000531f2e691024a24870abb4",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/runtime_probe.py",
+      "target": "runtime/runtime_probe.py",
+      "sha256": "8d182a7bb0a4f68290cc8b8229b9edf8a792a8d41942338804d05af27f7fb6b6",
+      "targetSha256": "8d182a7bb0a4f68290cc8b8229b9edf8a792a8d41942338804d05af27f7fb6b6",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/runtime_session.py",
+      "target": "runtime/runtime_session.py",
+      "sha256": "e219a94b2fcd13628f2e29d576cf801b1a162876377ff0d3fd86d2727f9b45c7",
+      "targetSha256": "e219a94b2fcd13628f2e29d576cf801b1a162876377ff0d3fd86d2727f9b45c7",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/provenance.json",
+      "target": "runtime/source-provenance.json",
+      "sha256": "76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82",
+      "targetSha256": "76d9c08a321d526248c8bf6aab810d48613d6cb3d9a970751da4dd9773914e82",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/tests/test_runtime_probe_driver.py",
+      "target": "runtime/tests/test_runtime_probe_driver.py",
+      "sha256": "ac9bd867ef7e775c19f10e250542332dc5d1fa83fbf5db0f457a3931cc0a6169",
+      "targetSha256": "ac9bd867ef7e775c19f10e250542332dc5d1fa83fbf5db0f457a3931cc0a6169",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/tests/test_runtime_probe_real.py",
+      "target": "runtime/tests/test_runtime_probe_real.py",
+      "sha256": "5c05a4f4c7e18102180b991a05f3c67d43a5a7e53d87bd81d5d1c1a9e4afd597",
+      "targetSha256": "5c05a4f4c7e18102180b991a05f3c67d43a5a7e53d87bd81d5d1c1a9e4afd597",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/tests/test_runtime_probe_regressions.py",
+      "target": "runtime/tests/test_runtime_probe_regressions.py",
+      "sha256": "9786aa7a19ba4c2904558af613d90a83d308d3c09b5c08fb35ab3ac67c7e94c5",
+      "targetSha256": "9786aa7a19ba4c2904558af613d90a83d308d3c09b5c08fb35ab3ac67c7e94c5",
+      "adapted": false
+    },
+    {
+      "source": "integrations/runtime-updater/pi-runtime/tests/test_runtime_probe.py",
+      "target": "runtime/tests/test_runtime_probe.py",
+      "sha256": "95a2813f3e14dd9919a333f7e85646b67a6c17fa2f3b46bb12e5897f18d5106a",
+      "targetSha256": "95a2813f3e14dd9919a333f7e85646b67a6c17fa2f3b46bb12e5897f18d5106a",
+      "adapted": false
+    },
+    {
+      "source": "tests/fixtures/hub-gate-launches.py",
+      "target": "tests/fixtures/hub-gate-launches.py",
+      "sha256": "0406a88089463df38763e4d960820f1932d101aab7ce33739f864d1ba8fd4bd7",
+      "targetSha256": "0406a88089463df38763e4d960820f1932d101aab7ce33739f864d1ba8fd4bd7",
+      "adapted": false
+    },
+    {
+      "source": "tests/fixtures/hub-gate-management.py",
+      "target": "tests/fixtures/hub-gate-management.py",
+      "sha256": "a50e86b2707e6ccab4012eddc317f736d05fcd8fdcb075df261f45232b40ee8f",
+      "targetSha256": "a50e86b2707e6ccab4012eddc317f736d05fcd8fdcb075df261f45232b40ee8f",
+      "adapted": false
+    },
+    {
+      "source": "e2e/harness/hub-cli.ts",
+      "target": "tests/helpers/hub-cli.ts",
+      "sha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
+      "targetSha256": "e385752c1662ce0c7cd43e2ff429d04ce3ba0a7d381f373fcc2e98ce5252c306",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-approvals-portal.test.ts",
+      "target": "tests/hub-approvals-portal.test.ts",
+      "sha256": "7d19b8e6a59954e092319641533f017cbba6dfbe37c2be252a301a8895e87652",
+      "targetSha256": "7d19b8e6a59954e092319641533f017cbba6dfbe37c2be252a301a8895e87652",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-forward-queue.test.ts",
+      "target": "tests/hub-forward-queue.test.ts",
+      "sha256": "0f94308da18cf7068d52bfb5d2deaa6b203757da48e7305147686126709e3f29",
+      "targetSha256": "0f94308da18cf7068d52bfb5d2deaa6b203757da48e7305147686126709e3f29",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-launch-portal.test.ts",
+      "target": "tests/hub-launch-portal.test.ts",
+      "sha256": "de723b90addee2b8b26be89af244ca7aed7e248d304f2e708cb2d541e67320a8",
+      "targetSha256": "de723b90addee2b8b26be89af244ca7aed7e248d304f2e708cb2d541e67320a8",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-lifecycle-evidence.test.ts",
+      "target": "tests/hub-lifecycle-evidence.test.ts",
+      "sha256": "dd7f8af766d88baf52157f8557399b1dad7e96aca3dbb799fb6e0ae94b67713a",
+      "targetSha256": "dd7f8af766d88baf52157f8557399b1dad7e96aca3dbb799fb6e0ae94b67713a",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-management.test.ts",
+      "target": "tests/hub-management.test.ts",
+      "sha256": "6e04f7fe92f62c2858c7d9f91b15eda2a6c01362cef33256d168b939225c89fd",
+      "targetSha256": "6e04f7fe92f62c2858c7d9f91b15eda2a6c01362cef33256d168b939225c89fd",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-portal-management.test.ts",
+      "target": "tests/hub-portal-management.test.ts",
+      "sha256": "96d8003a5c735b6f45311b32510ea0ee0ab97f273c89a60121f8896fa2740ed2",
+      "targetSha256": "96d8003a5c735b6f45311b32510ea0ee0ab97f273c89a60121f8896fa2740ed2",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-runtime-portal.test.ts",
+      "target": "tests/hub-runtime-portal.test.ts",
+      "sha256": "9c19ef9a4bd132c649d5430b957c5c65536c0335dd6201b69eade48e2abea977",
+      "targetSha256": "9c19ef9a4bd132c649d5430b957c5c65536c0335dd6201b69eade48e2abea977",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-versions-portal.test.ts",
+      "target": "tests/hub-versions-portal.test.ts",
+      "sha256": "a871034c53717072db2ad9d0802b2d42e532e93ac78b7bf675bc3c600b851df0",
+      "targetSha256": "e4ef1deb759a31aedf4a9762bb82ddd98ffe1ed2bd46a9e140ea16cda3a632ac",
+      "adapted": true
+    },
+    {
+      "source": "tests/web-interactions-proof.test.ts",
+      "target": "tests/interaction-proof.test.ts",
+      "sha256": "bb7bb3a1d7e09c5290cf2b7477e24a6035e34b1514375224d7972aa3f36bfa53",
+      "targetSha256": "86c35b81cd24e0be15c43d262099ff1aebfa9b707e47f111da7aa09cde32f04f",
+      "adapted": true
+    },
+    {
+      "source": "tests/web-interactions-protocol.test.ts",
+      "target": "tests/interaction-protocol.test.ts",
+      "sha256": "81b1d8a69c5fbaabd12d99bf1f86025c8fe9ef6c7c98b655611ca13d8e46da54",
+      "targetSha256": "3e309dfaa949310a2b3824dcc9d182a1839fe702003379a35ccb2d8a61d92f05",
+      "adapted": true
+    },
+    {
+      "source": "tests/register-ts.mjs",
+      "target": "tests/register-ts.mjs",
+      "sha256": "175516dc67b5af64ed9723012e5007255bba2af7c8c572be5f338dfca3cbb8f1",
+      "targetSha256": "175516dc67b5af64ed9723012e5007255bba2af7c8c572be5f338dfca3cbb8f1",
+      "adapted": false
+    },
+    {
+      "source": "tests/hub-bounded-registry.test.ts",
+      "target": "tests/socket/hub-bounded-registry.test.ts",
+      "sha256": "d933fd5b6e7f1cdf021fb710df08c8e2d0d9980ae7b31b6d8291c7fc188dd26b",
+      "targetSha256": "f427b90d1980b67a9b204272cff09c492583238021e5ec98c4313e95be621162",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-cli.test.ts",
+      "target": "tests/socket/hub-cli.test.ts",
+      "sha256": "9fc7f7f093ee625671c556a626c75a8910892b4a1cb73df2540541a0c349405b",
+      "targetSha256": "6063cd109aef13ac1a37f29dcb78bd57af35510666f1ca7349694333e31c0a40",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-gate-live.test.ts",
+      "target": "tests/socket/hub-gate-live.test.ts",
+      "sha256": "32f5145ad46e3ed5ed07dac01a9761a4ee212599860fbd0c4bf0af865a5e73c4",
+      "targetSha256": "0a8c2a5d2670ea0eba34ab647286ba9934c43a91e17200d3fb3769c3ebd23e4d",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-gate-management.test.ts",
+      "target": "tests/socket/hub-gate-management.test.ts",
+      "sha256": "ea060998d8738055fd3f753775eb78256aa9043ce2953fbd9f56562259bb586c",
+      "targetSha256": "cafb2c118d7cd447317caa5f2ab09de135c2955774934034f556982ed37169b2",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-gateway-login.test.ts",
+      "target": "tests/socket/hub-gateway-login.test.ts",
+      "sha256": "e896f9a65abfffe0733a128c31f7380923bc8d3e058a719ee1a84e5bf7e1b6fc",
+      "targetSha256": "c375de669c43ea23058f18bb9c043915aafeabbdeb2431f12412106c3dce60fa",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-launch-live.test.ts",
+      "target": "tests/socket/hub-launch-live.test.ts",
+      "sha256": "89737e5be953fae052fe772fdb453570d16fa5183bfa0dd30700b2305cf12a1e",
+      "targetSha256": "69b4d5fd96adcee50df5318a4b737e45c28d779faa325253ed01d14651578b09",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-lifecycle.test.ts",
+      "target": "tests/socket/hub-lifecycle.test.ts",
+      "sha256": "172e6dd53e928b7f3091a1c7150d3528d24acd67e1cd6864113e3e22764aa5dc",
+      "targetSha256": "2ae7a40f965bb89cc1780c11fb9f23d5a288546a505cf2580b8aa6c3d37cd064",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-management-origin.test.ts",
+      "target": "tests/socket/hub-management-origin.test.ts",
+      "sha256": "9f0b13bbb5952ec7cff513f7a1d077df7d384e9da6c6bc50cd208a2eeacbb772",
+      "targetSha256": "2a87ca28bb4a5811c54dd2bcb6cdb178fd9eb3683a41104365d20f2f540d2b46",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-restart-api.test.ts",
+      "target": "tests/socket/hub-restart-api.test.ts",
+      "sha256": "3489d0bc1c709b70b48f078047b3983b516a90d95b05569643ceca15289e89b7",
+      "targetSha256": "82792c889dad00eb898c9604275d2e1aa9f50a61eecb6608354fe71bbb65156d",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-runtime-api.test.ts",
+      "target": "tests/socket/hub-runtime-api.test.ts",
+      "sha256": "108d901dcfd9258261c08bfec85a769733546374a2664d1c9a1a10b54e325805",
+      "targetSha256": "a5bc1f5f0ec3edb1fdbc7582f4449027f45e88ae4330a6e4f621aeed4deda069",
+      "adapted": true
+    },
+    {
+      "source": "tests/hub-state-budget.test.ts",
+      "target": "tests/socket/hub-state-budget.test.ts",
+      "sha256": "9a356add9ac52c8c227cfaff8277cd4554bc4d40602c6eb1bf99d256a97594e8",
+      "targetSha256": "a2e26ce16445f6a65be3fbaa88d3a687e1d789fac7f21afa51e3e0116fe53593",
+      "adapted": true
+    },
+    {
+      "source": "tests/software-metadata.test.ts",
+      "target": "tests/software-metadata.test.ts",
+      "sha256": "e2bc869fc31ae295648c6e1608626f871d7e9919d4660e299846b3b1faf44bd4",
+      "targetSha256": "215084f7c3390c71bfcc5885c9d6f199f218c1ffa30492383d760c34f42c8c31",
+      "adapted": true
+    },
+    {
+      "source": "tests/version-status.test.ts",
+      "target": "tests/version-status.test.ts",
+      "sha256": "5468b86a51108aa7894926cb17b837567913e5ce1d2a96483693e1f0e621e7db",
+      "targetSha256": "4b5635fb44bb60f82f2917cd1194e6523c82f97504b6a5d29d07c2bb2fada916",
+      "adapted": true
+    }
+  ]
+}

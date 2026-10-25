@@ -1,0 +1,54 @@
+{
+  "name": "@swordfate/pi-manager",
+  "version": "0.1.0",
+  "description": "Independent Pi Manager distribution extracted from the Pi Web Hub and Gate sources",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "pi-manager": "dist/hub/pi-web-hub.mjs"
+  },
+  "scripts": {
+    "build": "npm run typecheck && vite build --config vite.config.ts && node scripts/manager-dist.mjs --write",
+    "typecheck": "tsc --noEmit",
+    "verify:dist": "node scripts/manager-dist.mjs",
+    "check": "npm run typecheck && npm run verify:dist",
+    "test": "npm run build && npm run test:offline",
+    "test:unit": "node --import ./tests/register-ts.mjs --test tests/*.test.ts",
+    "test:package": "node --test tests/*.test.mjs",
+    "test:offline": "npm run test:package && npm run test:unit && npm run test:gate:offline && npm run test:runtime:offline",
+    "test:socket": "node --import ./tests/register-ts.mjs --test tests/socket/*.test.ts",
+    "test:gate:offline": "node scripts/run-gate-tests.mjs offline",
+    "test:gate:socket": "node scripts/run-gate-tests.mjs socket",
+    "test:runtime:offline": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=runtime python3 -m unittest discover -s runtime/tests -p 'test_*.py'",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/ws": "^8.18.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.14"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "bin/",
+    "hub/",
+    "protocol/",
+    "gate/gate/",
+    "gate/gatectl",
+    "runtime/*.py",
+    "runtime/*.mjs",
+    "runtime/pi-session-control",
+    "dist/",
+    "scripts/manager-dist.mjs",
+    "docs/source-provenance.md",
+    "docs/migration-inventory.json",
+    "LICENSE",
+    "README.md"
+  ]
+}

@@ -1,0 +1,206 @@
+{
+  "importedAt": "2026-10-22",
+  "purpose": "Read-only source baseline; not a deployment snapshot",
+  "files": [
+    {
+      "source": "/home/fate/docker_files/pi-docker/runtime/pi_model_sync.py",
+      "target": "pi-runtime/pi_model_sync.py",
+      "sha256": "89f6cbc54e838e6b521bb5beabeae73d1719a846d3b01fd76e44ef823d1ef045"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/__init__.py",
+      "target": "gate/gate/__init__.py",
+      "sha256": "0e63bade30e31a774fdef26ff4b787cface555ec1916736d71fc2150d46d00e4"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/admin.py",
+      "target": "gate/gate/admin.py",
+      "sha256": "069ee030a4d44396698699de6693bf903ba8a327a4ee02e8f0026f245f4b8ae2"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/artifacts.py",
+      "target": "gate/gate/artifacts.py",
+      "sha256": "1727a4cad842f4aee2ed73922c459a20a62146e0948a244fa86dd8cb1d8879d3"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/client.py",
+      "target": "gate/gate/client.py",
+      "sha256": "34ea130d0a10ae4e9bd1629393100924d15fb91af4b5f85b5cd2be2e201d47da"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/deploy.py",
+      "target": "gate/gate/deploy.py",
+      "sha256": "24c5a44b74ae4f845531fdf5fc8389965e59026a82356e0a6b024afc385a94b5"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/engine.py",
+      "target": "gate/gate/engine.py",
+      "sha256": "9c6436b56a4eb1a67aff170ca916346a67c0f017dbfae696baf22807269830a7"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/errors.py",
+      "target": "gate/gate/errors.py",
+      "sha256": "e20be673cedf6da458411471ef363fb0a5bb7f9ce10e9678e65f484692079664"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/hostseal.py",
+      "target": "gate/gate/hostseal.py",
+      "sha256": "6013397c8a47ca004fb08502ac1682d63522cb0889d3a6fe2c8594c0efa1dd7b"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/image_deploy.py",
+      "target": "gate/gate/image_deploy.py",
+      "sha256": "2d3e5a742c2b6d86cacaf16786094fc780ccdaa15527661d31dfbfbbed518abb"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/lifecycle.py",
+      "target": "gate/gate/lifecycle.py",
+      "sha256": "347c98e4a10c403adff8219b7a69fb98e22996c494d8303e0c43088bf23b3a1b"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/lifecycle_contract.py",
+      "target": "gate/gate/lifecycle_contract.py",
+      "sha256": "9cc29f8f58ffd3d15f25631f4a59917eae48610f17f91334fa6bcb02b96432fb"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/registry.py",
+      "target": "gate/gate/registry.py",
+      "sha256": "a30b1733e5fdba67a6cd205141d6cce41c3ae60e939014c513066380325beb48"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/router.py",
+      "target": "gate/gate/router.py",
+      "sha256": "c455cf5ae62e0b9aa379ab3f76e0c114521ccc9c3918ffffe4b02505ea789dfe"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/runtime_engine.py",
+      "target": "gate/gate/runtime_engine.py",
+      "sha256": "1939b83edcfa4878c63108b9d8634a9735ec742d9bca79bf629f8f0379678d35"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/runtime_install.py",
+      "target": "gate/gate/runtime_install.py",
+      "sha256": "1a5cf5413ed67b04cad73640c9866f3707ed7100f81c4336bbdcc42c76e579e8"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/runtime_updates.py",
+      "target": "gate/gate/runtime_updates.py",
+      "sha256": "a7f41b6514a8e55fee200a988f43737727fbf68afdcf121ce3b69d27444de8c0"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/service.py",
+      "target": "gate/gate/service.py",
+      "sha256": "e3d3b309a81875716adf05db7b25cf448aa77af4c97080cc5c76e7772fd813d9"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/sources.py",
+      "target": "gate/gate/sources.py",
+      "sha256": "39ed8f830e2b408a9bb1a0ab4f06bc266afe226fe765ca342f8a5579a7ee9038"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/store.py",
+      "target": "gate/gate/store.py",
+      "sha256": "d61a34fb4e9e6034c7941c2747391ec355043c0d8222ba00f19a888df6b2e5b1"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/terminal_contract.py",
+      "target": "gate/gate/terminal_contract.py",
+      "sha256": "d59923ef076e5a9bef9055345d52a0532c2fbcc72d5619ebd330373f8655bd2b"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gate/terminal_provider.py",
+      "target": "gate/gate/terminal_provider.py",
+      "sha256": "087c98ca4c523db7494588fb5393f2c1c089da01882f05b0be698fc2aed245d1"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_lifecycle.py",
+      "target": "gate/tests/test_lifecycle.py",
+      "sha256": "b8edc2bb3268b7a5e4d1912ae5dc6de9bde5e41d65e35e619aa426ac7fac4c1a"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_lifecycle_round1.py",
+      "target": "gate/tests/test_lifecycle_round1.py",
+      "sha256": "f0c92ab7727d7f08624f9e32e0669c873d22c1abd0ed9cdf520561c856e36e3a"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_lifecycle_round2.py",
+      "target": "gate/tests/test_lifecycle_round2.py",
+      "sha256": "c81bdbbc24a7958ebe37f6e28ae51fd950da0ab97c27b959a50a85ee88b47965"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_lifecycle_round3.py",
+      "target": "gate/tests/test_lifecycle_round3.py",
+      "sha256": "e7e1a0c72eceee6d6dff8eb0e6cb90398b1f061df65745a08d6c173c3ccbe25a"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_clients.py",
+      "target": "gate/tests/test_runtime_clients.py",
+      "sha256": "56b51e5f7e980210a7881d59ec651623b0e0386e41735f6c8e72bc5addde66a1"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_engine.py",
+      "target": "gate/tests/test_runtime_engine.py",
+      "sha256": "dfab7ea12ef65210b28b085d31e9a45bce26667654be0611f04e8c4c20e368ee"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_http.py",
+      "target": "gate/tests/test_runtime_http.py",
+      "sha256": "d545c65e81bbf2a7e101e4d8e05b6ac1255f40507951259243baa6f64cf84a77"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_install.py",
+      "target": "gate/tests/test_runtime_install.py",
+      "sha256": "a28c1adb72dc7d8d5b17a6598662ebdc25a6b2e81c732cf03d8bf49338b8301f"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_regressions.py",
+      "target": "gate/tests/test_runtime_regressions.py",
+      "sha256": "fa9345c145e85047d5e62b0f7e7f63b5a0e5aed5b328302da0fcc91f0b677bb7"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_runtime_updates.py",
+      "target": "gate/tests/test_runtime_updates.py",
+      "sha256": "a6243fc4fb1155ce5ce85bbb7ffbbe295b7a4797ab6847c4b3a36214b6fe183b"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-docker/runtime/pi_supervisor.py",
+      "target": "pi-runtime/pi_supervisor.py",
+      "sha256": "a5c857ca3b1d56868dc4f0d6cd01f5eea60fe537ef303d6c7889c7e084243ff2"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-docker/runtime/pi_stdin_guard.mjs",
+      "target": "pi-runtime/pi_stdin_guard.mjs",
+      "sha256": "f966e83a5f0e7c9e446488e7ede6d0bd0ec2477878bdfaa14a00667eaa92c223"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-docker/runtime/pi-session-control",
+      "target": "pi-runtime/pi-session-control",
+      "sha256": "87d83da37bdcccd72024b94266c3d68f8ce6c0380108d532459fec430655c34c"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-docker/runtime/pi_launch_policy.py",
+      "target": "pi-runtime/pi_launch_policy.py",
+      "sha256": "2aad1a4dd2bf7d94cc6c67922cc87491f0b594e456bb7a2f15d99c7d98b2be98"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/gatectl",
+      "target": "gate/gatectl",
+      "sha256": "6961928ef1d968c20fa69c25ccc45fd761009316934fd84140b5cc7d291c2706"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_multiservice.py",
+      "target": "gate/tests/test_multiservice.py",
+      "sha256": "40915740b5dd4b07464a1e8444108068155d73dd1fac425b7ace1e629633b761"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_gate.py",
+      "target": "gate/tests/test_gate.py",
+      "sha256": "13b808ca7ffdfcd747d98e47aaee5d457878b901e5e922fe99ce2b658c33efb1"
+    },
+    {
+      "source": "/home/fate/docker_files/pi-deploy-gate/tests/test_registry.py",
+      "target": "gate/tests/test_registry.py",
+      "sha256": "533c0b60f9b200de1ba14c5ba89bdf75ccae31b4537813059324d2cbeac454dd"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Fixed, bounded client for the private Pi supervisor control socket."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import socket
+import sys
+
+
+MAX_MESSAGE = 16 * 1024
+
+
+def rejected() -> int:
+    print(json.dumps({"ok": False, "error": "request rejected"}, separators=(",", ":")))
+    return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--request")
+    arguments, extras = parser.parse_known_args()
+    if extras or arguments.request is None:
+        return rejected()
+    try:
+        request = json.loads(arguments.request)
+        payload = json.dumps(request, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+        if len(payload) > MAX_MESSAGE:
+            return rejected()
+        runtime_dir = Path(os.environ.get("PI_RUNTIME_DIR", "/run/pi-runtime"))
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(3)
+            client.connect(str(runtime_dir / "control.sock"))
+            client.sendall(payload)
+            data = bytearray()
+            while b"\n" not in data:
+                chunk = client.recv(min(4096, MAX_MESSAGE + 1 - len(data)))
+                if not chunk:
+                    return rejected()
+                data.extend(chunk)
+                if len(data) > MAX_MESSAGE:
+                    return rejected()
+        line, remainder = bytes(data).split(b"\n", 1)
+        if remainder:
+            return rejected()
+        reply = json.loads(line)
+        if not isinstance(reply, dict) or reply.get("ok") not in (True, False):
+            return rejected()
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return rejected()
+    print(json.dumps(reply, separators=(",", ":"), ensure_ascii=False))
+    return 0 if reply.get("ok") is True else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

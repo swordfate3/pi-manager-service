@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "isolatedModules": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node", "vite/client"],
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["bin/**/*.mjs", "hub/**/*.ts", "protocol/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
+  "exclude": ["integration-tests/**", "dist/**", "node_modules/**"]
+}

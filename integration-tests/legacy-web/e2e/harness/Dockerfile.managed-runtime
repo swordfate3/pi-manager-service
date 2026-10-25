@@ -1,0 +1,11 @@
+ARG PI_TEST_BASE=pi-sandbox:managed-test-base
+FROM ${PI_TEST_BASE}
+USER root
+COPY pi-entrypoint /usr/local/bin/pi-entrypoint
+COPY runtime/ /usr/local/lib/pi-runtime/
+RUN install -m 755 /usr/local/lib/pi-runtime/pi-session-control /usr/local/bin/pi-session-control \
+    && chmod 755 /usr/local/bin/pi-entrypoint \
+    && mkdir -p /run/pi-runtime \
+    && chown 1000:1000 /run/pi-runtime
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/pi-entrypoint"]

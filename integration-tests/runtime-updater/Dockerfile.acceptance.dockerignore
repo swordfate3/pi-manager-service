@@ -1,0 +1,15 @@
+**
+!integrations/
+!integrations/runtime-updater/
+!integrations/runtime-updater/pi-runtime/
+!integrations/runtime-updater/pi-runtime/**
+!extensions/
+!extensions/**
+!dist/
+!dist/**
+!e2e/
+!e2e/fixtures/
+!e2e/fixtures/**
+!node_modules/
+!node_modules/ws/
+!node_modules/ws/**

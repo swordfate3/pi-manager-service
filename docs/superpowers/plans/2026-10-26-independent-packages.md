@@ -19,6 +19,7 @@
 - 后端不支持的功能显示为不可用，不能用 Docker 后端的验收替代原生后端。
 - 本计划仅完成拆包，不声称已经实现新的原生后端、MCP 服务或扩展管理任务；后续阶段按各自计划实现并验收。
 - New code and tests use apply_patch. Exact tracked-file copying and mechanical path rewrites may use a bounded bulk migration. No deletion of untracked/user files.
+- Every test subprocess that may initialize state must isolate HOME and both old/new configuration environment paths under its own temporary root, even when an explicit --config is also supplied. A deliberately regressed CLI must never be able to fall back to real user state.
 - Web root: `/home/fate/gitproject/codex_project_v2/pi-web-ui-hub-approvals`, branch `v1`; extraction source is immutable `27326a8cbea8331cac29e6b6b41f98f2b69fa05b`.
 - Manager root: `/home/fate/gitproject/codex_project_v2/pi-manager`, branch `codex/bootstrap`. No push, publishing, production restart or production Docker access.
 
@@ -65,6 +66,7 @@ await verifyManifest(webOnlyFixture);
 - [ ] First ensure Task 1's exact inventory accounts for every manager-only file being removed and every mixed integration test. Use tracked-file deletions only, preserving user untracked content and historic branches.
 - [ ] Remove Hub bin/files/build config and runtime-updater implementation from Web. Update source manifest and lock metadata. Retain optional Pi adapters, remote-access helper behavior and all session interaction security checks; no blanket search-and-delete of `hub` strings.
 - [ ] Move manager-owned tests according to inventory. Keep mixed Web behavior coverage either adapted to an explicit installed-manager integration harness or in the preserved cross-project integration suite, not dangling in default Web tests. Record exact test movements.
+- [ ] The Web E2E Hub harness accepts explicit `PI_E2E_MANAGER_DIR` pointing to an independently installed/built manager root; it never imports manager sources. When absent, manager-only integration cases must either be outside default Web selection or visibly marked skipped with an actionable reason; direct single-session cases must still run. CI documents/runs the optional integration separately rather than assuming Web ships a Hub. Do not silently omit cases by filtering an array without a skip result.
 - [ ] Update Git-install/pack tests for Web-only installation, source mutation rejection and integrity verification. Do not replace security assertions with superficial package-text matching.
 - [ ] Build Web, verify dist, run both type checks and Web unit tests; validate production-only package preparation in an isolated temporary copy. Update only changed formatting; report original unrelated lint failures separately.
 - [ ] Document independent Web installation and optional Manager connection. Update development log with actual status and commit the clean v1 task.

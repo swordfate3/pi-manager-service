@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "sourceRepository": "pi-web-ui-hub-approvals",
   "sourceCommit": "27326a8cbea8331cac29e6b6b41f98f2b69fa05b",
-  "count": 254,
+  "count": 255,
   "dispositionCount": 4,
   "dispositions": [
     {
@@ -1699,6 +1699,13 @@
       "target": "tests/hub-versions-portal.test.ts",
       "sha256": "a871034c53717072db2ad9d0802b2d42e532e93ac78b7bf675bc3c600b851df0",
       "targetSha256": "e4ef1deb759a31aedf4a9762bb82ddd98ffe1ed2bd46a9e140ea16cda3a632ac",
+      "adapted": true
+    },
+    {
+      "source": "tests/interaction-page.test.ts",
+      "target": "tests/interaction-page.test.ts",
+      "sha256": "6c4fe1a80f097803a7240211032ff2fb2e0dbbd830eff477f82354b8b98483c8",
+      "targetSha256": "b65f206f5f2b0c15a150af7ca744b3bd52bb6461f830b2fa8fccb0a243fcd295",
       "adapted": true
     },
     {

@@ -572,3 +572,73 @@ exit 0
 ```
 
 Broad Gate/runtime/default-unit suites were not rerun because the fix touched only package inclusion, the shipped inventory policy, a test helper environment, focused tests, README wording, and migration accounting. Gate socket tests and the unresolved aggregate socket-runner evidence boundary remain unchanged. Controller-owned documentation and `integration-tests/protocol-compatibility.test.mjs` are excluded from this fix commit.
+
+## Review fix round 2: direct socket CLI child isolation
+
+The fix-round-1 review passed all four original findings. A remaining Global Constraint audit found that four direct test roots in `tests/socket/hub-cli.test.ts` bypassed the isolated shared helper environment:
+
+- the basic CLI lifecycle root;
+- the standalone serve root;
+- the detached-bundle root;
+- each synthetic unknown-command root.
+
+The first two inherited the complete parent environment because their child options omitted `env`. The detached path copied `process.env` and changed only `PI_OFFLINE`. The unknown-command path copied `process.env` and changed only the legacy config variable. Consequently, those direct init children and their matching serve/unknown-command children could inherit the real `HOME` and unrelated Manager/legacy config paths.
+
+### Focused RED
+
+A launch-boundary test guard was first applied to the existing direct child calls. It required explicit `HOME`, `PI_MANAGER_CONFIG`, and `PI_WEB_UI_HUB_CONFIG` values below each scenario's temporary root and stopped the direct children before execution.
+
+Command:
+
+```text
+node --import ./tests/register-ts.mjs tests/socket/hub-cli.test.ts
+```
+
+Relevant RED output:
+
+```text
+CLI initializes once ...: direct Hub CLI children require an explicit isolated environment
+standalone hub serves ...: direct Hub CLI children require an explicit isolated environment
+detached Hub bundle ...: HOME must stay below the test root
+unknown command subtests: direct Hub CLI children require an explicit isolated environment
+
+# tests 11
+# pass 1
+# fail 10
+```
+
+This RED run was unprivileged. The direct unsafe children failed at the guard before launch. The already-isolated shared-helper lifecycle later failed to start because that RED run had no listener permission; it did not access host configuration.
+
+### Minimal correction and per-scenario guard
+
+Each of the four actual test roots now constructs one environment with `isolatedHubCliEnvironment(dir)`, asserts that all three safety paths remain below that root, and passes the same environment to every matching direct child. The detached scenario adds only `PI_OFFLINE=1` after isolation. The unknown-command scenario points both `PI_MANAGER_CONFIG` and `PI_WEB_UI_HUB_CONFIG` at its synthetic initialized config, preserving the inherited-property regression semantics without exposing any host fallback.
+
+No production source, built artifact, package manifest, or shared helper behavior changed. The temporary launch-wrapper experiment used for the RED was removed; the final test retains the original direct `spawn`/`spawnSync` structure plus per-root environment isolation and assertions.
+
+### Focused GREEN
+
+Command, run once after isolation with permission limited to temporary loopback/Unix listeners and isolated temporary state:
+
+```text
+node --import ./tests/register-ts.mjs tests/socket/hub-cli.test.ts
+```
+
+Exact summary:
+
+```text
+# tests 11
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2749.489193
+```
+
+Permission justification:
+
+```text
+Allow this one focused socket CLI test to create only temporary loopback and Unix listeners with isolated temporary HOME/config paths; it uses no production state, credentials, Docker, services, or network.
+```
+
+The updated mapped target SHA-256 for `tests/socket/hub-cli.test.ts` is `c423390ffbf49f952d8737f983a5899cd897775778ff236b9c24d76b357458d0`. No broad suite, Gate test, build, or distribution rebuild was run because no shipped or production file changed. Controller-owned documentation and `integration-tests/protocol-compatibility.test.mjs` remain excluded.

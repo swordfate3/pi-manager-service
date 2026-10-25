@@ -17,15 +17,28 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { startHubCli } from "../helpers/hub-cli.ts";
+import { isolatedHubCliEnvironment, startHubCli } from "../helpers/hub-cli.ts";
 
 const cli = fileURLToPath(new URL("../../dist/hub/pi-web-hub.mjs", import.meta.url));
+
+function assertIsolatedChildEnvironment(directory: string, env: NodeJS.ProcessEnv | undefined) {
+  assert.ok(env, "direct Hub CLI children require an explicit isolated environment");
+  for (const name of ["HOME", "PI_MANAGER_CONFIG", "PI_WEB_UI_HUB_CONFIG"] as const) {
+    const value = env[name];
+    assert.ok(value, `${name} must be set for direct Hub CLI children`);
+    const relative = path.relative(path.resolve(directory), path.resolve(value));
+    assert.ok(relative && !relative.startsWith("..") && !path.isAbsolute(relative), `${name} must stay below the test root`);
+  }
+}
+
 test("CLI initializes once and issues private individual credentials without printing tokens", (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "pi-hub-cli-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const config = path.join(dir, "config.json");
+  const env = isolatedHubCliEnvironment(dir);
+  assertIsolatedChildEnvironment(dir, env);
   const run = (...args: string[]) =>
-    spawnSync(process.execPath, [cli, ...args, "--config", config], { encoding: "utf8" });
+    spawnSync(process.execPath, [cli, ...args, "--config", config], { env, encoding: "utf8" });
   assert.equal(run("init", "--port", "0").status, 0);
   assert.notEqual(run("init").status, 0, "existing configuration must not be overwritten");
   const file = path.join(dir, "session.json");
@@ -45,8 +58,19 @@ test("CLI initializes once and issues private individual credentials without pri
 test("standalone hub serves a portal and shuts down cleanly on SIGTERM", { timeout: 10000 }, async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "pi-hub-cli-"));
   const config = path.join(dir, "config.json");
-  assert.equal(spawnSync(process.execPath, [cli, "init", "--config", config, "--port", "0"]).status, 0);
-  const child = spawn(process.execPath, [cli, "serve", "--config", config], { stdio: ["ignore", "pipe", "pipe"] });
+  const env = isolatedHubCliEnvironment(dir);
+  assertIsolatedChildEnvironment(dir, env);
+  assert.equal(
+    spawnSync(process.execPath, [cli, "init", "--config", config, "--port", "0"], {
+      env,
+      encoding: "utf8",
+    }).status,
+    0,
+  );
+  const child = spawn(process.execPath, [cli, "serve", "--config", config], {
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   t.after(async () => {
     if (child.exitCode === null && child.signalCode === null) {
       const closed = new Promise((resolve) => child.once("exit", resolve));
@@ -119,11 +143,18 @@ test("detached Hub bundle reports its embedded version/build without package fil
   // Only the declared external runtime dependency is available, not repository package metadata.
   mkdirSync(path.join(dir, "node_modules"));
   symlinkSync(realpathSync(path.join(root, "node_modules", "ws")), path.join(dir, "node_modules", "ws"), "dir");
+  const env = { ...isolatedHubCliEnvironment(dir), PI_OFFLINE: "1" };
+  assertIsolatedChildEnvironment(dir, env);
   for (const adjacentPackage of [undefined, { name: "@kkkiio/pi-web-ui", version: "9.9.9" }]) {
     if (adjacentPackage) writeFileSync(path.join(dir, "package.json"), JSON.stringify(adjacentPackage));
     const config = path.join(dir, adjacentPackage ? "misleading.json" : "absent.json");
-    const env = { ...process.env, PI_OFFLINE: "1" };
-    assert.equal(spawnSync(process.execPath, [detached, "init", "--config", config, "--port", "0"], { env }).status, 0);
+    assert.equal(
+      spawnSync(process.execPath, [detached, "init", "--config", config, "--port", "0"], {
+        env,
+        encoding: "utf8",
+      }).status,
+      0,
+    );
     const child = spawn(process.execPath, [detached, "serve", "--config", config], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -168,10 +199,22 @@ test("unknown and inherited-object command names never start a hub through the d
       const dir = mkdtempSync(path.join(tmpdir(), "pi-hub-cli-command-"));
       try {
         const config = path.join(dir, "config.json");
-        assert.equal(spawnSync(process.execPath, [cli, "init", "--config", config, "--port", "0"]).status, 0);
+        const env = {
+          ...isolatedHubCliEnvironment(dir),
+          PI_MANAGER_CONFIG: config,
+          PI_WEB_UI_HUB_CONFIG: config,
+        };
+        assertIsolatedChildEnvironment(dir, env);
+        assert.equal(
+          spawnSync(process.execPath, [cli, "init", "--config", config, "--port", "0"], {
+            env,
+            encoding: "utf8",
+          }).status,
+          0,
+        );
         // No remaining arguments: the old inherited-property lookup skipped parsing and fell through to serve.
         const result = spawnSync(process.execPath, [cli, command], {
-          env: { ...process.env, PI_WEB_UI_HUB_CONFIG: config },
+          env,
           encoding: "utf8",
           timeout: 2000,
           killSignal: "SIGKILL",

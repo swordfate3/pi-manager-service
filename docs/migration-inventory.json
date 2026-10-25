@@ -1733,7 +1733,7 @@
       "source": "tests/hub-cli.test.ts",
       "target": "tests/socket/hub-cli.test.ts",
       "sha256": "9fc7f7f093ee625671c556a626c75a8910892b4a1cb73df2540541a0c349405b",
-      "targetSha256": "6063cd109aef13ac1a37f29dcb78bd57af35510666f1ca7349694333e31c0a40",
+      "targetSha256": "c423390ffbf49f952d8737f983a5899cd897775778ff236b9c24d76b357458d0",
       "adapted": true
     },
     {

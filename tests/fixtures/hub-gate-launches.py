@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import threading
 
-root = Path(__file__).resolve().parents[2] / 'integrations/runtime-updater/gate'
+root = Path(__file__).resolve().parents[2] / 'gate'
 sys.path[:0] = [str(root), str(root / 'tests')]
 from gate.service import start_servers
 from test_pi_launch_engine import LaunchEngineTest

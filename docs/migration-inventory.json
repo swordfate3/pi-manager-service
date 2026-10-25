@@ -1628,15 +1628,15 @@
       "source": "tests/fixtures/hub-gate-launches.py",
       "target": "tests/fixtures/hub-gate-launches.py",
       "sha256": "0406a88089463df38763e4d960820f1932d101aab7ce33739f864d1ba8fd4bd7",
-      "targetSha256": "0406a88089463df38763e4d960820f1932d101aab7ce33739f864d1ba8fd4bd7",
-      "adapted": false
+      "targetSha256": "7589910541485df732659e1b0db9fc4aacec9008538f2e0925edb939c67d5554",
+      "adapted": true
     },
     {
       "source": "tests/fixtures/hub-gate-management.py",
       "target": "tests/fixtures/hub-gate-management.py",
       "sha256": "a50e86b2707e6ccab4012eddc317f736d05fcd8fdcb075df261f45232b40ee8f",
-      "targetSha256": "a50e86b2707e6ccab4012eddc317f736d05fcd8fdcb075df261f45232b40ee8f",
-      "adapted": false
+      "targetSha256": "5d809569bb08b4ad40e5ebd4fce6612b2205d94ef623ee872225cf70228cb053",
+      "adapted": true
     },
     {
       "source": "e2e/harness/hub-cli.ts",

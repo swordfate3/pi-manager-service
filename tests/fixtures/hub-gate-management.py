@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import sys
 
-root = Path(__file__).resolve().parents[2] / 'integrations/runtime-updater/gate'
+root = Path(__file__).resolve().parents[2] / 'gate'
 sys.path.insert(0, str(root))
 sys.path.insert(0, str(root / 'tests'))
 from test_hub_management import HubManagementTest

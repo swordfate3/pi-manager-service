@@ -8,7 +8,7 @@
 - 本地原仓库：`/home/fate/gitproject/codex_project_v2/pi-web-ui`。
 - 本轮复用的隔离工作区：`/home/fate/gitproject/codex_project_v2/pi-web-ui-hub-approvals`。
 - 拆分起点：`27326a8cbea8331cac29e6b6b41f98f2b69fa05b`，保留于 `codex/hub-create-pi`。
-- 干净 Web 目标分支：`v1`。此分支从上述起点建立，尚未完成源码拆分。
+- 干净 Web 分支：`v1`，独立拆分提交 `eef18b555dbe99f31de9408299751af221daab7b`；这是本地分支，不表示已经发布或替换使用中的扩展。
 - 建立分支时，`main...codex/hub-create-pi` 的左右独有提交数量为 `0 16`；未遗漏该时点的 main 提交。
 
 ## 已迁入的实现
@@ -32,6 +32,6 @@
 
 ## 当前证据边界
 
-本目录已包含独立构建和测试配置，但这不代表统一 Manager、MCP、原生后端或生产迁移已经完成。原分支的测试结果不能当作新项目的测试结果；新项目的实际命令与限制记录在任务报告中。原分支的新建 Pi 功能仍有真实 Docker/浏览器验收未完成，详见原仓库 `docs/validation/2026-10-25-hub-create-pi.md`。
+本目录已包含独立构建和测试配置，Web 也已完成单会话包清理，但这不代表统一 Manager、MCP、原生后端或生产迁移已经完成。原分支的测试结果不能当作新项目的测试结果；新项目的实际命令与限制记录在本项目的 `docs/validation/2026-10-26-independent-packages.md`。原分支的新建 Pi 功能仍有真实 Docker/浏览器验收未完成，详见原仓库 `docs/validation/2026-10-25-hub-create-pi.md`。
 
 Manager 默认版本检查不再把 `swordfate3/pi-web-ui` 当作 Manager 发布源。Gate 的旧仓库和旧入口固定值仍按源文件保留，明确属于未接线的遗留集成；未宣称 Manager 自更新可用，也未放宽来源或身份检查。

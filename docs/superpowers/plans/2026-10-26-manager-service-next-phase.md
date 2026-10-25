@@ -19,6 +19,8 @@
 - 所有测试隔离 HOME、新旧配置环境变量、状态根和工作目录；临时服务只绑定随机回环端口。
 - 显示“看见的实例”不代表“有权控制的实例”。网页登录不自动赋予所有管理动作权限。
 - MCP/网页不得传入任意 shell、Docker 参数或管理员批准凭据。
+- 公共 HTTP/MCP 入口只调用受限执行器协议，不直接导入 native spawn 或 Docker 控制实现；单入口不等于同一权限域。
+- 原生 Pi 若与 Manager 同一宿主 UID、共享不受限文件系统，不能宣称管理员凭据对 Agent 隔离。启用不可信 Agent 的管理动作前须验收 OS 账户/容器等实际隔离；没有该边界的开发模式仅限本机受信使用，并明确限制，不把应用层 scope 当成 OS 隔离。
 - Docker、共享安装更新/回退、扩展管理和 MCP 属于后续独立验收；未实现能力明确返回 unavailable。
 
 ## Task 1: 持久任务及独占写入
@@ -55,12 +57,15 @@ assert.equal((await reopened.get(first.id)).state, "pending_approval");
 
 ## Task 3: 独立入口与管理网页任务闭环
 
-**Files:** 新建 `manager/service.ts`、`manager/main.ts`、`manager/config.ts`、`tests/manager-service.test.ts`，调整 `package.json`、构建入口和 `hub/launch-portal.ts`。
+**Files:** 新建 `manager/service.ts`、`manager/main.ts`、`manager/config.ts`、`manager/executor/client.ts`、`manager/executor/main.ts`、`tests/manager-service.test.ts`，调整 `package.json`、构建入口和 `hub/launch-portal.ts`。
 
 **Interfaces:** 一个用户入口初始化/启动服务，内部使用任务存储和受限原生执行器。`POST /api/manager/tasks` 提交，`GET /api/manager/tasks/:id` 查询；管理员审批走独立权限并绑定任务精确内容，不能复用会话登记或 Agent 凭据。旧 Hub 路由契约保持兼容。
 
+执行器进程独占 `NativeBackend`；公共入口使用 `ExecutorClient.submit({taskId, revision})`，只传已冻结任务引用，不传 shell/可执行路径/任意进程参数。执行器自行核对任务授权、配置策略和内容哈希，Agent 或公共网页不能直接改写执行策略。`main.ts` 管理两个自有进程的就绪/退出，而不是依靠 Pi/MCP 客户端保持存活。账户/容器权限域如何落实必须在此任务开工前固定；无法保护审批与执行器凭据时，接口应拒绝不可信管理调用，不能悄悄降级为同 UID 的安全承诺。
+
 - [ ] 先以真实 HTTP 写 RED：零 Pi 页面可用、创建任务返回持久 ID、未批准不启动、Agent 自我批准 403、非法 Origin/Host 拒绝。
 - [ ] 实现网页选择管理员允许的目录、提交/批准/状态查询、明确不可用能力；不允许页面提交可执行路径或 shell。
+- [ ] 加入真实权限边界检查：Agent 执行环境不能读取/修改管理员授权与执行器策略文件；未经审批的客户端直连执行器仍被拒绝。仅在同一 UID 中模拟 403 不算该项通过。
 - [ ] 服务重启后查询任务仍可用，`unknown` 任务不自动重放。管理网页与 Pi Web 聊天页面职责明确。
 - [ ] 执行桌面与手机视口的实际浏览器检查，并独立运行真实 Pi 的创建→登记→聊天→停止闭环。仅 DOM 断言不能替代截图检查。
 - [ ] 重新构建、校验分发、隔离打包安装后提交；不覆盖旧 `pi-manager` 入口之前保留过渡命令兼容性测试。

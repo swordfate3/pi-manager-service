@@ -1,0 +1,6 @@
+node_modules/
+.superpowers/
+.tmp/
+__pycache__/
+*.pyc
+

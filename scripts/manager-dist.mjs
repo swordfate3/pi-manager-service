@@ -26,7 +26,7 @@ const SOURCE_FILES = [
   "runtime/runtime_session.py",
   "scripts/manager-dist.mjs",
 ];
-const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs"];
+const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs", ...["service", "public", "admin", "executor"].map(role => `manager/pi-manager-${role}.mjs`)];
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const PYTHON_BYTECODE = /\.(?:pyc|pyo)$/u;
 
@@ -152,6 +152,7 @@ export async function writeManifest(rootPath = DEFAULT_ROOT) {
     { mode: 0o644 },
   );
   await chmod(path.join(root, "dist", "hub", "pi-web-hub.mjs"), 0o755);
+  for (const role of ["service", "public", "admin", "executor"]) await chmod(path.join(root,"dist","manager",`pi-manager-${role}.mjs`),0o755);
   return { source, outputs };
 }
 

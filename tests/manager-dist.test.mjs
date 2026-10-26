@@ -220,4 +220,12 @@ test("the actual packed artifact verifies itself and contains the complete runti
     assert.equal(verified.error, undefined);
     assert.equal(verified.status, 0, verified.stderr);
   });
+
+  await t.test("runs independent service lifecycle from the actual archive without development dependencies", () => {
+    const checked = spawnSync(process.execPath, ["--import", "./tests/register-ts.mjs", "--test", "tests/manager-entry.test.ts"], {
+      cwd: root, encoding: "utf8", timeout: 20000,
+      env: { PATH: process.env.PATH, HOME: path.dirname(packed), PI_MANAGER_TEST_ENTRY: path.join(packed,"dist","manager","pi-manager-service.mjs") },
+    });
+    assert.equal(checked.status, 0, checked.stdout + checked.stderr);
+  });
 });

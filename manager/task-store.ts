@@ -718,6 +718,11 @@ export class TaskStore {
     return task ? cloneJson(task) : undefined;
   }
 
+  async list(): Promise<readonly TaskRecord[]> {
+    this.#assertOpen();
+    return cloneJson(Object.values(this.#state.tasks));
+  }
+
   async transition(
     id: string,
     expectedState: TaskState,

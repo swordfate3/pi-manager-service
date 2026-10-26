@@ -4180,7 +4180,7 @@ function captureHubMetadata(moduleUrl = import.meta.url) {
 	{
 		const embedded = {
 			"version": "0.1.0",
-			"build": "9f83e5fa831005dbd463165727bf1fecd1cf45b457d48a3d14d01822d4e89af3"
+			"build": "4615ef9c763d2ee301297e8b822355af42badb8d615b14d82523fcbaad2fe1bd"
 		};
 		if (embedded && isStableSemver(embedded.version) && SHA256.test(embedded.build)) return Object.freeze({
 			version: embedded.version,

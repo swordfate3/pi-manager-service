@@ -5,10 +5,11 @@ import { absolute, privateDirectory, readPrivateJson, serviceConfig } from "./co
 import { keys, record, requireThat } from "./validation.ts";
 
 export async function supervise(value: unknown, entryUrl: string) {
-  const config = record(value); keys(config,["trustedLocalDevelopment","executorConfig","publicConfig","adminConfig"]);
+  const config = record(value); keys(config,["trustedLocalDevelopment","executorConfig","publicConfig","adminConfig"],["chatConfig"]);
   // Native/same-UID ownership is deliberately opt-in. External isolation runs the three entries separately.
   requireThat(config.trustedLocalDevelopment === true,403);
   for (const name of ["executorConfig","publicConfig","adminConfig"]) absolute(config[name]);
+  if (config.chatConfig !== undefined) absolute(config.chatConfig);
   const publicConfig=serviceConfig(await readPrivateJson(config.publicConfig as string));
   const adminConfig=serviceConfig(await readPrivateJson(config.adminConfig as string));
   requireThat(publicConfig.origin!==adminConfig.origin && publicConfig.chatOrigin===adminConfig.chatOrigin);
@@ -24,7 +25,7 @@ export async function supervise(value: unknown, entryUrl: string) {
   })();
   const onSignal=()=>{void close().then(()=>{process.exitCode=0;},()=>{process.stderr.write("Manager shutdown incomplete\n");process.exitCode=1;});};
   process.once("SIGINT",onSignal);process.once("SIGTERM",onSignal);
-  async function launch(role: "executor"|"public"|"admin", file: string) {
+  async function launch(role: "executor"|"public"|"admin"|"chat", file: string) {
     const home=path.join(path.dirname(file),role+"-home"); await privateDirectory(home);
     const child=spawn(process.execPath,[fileURLToPath(new URL(`pi-manager-${role}.mjs`,entryUrl)),"--config",file],{
       stdio:["ignore","ignore","ignore","ipc"],env:{PATH:`${path.dirname(process.execPath)}:/usr/bin:/bin`,LANG:"C.UTF-8",HOME:home,XDG_CONFIG_HOME:path.join(home,"config"),XDG_DATA_HOME:path.join(home,"data"),XDG_CACHE_HOME:path.join(home,"cache"),PI_MANAGER_CONFIG:path.join(home,"unused.json"),PI_CODING_AGENT_DIR:path.join(home,"agent"),PI_WEB_UI_HUB_CONFIG:path.join(home,"unused-hub.json")},
@@ -39,9 +40,10 @@ export async function supervise(value: unknown, entryUrl: string) {
     });
   }
   try {
+    const chat = config.chatConfig ? await launch("chat",config.chatConfig as string) : undefined;
     await launch("executor",config.executorConfig as string);
     const pub=await launch("public",config.publicConfig as string);
     const admin=await launch("admin",config.adminConfig as string);
-    return {publicPort:pub.port,adminPort:admin.port,close};
+    return {publicPort:pub.port,adminPort:admin.port,...(chat ? {chatPort:chat.port} : {}),close};
   } catch(error) {await close().catch(()=>{});throw error;}
 }

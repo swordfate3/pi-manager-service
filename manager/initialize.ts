@@ -25,7 +25,8 @@ export async function initialize(options: Map<string, string>) {
   await mkdir(directory,{mode:0o700}); await privateDirectory(directory);
   for (const name of ["submit","admin","public-home","admin-home","executor-home"]) await privateDirectory(path.join(directory,name));
   const documents = {"executor.json":executor,"public.json":publicConfig,"admin.json":adminConfig,
+    "chat.json": { port: Number(new URL(chatOrigin).port || (chatOrigin.startsWith("https:") ? 443 : 80)), stateDir: path.join(directory,"chat-state"), runtimeDir:path.join(directory,"chat-runtime") },
     "requester-credential.json":{credential:requester},"administrator-credential.json":{credential:admin},
-    "supervisor.json":{trustedLocalDevelopment:true,executorConfig:path.join(directory,"executor.json"),publicConfig:path.join(directory,"public.json"),adminConfig:path.join(directory,"admin.json")}};
+    "supervisor.json":{trustedLocalDevelopment:true,executorConfig:path.join(directory,"executor.json"),publicConfig:path.join(directory,"public.json"),adminConfig:path.join(directory,"admin.json"),chatConfig:path.join(directory,"chat.json")}};
   for (const [name,data] of Object.entries(documents)) await writeFile(path.join(directory,name),JSON.stringify(data,null,2)+"\n",{mode:0o600,flag:"wx"});
 }

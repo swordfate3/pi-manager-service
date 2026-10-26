@@ -26,7 +26,7 @@ const SOURCE_FILES = [
   "runtime/runtime_session.py",
   "scripts/manager-dist.mjs",
 ];
-const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs", ...["service", "public", "admin", "executor"].map(role => `manager/pi-manager-${role}.mjs`)];
+const REQUIRED_OUTPUTS = ["hub/pi-web-hub.mjs", ...["service", "public", "admin", "executor", "chat"].map(role => `manager/pi-manager-${role}.mjs`)];
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const PYTHON_BYTECODE = /\.(?:pyc|pyo)$/u;
 
@@ -93,7 +93,9 @@ async function walk(root, key, records, prefix = "") {
   for (const entry of entries) {
     const child = `${key}/${entry.name}`;
     if (entry.isSymbolicLink()) fail(`Refusing to follow symlink: ${child}`);
-    if ((entry.isDirectory() && entry.name === "__pycache__") || (entry.isFile() && PYTHON_BYTECODE.test(entry.name)))
+    // npm never ships generated dependency directories with source. Still reject
+    // symlinks above, including cache/dependency-named links.
+    if ((entry.isDirectory() && ["__pycache__", "node_modules"].includes(entry.name)) || (entry.isFile() && PYTHON_BYTECODE.test(entry.name)))
       continue;
     if (entry.isDirectory()) await walk(root, child, records, prefix);
     else if (entry.isFile()) records.push({ path: `${prefix}${child}`, sha256: await hashFile(root, child) });
@@ -152,7 +154,7 @@ export async function writeManifest(rootPath = DEFAULT_ROOT) {
     { mode: 0o644 },
   );
   await chmod(path.join(root, "dist", "hub", "pi-web-hub.mjs"), 0o755);
-  for (const role of ["service", "public", "admin", "executor"]) await chmod(path.join(root,"dist","manager",`pi-manager-${role}.mjs`),0o755);
+  for (const role of ["service", "public", "admin", "executor", "chat"]) await chmod(path.join(root,"dist","manager",`pi-manager-${role}.mjs`),0o755);
   return { source, outputs };
 }
 

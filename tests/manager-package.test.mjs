@@ -87,7 +87,7 @@ test("the detached bundle runs with only declared runtime dependencies", () => {
   const directory = temporaryDirectory("pi-manager-detached-");
   try {
     const manifest = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    assert.deepEqual(Object.keys(manifest.dependencies ?? {}).sort(), ["ws"]);
+    assert.deepEqual(Object.keys(manifest.dependencies ?? {}).sort(), ["@modelcontextprotocol/node", "@modelcontextprotocol/server", "ws", "zod"]);
 
     const detachedCli = path.join(directory, "dist", "hub", "pi-web-hub.mjs");
     mkdirSync(path.dirname(detachedCli), { recursive: true });

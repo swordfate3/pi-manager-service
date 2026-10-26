@@ -5,11 +5,11 @@ export function renderPage(res: ServerResponse, admin: boolean) {
   res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pi Manager</title>
 <style>body{font:16px system-ui;background:#f4f6fa;color:#17253d;margin:0}main{max-width:850px;margin:32px auto;padding:20px}section{background:white;border:1px solid #ccd5e2;border-radius:12px;padding:20px;margin:18px 0}label{display:block;margin:12px 0}input,select,button{font:inherit;padding:10px;max-width:100%;box-sizing:border-box}input,select{width:100%}button{cursor:pointer;margin:5px 8px 5px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#message{min-height:24px}li{margin:15px 0;overflow-wrap:anywhere}.notice{color:#61451b}button:disabled{cursor:default;opacity:.5}</style>
 <main data-admin="${admin}"><h1>Pi Manager</h1><p>Independent task management · available with zero Pi instances</p>
-<p class="notice">Native execution is trusted-local development only, not untrusted isolation. Docker, updates and Pi→Web enrollment are unavailable in this slice.</p>
+<p class="notice">Native execution is trusted-local development only, not untrusted isolation. Docker uses an administrator-fixed profile. Updates are not enabled.</p>
 <section><h2>${admin ? "Private administrator entry" : "Task requester entry"}</h2><p>${admin ? "Enter your separately provisioned administrator credential. Agent credentials cannot approve. You cannot approve your own request." : "Enter a requester credential. Approval happens separately in the private administrator entry."}</p>
 <form id="login"><label>Credential<input id="credential" type="password" autocomplete="off" required></label><button>Unlock</button></form><button id="logout" hidden>Lock</button></section>
 <p id="message" role="status" aria-live="polite"></p><section id="content" hidden><h2>Create or stop a managed Pi</h2><p id="capabilities"></p>
-<form id="task"><label>Action<select id="action"><option value="create">Create native Pi</option><option value="stop">Stop owned native Pi</option></select></label><label>Target ID<input id="target" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" required></label><label>Allowed directory<select id="workspace"></select></label><button id="submit">Submit for independent approval</button></form>
+<form id="task"><label>Action<select id="action"><option value="create">Create managed Pi</option><option value="stop">Stop owned Pi</option><option value="start" hidden>Start owned Docker Pi</option></select></label><label>Target ID<input id="target" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" required></label><label>Allowed directory<select id="workspace"></select></label><button id="submit">Submit for independent approval</button></form>
 <button id="refresh">Refresh tasks</button><h2>Tasks</h2><p>After a lost response, refresh to reconcile before any new action. Restarted queued tasks require fresh review and approval; unknown tasks are never replayed.</p><ul id="tasks"></ul></section>
 <section id="review" hidden><h2>Exact task review</h2><pre id="review-data"></pre><button id="approve">Approve and execute this revision</button><button id="cancel">Close review</button></section></main><script src="/app.js" defer></script></html>`);
 }
@@ -21,7 +21,7 @@ let credential = '', reviewed = null, busy = false, lastSubmission = null;
 const message = text => { el('message').textContent = text; };
 async function api(route, data) {
   const headers = {};
-  if (!administrator && credential) headers.Authorization = 'Bearer ' + credential;
+  if (credential) headers.Authorization = 'Bearer ' + credential;
   if (data !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch('/api/manager/' + route, {method:data === undefined ? 'GET':'POST',headers,credentials:'same-origin',cache:'no-store',body:data === undefined ? undefined:JSON.stringify(data)});
   const value = await response.json(); if (!response.ok) throw Error(value.error || 'Request failed'); return value;
@@ -43,10 +43,11 @@ async function refresh() {
 el('login').onsubmit = async e => {
   e.preventDefault(); const input = el('credential').value; el('credential').value = '';
   try {
-    if (administrator) await api('login', {credential:input}); else credential = input;
+    if (administrator) credential = (await api('login', {credential:input})).sessionToken; else credential = input;
     const capabilities = await api('capabilities'); const choices = await api('workspaces');
-    el('capabilities').textContent = capabilities.native ? 'Native: trusted-local development. Enrollment/chat unavailable.' : 'Native execution is not configured.';
-    el('submit').disabled = !capabilities.native; el('workspace').replaceChildren();
+    el('capabilities').textContent = (capabilities.native ? 'Native: trusted-local development.' : capabilities.docker ? 'Docker: fixed container profile.' : 'Lifecycle execution is not configured.') + (capabilities.enrollment ? ' Explicit Web enrollment configured.' : ' Web enrollment is not configured.') + ' Updates unavailable.';
+    el('action').querySelector('[value="start"]').hidden = !capabilities.docker;
+    el('submit').disabled = !(capabilities.native || capabilities.docker); el('workspace').replaceChildren();
     for (const w of choices) { const option = document.createElement('option'); option.value = w.id; option.textContent = w.label; el('workspace').append(option); }
     el('content').hidden = false; el('login').hidden = true; el('logout').hidden = false; message('Unlocked. No task has been approved.'); await refresh();
   } catch(e) { credential = ''; message(e.message); }

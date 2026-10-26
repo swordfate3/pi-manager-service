@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { serviceConfig } from "./config.ts";
 import { AdminClient } from "./executor/admin-client.ts";
-import { boundary, header, jsonBody, listen, reply } from "./http.ts";
+import { bearer, boundary, jsonBody, listen, reply } from "./http.ts";
 import { keys, ManagerError, record, requireThat, taskId, token } from "./validation.ts";
 import { renderPage, renderScript } from "./ui.ts";
 import type { ApprovalBinding, TaskSubmission } from "./api.ts";
 
 /** Run privately, with only the separately provisioned admin socket accessible.
- * Credentials are typed into this origin, exchanged for short-lived HttpOnly cookies,
+ * Credentials are typed into this origin, exchanged for short-lived memory-only bearer,
  * never embedded in HTML, URL, logs, shared HOME or the public proxy process.
  */
 export async function startAdminService(value: unknown) {
@@ -19,7 +19,6 @@ export async function startAdminService(value: unknown) {
     if (req.method === "GET" && req.url === "/") { renderPage(res, true); return; }
     if (req.method === "GET" && req.url === "/app.js") { renderScript(res); return; }
     for (const [id, s] of sessions) if (s.expires < Date.now()) sessions.delete(id);
-    const cookieFlags = `; HttpOnly; SameSite=Strict; Path=/; Max-Age=900${config.origin.startsWith("https:") ? "; Secure" : ""}`;
     if (req.method === "POST" && req.url === "/api/manager/login") {
       if (Date.now() > windowEnds) { attempts = 0; windowEnds = Date.now() + 60_000; }
       requireThat(++attempts <= 20 && sessions.size < 64, 403);
@@ -27,15 +26,15 @@ export async function startAdminService(value: unknown) {
       const client = new AdminClient({ socketPath: config.socketPath, credential: token(b.credential) });
       requireThat((await client.capabilities()).approval, 403);
       const id = randomBytes(32).toString("hex"); sessions.set(id, { client, expires: Date.now() + 900_000 });
-      res.setHeader("Set-Cookie", `manager_session=${id}${cookieFlags}`); reply(res, 200, { authenticated: true }); return;
+      // Cookies ignore ports, so even HttpOnly cookies would leak authority to
+      // a public/chat service on the same hostname. Never set an ambient cookie.
+      reply(res, 200, { authenticated: true, sessionToken: id }); return;
     }
-    const cookie = header(req, "cookie");
-    requireThat(cookie && /^manager_session=[0-9a-f]{64}$/.test(cookie), 401);
-    const id = cookie.slice("manager_session=".length); const session = sessions.get(id); requireThat(session, 401);
+    const id = bearer(req); const session = sessions.get(id); requireThat(session, 401);
     const client = session.client;
     if (req.method === "POST") {
       const body = await jsonBody(req);
-      if (req.url === "/api/manager/logout") { keys(record(body), []); sessions.delete(id); res.setHeader("Set-Cookie", "manager_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0"); reply(res, 200, { authenticated: false }); }
+      if (req.url === "/api/manager/logout") { keys(record(body), []); sessions.delete(id); reply(res, 200, { authenticated: false }); }
       else if (req.url === "/api/manager/approve") {
         const b = record(body); keys(b, ["taskId", "revision", "requestHash", "policyHash"]);
         const approved = await client.approveTask(b as unknown as ApprovalBinding);

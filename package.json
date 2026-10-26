@@ -10,7 +10,8 @@
     "pi-manager-service": "dist/manager/pi-manager-service.mjs",
     "pi-manager-public": "dist/manager/pi-manager-public.mjs",
     "pi-manager-admin": "dist/manager/pi-manager-admin.mjs",
-    "pi-manager-executor": "dist/manager/pi-manager-executor.mjs"
+    "pi-manager-executor": "dist/manager/pi-manager-executor.mjs",
+    "pi-manager-chat": "dist/manager/pi-manager-chat.mjs"
   },
   "scripts": {
     "build": "npm run typecheck && vite build --config vite.config.ts && node scripts/build-manager.mjs && node scripts/manager-dist.mjs --write",
@@ -28,9 +29,13 @@
     "prepack": "npm run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "zod": "4.6.7",
     "ws": "^8.16.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/node": "^25.9.1",
     "@types/ws": "^8.18.2",
     "typescript": "^6.0.3",

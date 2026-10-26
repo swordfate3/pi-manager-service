@@ -9,7 +9,7 @@ import type { TaskBackendAdapter } from "./adapter.ts";
 /** Requester authority belongs to TaskStore; exact container identity belongs to DockerBackend. */
 export class DockerTaskAdapter implements TaskBackendAdapter {
   readonly actions = ["create", "stop", "start"] as const;
-  readonly capabilities = { native: false, docker: true, isolation: "fixed-container" as const };
+  readonly capabilities;
   readonly policy: JsonValue;
   readonly #config: ExecutorConfig;
   readonly #backend: DockerBackend;
@@ -17,6 +17,7 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
 
   private constructor(config: ExecutorConfig, backend: DockerBackend) {
     this.#config = config; this.#backend = backend;
+    this.capabilities = { native: false, docker: true, isolation: "fixed-container" as const, enrollment: !!config.docker?.web };
     this.policy = JSON.parse(JSON.stringify({ docker: config.docker, workspaces: config.workspaces }));
   }
 
@@ -33,10 +34,17 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
     return new DockerTaskAdapter(config, await DockerBackend.open(config.docker));
   }
 
-  restore(records: readonly TaskRecord[]) {
+  async restore(records: readonly TaskRecord[]) {
     // Unknown creates reserve the logical name even when the backend has no usable identity.
     for (const task of records) {
-      if (task.action !== "create" || !["succeeded", "unknown"].includes(task.state)) continue;
+      if (task.action !== "create" || !["succeeded", "unknown", "failed"].includes(task.state)) continue;
+      if (task.state === "failed") {
+        // A failed start can follow a durably committed exact container identity.
+        // Only the backend's original task binding grants partial-success recovery;
+        // duplicate/pre-mutation failed creates must not acquire someone else's target.
+        const binding = await this.#backend.boundAuthority(task.target);
+        if (binding?.taskId !== task.id || binding.requester !== task.requester) continue;
+      }
       requireThat(!this.#owners.has(task.target), 409);
       this.#owners.set(task.target, task.requester);
     }
@@ -76,7 +84,7 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
       this.#owners.set(task.target, task.requester);
       requireThat(!(await this.#backend.list()).some(i => i.instanceId === task.target), 409);
       const w = await this.#workspace(task);
-      const identity = await this.#backend.create({ instanceId: task.target, workspace: { root: w.root, path: w.path } });
+      const identity = await this.#backend.create({ instanceId: task.target, workspace: { root: w.root, path: w.path } }, { taskId: task.id, requester: task.requester });
       return { status: "created", instanceId: identity.instanceId };
     }
     await this.validate(task);

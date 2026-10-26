@@ -17,9 +17,7 @@ export async function startExecutor(value: unknown) {
     let exists = true; try { await lstat(socket); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") exists = false; else throw e; }
     requireThat(!exists, 409);
   }
-  const adapter = config.docker ? await DockerTaskAdapter.open(config) : config.native ? Object.assign(new NativeTaskAdapter(config), {
-    capabilities: { native: true, docker: false, isolation: "trusted-local-development" as const },
-  }) : undefined;
+  const adapter = config.docker ? await DockerTaskAdapter.open(config) : config.native ? new NativeTaskAdapter(config) : undefined;
   let engine: TaskEngine;
   try { engine = await TaskEngine.open(config, adapter); }
   catch (error) { await adapter?.close(); throw error; }

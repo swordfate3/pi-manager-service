@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { matchesProcessIdentity, readProcessIdentity } from "../process-identity.ts";
+import { ExecutionOutcomeUnknownError } from "../errors.ts";
+import { issueSession, readHubConfig, revokeSession, type HubConfig } from "../../hub/config.ts";
 
 export interface NativeBackendConfig {
   readonly piExecutable: string;
@@ -12,6 +14,8 @@ export interface NativeBackendConfig {
   readonly agentRoot: string;
   /** Trusted administrator code only; never exposed in a task request. */
   readonly provider?: { readonly extensionPath: string; readonly name: string; readonly model: string };
+  /** Explicit installed thin Web package + private registrar; no HOME discovery. */
+  readonly web?: { readonly extensionPath: string; readonly hubConfigFile: string; readonly port: number };
   readonly startupTimeoutMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly generationTimeoutMs?: number;
@@ -80,6 +84,7 @@ interface OwnedChild {
   stderrTruncated: boolean;
   pending: Map<string, Pending>;
   generation?: Generation;
+  enrollment?: { config: HubConfig; runId: string; revokeFailed?: boolean };
 }
 
 function object(value: unknown): value is RecordValue {
@@ -140,8 +145,10 @@ export class NativeBackend {
       ...config, piExecutable: absolute(config.piExecutable), stateRoot: absolute(config.stateRoot), agentRoot: absolute(config.agentRoot),
       workspaceRoots: Object.freeze(roots),
       provider: config.provider ? Object.freeze({ ...config.provider, extensionPath: absolute(config.provider.extensionPath) }) : undefined,
+      web: config.web ? Object.freeze({ ...config.web, extensionPath: absolute(config.web.extensionPath), hubConfigFile: absolute(config.web.hubConfigFile) }) : undefined,
     });
     if (config.provider && [config.provider.name, config.provider.model].some((value) => typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(value))) throw new Error("Invalid administrator provider selection");
+    if (config.web && (!Number.isInteger(config.web.port) || config.web.port < 1 || config.web.port > 65535)) throw new Error("Invalid administrator Web port");
     this.#startupMs = limit(config.startupTimeoutMs, 10_000, 120_000);
     this.#rpcMs = limit(config.rpcTimeoutMs, 5000, 120_000);
     this.#generationMs = limit(config.generationTimeoutMs, 30_000, 600_000);
@@ -237,6 +244,20 @@ export class NativeBackend {
       const provider = this.#config.provider;
       args.push("--extension", await realpath(provider.extensionPath), "--provider", provider.name, "--model", provider.model);
     }
+    let enrollment: OwnedChild["enrollment"];
+    let webEnv: NodeJS.ProcessEnv = {};
+    if (this.#config.web) {
+      const web = this.#config.web;
+      const config = readHubConfig(web.hubConfigFile);
+      const credentialFile = subdir("web-registration.json");
+      const extension = await realpath(web.extensionPath);
+      // Credential export is instance-scoped; the child never sees Hub state/config.
+      const credential = issueSession(config, credentialFile, { label: request.instanceId });
+      enrollment = { config, runId: credential.run_id };
+      args.push("--extension", extension);
+      webEnv = { PI_WEB_UI_HOST: "127.0.0.1", PI_WEB_UI_PORT: String(web.port), PI_WEB_UI_DISABLED: "false",
+        PI_WEB_UI_REGISTRY_SOCKET: config.socketPath, PI_WEB_UI_REGISTRY_CREDENTIAL_FILE: credentialFile };
+    }
     signal.throwIfAborted();
     const child = spawn(executable, args, {
       cwd: workspace, shell: false, stdio: ["pipe", "pipe", "pipe"],
@@ -247,11 +268,12 @@ export class NativeBackend {
         PI_AGENT_DIR: agentDir, PI_CODING_AGENT_DIR: agentDir, PI_CODING_AGENT_SESSION_DIR: subdir("sessions"),
         PI_MANAGER_CONFIG: subdir("manager.json"), PI_WEB_UI_HUB_CONFIG: subdir("legacy-manager.json"),
         PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
+        ...webEnv,
       },
     });
     const processIdentity = child.pid ? readProcessIdentity(child.pid) : null;
     const identity = Object.freeze({ instanceId: request.instanceId, pid: child.pid ?? 0, processIdentity: processIdentity ?? "", workspace, stateDir, agentDir });
-    const entry: OwnedChild = { child, identity, status: "starting", exited: false, exit: deferred<void>(), buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), stderrTruncated: false, pending: new Map() };
+    const entry: OwnedChild = { child, identity, status: "starting", exited: false, exit: deferred<void>(), buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), stderrTruncated: false, pending: new Map(), enrollment };
     this.#owned.set(request.instanceId, entry);
     child.on("error", () => { this.#fail(entry, new Error("Pi child spawn or process error")); if (!child.pid) this.#finish(entry); });
     child.once("exit", () => this.#finish(entry));
@@ -278,7 +300,7 @@ export class NativeBackend {
       return identity;
     } catch (error) {
       const cleanup = await this.#stop(entry);
-      if (cleanup.status === "ownership-lost") throw new Error("Startup failed; child ownership or exit unconfirmed, further signals refused");
+      if (cleanup.status === "ownership-lost") throw new ExecutionOutcomeUnknownError();
       throw error;
     } finally {
       signal.removeEventListener("abort", abort);
@@ -360,10 +382,16 @@ export class NativeBackend {
     entry.pending.clear();
     entry.generation?.reject(entry.error);
     entry.buffer = Buffer.alloc(0);
-    if (entry.status === "ready" && !entry.stop) void this.#stop(entry);
+    if (entry.status === "ready" && !entry.stop) void this.#stop(entry).catch(() => {});
   }
 
   #finish(entry: OwnedChild): void {
+    // A terminated process must not leave a reusable registration capability.
+    // Revocation failure is retained and surfaced as unknown to an awaiting stop.
+    if (entry.enrollment) {
+      try { revokeSession(entry.enrollment.config, entry.enrollment.runId); }
+      catch { entry.enrollment.revokeFailed = true; }
+    }
     if (entry.exited) return;
     entry.exited = true;
     this.#fail(entry, new Error("Pi child exited"));
@@ -402,6 +430,7 @@ export class NativeBackend {
       entry.status = "ownership-lost";
       return { status: "ownership-lost" };
     }
+    if (entry.enrollment?.revokeFailed) throw new ExecutionOutcomeUnknownError();
     return { status: "stopped", exitCode: entry.child.exitCode, signal: entry.child.signalCode, forced };
   }
 }

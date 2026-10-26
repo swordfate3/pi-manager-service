@@ -8,7 +8,7 @@ import test from "node:test";
 test("service is distributed as separate runnable authority entries without replacing Hub CLI", () => {
   const pkg=JSON.parse(readFileSync("package.json","utf8"));
   assert.equal(pkg.bin["pi-manager"],"dist/hub/pi-web-hub.mjs");
-  for(const name of ["service","public","admin","executor"]) assert.equal(pkg.bin["pi-manager-"+name],`dist/manager/pi-manager-${name}.mjs`);
+  for(const name of ["service","public","admin","executor","chat"]) assert.equal(pkg.bin["pi-manager-"+name],`dist/manager/pi-manager-${name}.mjs`);
   const home=mkdtempSync(path.join(tmpdir(),"manager-dist-home-"));
   try {
     const result=spawnSync(process.execPath,["dist/manager/pi-manager-service.mjs","--help"],{encoding:"utf8",env:{PATH:process.env.PATH,HOME:home}});

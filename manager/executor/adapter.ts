@@ -8,7 +8,7 @@ import type { Capabilities } from "../api.ts";
 export interface TaskBackendAdapter {
   readonly policy: JsonValue;
   readonly actions: readonly string[];
-  readonly capabilities?: Pick<Capabilities, "native" | "docker" | "isolation">;
+  readonly capabilities?: Pick<Capabilities, "native" | "docker" | "isolation"> & { enrollment?: boolean };
   /** Authoritative snapshot after running -> unknown recovery; never infer requester from resource labels. */
   restore?(records: readonly TaskRecord[]): void | Promise<void>;
   validate(request: TaskRequest): Promise<void>;

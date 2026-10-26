@@ -71,7 +71,7 @@ export class TaskEngine {
       keys(m, ["op"]);
       const capabilities = this.#adapter?.capabilities;
       return { native: capabilities?.native ?? false, docker: capabilities?.docker ?? false,
-        isolation: capabilities?.isolation ?? "unavailable", enrollment: false, updates: false, approval: admin };
+        isolation: capabilities?.isolation ?? "unavailable", enrollment: capabilities?.enrollment ?? false, updates: false, approval: admin };
     }
     if (m.op === "workspaces") { keys(m, ["op"]); return Object.entries(this.#config.workspaces).map(([id, w]) => ({ id, label: w.label })); }
     if (m.op === "resources") { keys(m, ["op"]); return await this.#adapter?.resources(p.id) ?? []; }

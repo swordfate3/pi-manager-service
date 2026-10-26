@@ -141,7 +141,7 @@ test("restart requires fresh approval for queued work; terminal unknown is never
   await assert.rejects(operator.executeTask({ taskId: task.id, revision: (await client.getTask(task.id)).revision }), { status: 409 });
 });
 
-test("private administrator login uses HttpOnly cookie, never public credentials; review and approve are explicit", async (t) => {
+test("private administrator login uses explicit memory-only bearer, never ambient cross-port cookies", async (t) => {
   const f = await fixture(t);
   const { startAdminService } = await import("../manager/admin-service.ts");
   const adminService = await startAdminService({ socketPath: f.config.adminSocket, origin: adminOrigin, chatOrigin: origin, port: 0 });
@@ -155,10 +155,11 @@ test("private administrator login uses HttpOnly cookie, never public credentials
   assert.equal((await call("/api/manager/login", { credential: agent })).status, 403);
   const login = await call("/api/manager/login", { credential: admin });
   assert.equal(login.status, 200);
-  const cookie = login.headers["set-cookie"]![0];
-  assert.match(cookie, /HttpOnly/); assert.match(cookie, /SameSite=Strict/);
-  assert.ok(!cookie.includes(admin)); assert.ok(!login.text.includes(admin));
-  const auth = { Cookie: cookie.split(";")[0] };
+  assert.equal(login.headers["set-cookie"], undefined);
+  assert.match(login.body.sessionToken, /^[0-9a-f]{64}$/);
+  assert.ok(!login.text.includes(admin));
+  const auth = { Authorization: `Bearer ${login.body.sessionToken}` };
+  assert.equal((await call("/api/manager/tasks", undefined, { Cookie: `manager_session=${login.body.sessionToken}` })).status, 401);
   const task = (await f.call("/api/manager/tasks", body)).body;
   const review = await call(`/api/manager/tasks/${task.id}/review`, undefined, auth);
   assert.equal(review.body.task.state, "pending_approval");
@@ -226,6 +227,9 @@ test("real browser: zero-Pi submit, private review, no credential storage, deskt
   const page=await context.newPage();const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
   await page.goto(browserOrigin);await page.locator("#credential").fill(admin);await page.locator("#login button").click();
   await page.locator("#content").waitFor({state:"visible"});assert.equal(await page.locator("#credential").inputValue(),"");
+  assert.deepEqual(await context.cookies(), []);
+  const publicHeaders: Record<string,string>[] = [];
+  context.on("request", req => { if (new URL(req.url()).origin === publicOrigin) publicHeaders.push(req.headers()); });
   const requesterPage=await context.newPage();requesterPage.on("pageerror",e=>errors.push(e.message));await requesterPage.goto(publicOrigin);
   await requesterPage.locator("#credential").fill(agent);await requesterPage.locator("#login button").click();await requesterPage.locator("#content").waitFor({state:"visible"});
   await requesterPage.locator("#target").fill("browser-pi");await requesterPage.locator("#submit").click();
@@ -241,5 +245,7 @@ test("real browser: zero-Pi submit, private review, no credential storage, deskt
   await page.waitForFunction(()=>document.getElementById("message")?.textContent?.includes("Approval accepted"));
   await waitFor(async()=>(await f.call(`/api/manager/tasks/${task.id}`)).body.state==="succeeded");
   assert.equal(await page.evaluate(()=>localStorage.length+sessionStorage.length),0);assert.deepEqual(errors,[]);
+  assert.ok(publicHeaders.length > 0);
+  for (const h of publicHeaders) { assert.equal(h.cookie, undefined); assert.ok(!h.authorization || h.authorization === `Bearer ${agent}`); }
   await page.locator("#logout").click();await page.locator("#login").waitFor({state:"visible"});
 });

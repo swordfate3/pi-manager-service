@@ -5,9 +5,11 @@ import type { ExecutorConfig } from "../config.ts";
 import type { TaskRequest, TaskRecord, JsonValue } from "../contracts.ts";
 import { requireThat, record } from "../validation.ts";
 import type { TaskBackendAdapter } from "./adapter.ts";
+import { ExecutionOutcomeUnknownError } from "../errors.ts";
 
 export class NativeTaskAdapter implements TaskBackendAdapter {
   readonly actions = ["create", "stop"] as const;
+  readonly capabilities;
   readonly policy: JsonValue;
   readonly #backend: NativeBackend;
   readonly #config: ExecutorConfig;
@@ -16,11 +18,16 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
     requireThat(config.trustedLocalNative && config.native, 503);
     this.#config = structuredClone(config);
     this.#backend = new NativeBackend(this.#config.native!);
+    this.capabilities = { native: true, docker: false, isolation: "trusted-local-development" as const, enrollment: !!config.native!.web };
     this.policy = JSON.parse(JSON.stringify({ native: config.native, workspaces: config.workspaces, trustedLocalNative: true }));
   }
   async validate(request: TaskRequest) {
     if (request.action === "stop") { requireThat(this.#owners.get(request.target) === request.requester, 403); return; }
     requireThat(request.action === "create", 503);
+    requireThat(!this.#owners.has(request.target), 409);
+    await this.#workspace(request);
+  }
+  async #workspace(request: TaskRequest) {
     const payload = record(request.payload); const selection = payload.workspace;
     requireThat(typeof selection === "string" && Object.hasOwn(this.#config.workspaces, selection));
     const w = this.#config.workspaces[selection];
@@ -31,18 +38,27 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
     } catch { requireThat(false); }
   }
   async execute(task: TaskRecord) {
-    await this.validate(task);
     if (task.action === "create") {
+      // A logical name is never reused, including after an exited/stopped child.
+      // Reserve synchronously, before workspace checks or process startup can yield.
+      // A previously approved stop can therefore never cross resource generations.
+      requireThat(!this.#owners.has(task.target), 409);
+      this.#owners.set(task.target, task.requester);
+      await this.#workspace(task);
       const w = this.#config.workspaces[record(task.payload).workspace as string];
       const identity = await this.#backend.create({ instanceId: task.target, workspace: { root: w.root, path: w.path } });
-      this.#owners.set(identity.instanceId, task.requester);
-      // Enrollment seam: a future administrator-provisioned registrar can consume identity here.
-      // Identity includes private paths/PID: it must never enter the public TaskView.
+      // Backend loads only the explicitly configured thin Web and instance grant.
+      // Private paths/PID must never enter the public TaskView.
       return { status: "created", instanceId: identity.instanceId };
     }
+    await this.validate(task);
     const result = await this.#backend.stop(task.target);
-    requireThat(result.status !== "ownership-lost", 503);
-    this.#owners.delete(task.target); return { status: result.status, instanceId: task.target };
+    if (result.status === "ownership-lost") throw new ExecutionOutcomeUnknownError();
+    return { status: result.status, instanceId: task.target };
+  }
+  restore(records: readonly TaskRecord[]) {
+    // Tombstones only: never reconstruct child handles or adopt persisted PIDs.
+    for (const task of records) if (task.action === "create" && ["running", "succeeded", "failed", "unknown"].includes(task.state)) this.#owners.set(task.target, task.requester);
   }
   resources(requester: string) { return this.#backend.list().filter(i => this.#owners.get(i.instanceId) === requester).map(i => ({ instanceId: i.instanceId })); }
   async close() {

@@ -37,3 +37,12 @@
 本轮还读取了开发依赖 Pi `1.1.0` 所带的官方 `docs/mcp.md`。该版本文档支持 stdio 和 Streamable HTTP；`pi mcp add` 可通过 URL 与 bearer-token 环境变量配置服务，`pi mcp list` 是真实连接检查入口。后续验收应直接使用隔离 agent 目录里的这些命令验证新管理服务，而不要求用户另装一个负责启动 Manager 的 Pi 扩展。
 
 文档中的用户配置位于 `~/.pi/agent/mcp.json`，项目配置位于受信任项目的 `.pi/mcp.json`；本轮没有写入这些真实文件。只有在 Manager 端点实际实现并通过协议/权限验收后，才给出连接配置，不预先把文档示例当成可用服务。
+
+## 完成阶段重新核对
+
+2026-10-26 再次直接查询官方 npm 注册表，server 和 client 均为 2.4.0，Node 适配器为 `@modelcontextprotocol/node@2.1.2`。三个包已在新建临时开发目录安装，禁用生命周期脚本，不改写现有共享 `node_modules` 或真实 Pi。官方包内 README 和类型声明确认：Node `http` 服务可通过 `NodeStreamableHTTPServerTransport` 接入，必须在 `handleRequest` 前完成 Host/Origin 和应用认证检查；无状态模式使用 `sessionIdGenerator: undefined`，并为每个请求新建协议 server/transport。
+
+当次 client 完整性：`sha512-LgrD2OphHuG12vfKFKz6SOnq7bKHQmhGJIAYdD+MZBn2npHEyry6uD8zvktodtl5CQM85MO0anUyD9JwmUmxww==`。
+当次 Node 适配器完整性：`sha512-IIcIqBpr6NCQQs5DgJTgvbSOAw+3iaR/uquqg+e0nXCdudfjPg/80x0TseUnQx14AUAtE4fsJCEpJKPyb6WPVA==`。
+
+下载和 SDK 接口核对仍不是 Manager MCP 完成；实际官方客户端和 Pi 客户端验收完成后另行记录。

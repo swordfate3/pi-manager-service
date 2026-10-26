@@ -187,6 +187,11 @@ test("known Docker operation rejection becomes generic failed and cannot grant a
   await assert.rejects(f.other.submitTask({ ...create, key: "steal" }), { status: 409 });
   await assert.rejects(f.other.submitTask({ key: "steal-start", action: "start", target: "one" }), { status: 403 });
   assert.deepEqual(await f.other.resources(), []);
+  assert.deepEqual(await f.client.resources(), [{ instanceId: "one" }]);
+  const container = [...f.containers.keys()][0];
+  assert.equal((await run(f, { key: "recover-start", action: "start", target: "one" })).state, "succeeded");
+  assert.equal((await run(f, { key: "recover-stop", action: "stop", target: "one" })).state, "succeeded");
+  assert.equal([...f.containers.keys()][0], container);
   assert.equal(f.calls.filter(c => c.route.startsWith("/containers/create?")).length, 1);
 });
 

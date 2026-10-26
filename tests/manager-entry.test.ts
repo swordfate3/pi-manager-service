@@ -17,6 +17,7 @@ test("independent CLI initializes explicit private paths, owns services, survive
   assert.equal(init.status, 0, init.stderr);
   const cfg = JSON.parse(await readFile(path.join(directory, "supervisor.json"), "utf8"));
   assert.equal(cfg.trustedLocalDevelopment, true);
+  assert.equal(cfg.chatConfig, path.join(directory, "chat.json"));
   assert.equal((await stat(path.join(directory,"executor.json"))).mode & 0o077, 0);
   const publicText = await readFile(cfg.publicConfig, "utf8");
   assert.ok(!publicText.includes("admin"));
@@ -26,6 +27,8 @@ test("independent CLI initializes explicit private paths, owns services, survive
   await writeFile(cfg.publicConfig, JSON.stringify(publicConfig), {mode:0o600});
   const adminConfig = JSON.parse(await readFile(cfg.adminConfig,"utf8")); adminConfig.port=0;
   await writeFile(cfg.adminConfig,JSON.stringify(adminConfig),{mode:0o600});
+  const chatConfig = JSON.parse(await readFile(cfg.chatConfig, "utf8")); chatConfig.port = 0;
+  await writeFile(cfg.chatConfig, JSON.stringify(chatConfig), { mode: 0o600 });
   const child = spawn(process.execPath,[cli,"serve","--config",path.join(directory,"supervisor.json")],{env,stdio:["ignore","pipe","pipe"]});
   t.after(async () => { if(child.exitCode === null && child.signalCode === null) { child.kill("SIGTERM"); await new Promise(r=>child.once("exit",r)); } });
   let stdout=""; let stderr="";
@@ -36,6 +39,8 @@ test("independent CLI initializes explicit private paths, owns services, survive
     child.stdout.on("data",c=>{stdout+=c; if(stdout.includes("\n")){clearTimeout(timer);resolve(JSON.parse(stdout.split("\n")[0]));}});
   });
   assert.equal(ready.ready,true); assert.ok(ready.publicPort>0 && ready.adminPort>0);
+  assert.ok(ready.chatPort > 0);
+  assert.deepEqual((await (await fetch(`http://127.0.0.1:${ready.chatPort}/api/sessions`)).json() as any).sessions, []);
   const client = new ExecutorClient({socketPath:publicConfig.socketPath,credential});
   assert.equal((await client.capabilities()).native,false);
   await assert.rejects(client.submitTask({key:"no-native",action:"create",target:"sample",workspace:"project"}));

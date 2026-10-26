@@ -9,4 +9,4 @@ export interface TaskClient {
 export interface ApprovalBinding { taskId: string; revision: number; requestHash: string; policyHash: string }
 export interface TaskReview { task: TaskView; binding: ApprovalBinding; requiresFreshApproval: boolean }
 export interface WorkspaceChoice { id: string; label: string }
-export interface Capabilities { native: boolean; isolation: "trusted-local-development" | "fixed-container" | "unavailable"; enrollment: false; docker: boolean; updates: false; approval: boolean }
+export interface Capabilities { native: boolean; isolation: "trusted-local-development" | "fixed-container" | "unavailable"; enrollment: boolean; docker: boolean; updates: false; approval: boolean }

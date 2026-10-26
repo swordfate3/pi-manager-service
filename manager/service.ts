@@ -4,11 +4,16 @@ import { bearer, boundary, jsonBody, listen, reply } from "./http.ts";
 import { ManagerError, requireThat, taskId } from "./validation.ts";
 import type { TaskSubmission } from "./api.ts";
 import { renderPage, renderScript } from "./ui.ts";
+import { createMcpHandler } from "./mcp/server.ts";
 
 /** Public process: no TaskStore, native backend, spawn, policy or admin client. */
 export async function startService(value: unknown) {
   const config = serviceConfig(value);
+  const mcp = createMcpHandler(config);
   return listen(async (req, res) => {
+    // MCP's native clients do not send browser Origin. Its own authenticated
+    // boundary checks supplied Origin and exact Host before protocol parsing.
+    if (req.url === "/mcp") { await mcp(req, res); return; }
     boundary(req, config.origin);
     if (req.method === "GET" && req.url === "/") {
       renderPage(res, false); return;

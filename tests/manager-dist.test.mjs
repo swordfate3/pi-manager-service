@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -221,7 +222,9 @@ test("the actual packed artifact verifies itself and contains the complete runti
     assert.equal(verified.status, 0, verified.stderr);
   });
 
-  await t.test("runs independent service lifecycle from the actual archive without development dependencies", () => {
+  await t.test("runs archived service with its declared ws runtime and without development dependencies", () => {
+    const require = createRequire(import.meta.url);
+    cpSync(path.dirname(require.resolve("ws/package.json")), path.join(packed,"node_modules","ws"), { recursive: true });
     const checked = spawnSync(process.execPath, ["--import", "./tests/register-ts.mjs", "--test", "tests/manager-entry.test.ts"], {
       cwd: root, encoding: "utf8", timeout: 20000,
       env: { PATH: process.env.PATH, HOME: path.dirname(packed), PI_MANAGER_TEST_ENTRY: path.join(packed,"dist","manager","pi-manager-service.mjs") },

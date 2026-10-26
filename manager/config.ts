@@ -49,7 +49,7 @@ export function executorConfig(value: unknown): ExecutorConfig {
   requireThat(c.native === null || c.docker == null);
   if (c.docker != null) {
     const d = record(c.docker);
-    keys(d, ["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots"], ["protectedRoots", "timeoutMs", "entrypoint", "command"]);
+    keys(d, ["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots"], ["protectedRoots", "timeoutMs", "entrypoint", "command", "web"]);
     const dockerPath = (v: unknown) => { const p = absolute(v); requireThat(p !== path.parse(p).root); return p; };
     const overlaps = (a: string, b: string) => {
       const contains = (root: string, value: string) => { const r = path.relative(root, value); return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r); };
@@ -67,6 +67,15 @@ export function executorConfig(value: unknown): ExecutorConfig {
     const protectedPaths = [c.stateRoot as string, path.dirname(c.submitSocket as string), path.dirname(c.adminSocket as string),
       d.stateRoot as string, d.socketPath as string, fileURLToPath(new URL("..", import.meta.url)),
       ...((d.protectedRoots ?? []) as unknown[]).map(dockerPath)];
+    if (d.web !== undefined) {
+      const w = record(d.web); keys(w, ["packageRoot", "hubConfigFile", "port"], ["provider"]);
+      protectedPaths.push(dockerPath(w.packageRoot), dockerPath(w.hubConfigFile));
+      requireThat(Number.isInteger(w.port) && (w.port as number) >= 1 && (w.port as number) <= 65535 && d.command === undefined && d.entrypoint === undefined);
+      if (w.provider !== undefined) {
+        const p = record(w.provider); keys(p, ["packageRoot", "name", "model"]); protectedPaths.push(dockerPath(p.packageRoot));
+        requireThat([p.name,p.model].every(v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(v)));
+      }
+    }
     requireThat(!overlaps(c.stateRoot as string, d.stateRoot as string));
     const roots = record(d.workspaceRoots);
     requireThat(Object.keys(roots).length > 0 && Object.keys(roots).length <= 32);

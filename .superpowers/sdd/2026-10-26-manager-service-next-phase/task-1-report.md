@@ -113,3 +113,51 @@ Controller-owned concurrent edits to `package.json`, `scripts/manager-dist.mjs`,
 - The current bounds are 64 KiB per request/result, 1 MiB for the complete state file, depth 32, and 10,000 JSON nodes. Raising them later is a deliberate storage-contract change.
 - Crash recovery converts only `running` work to `unknown`; queued and waiting work are retained but Task 1 contains no executor and therefore performs no automatic continuation or replay.
 - No claim is made about public API authorization, backend lifecycle, production migration, or security isolation from same-UID agents.
+
+## Review fix round 1
+
+### Findings and root causes
+
+- The stale lock was quarantined and deleted before the crash-recovery state rewrite completed. If state loading, validation, serialization, or persistence then failed, `open()` released the replacement lock and discarded the only durable evidence that a writer had crashed while work could still be `running`.
+- Lock metadata accepted every non-null string as a process start identity. A malformed identity associated with a live PID could therefore compare unequal to the observed Linux identity and be classified as stale instead of malformed/ambiguous.
+- Reopened results used JSON-complexity validation but not the transition path's 64 KiB result bound or terminal-state invariant.
+- Sparse JavaScript arrays were accepted because `Array.prototype.map` skips holes. Their pre-persistence canonical form could differ from the JSON-reopened `[null]` form, making same-request idempotency unstable across reopen.
+
+### Focused RED evidence
+
+Exact command, run with the previously documented narrow temporary-process permission:
+
+`node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`
+
+Result before production changes: 16 named tests ran; 11 passed and 5 failed. The failures were the sparse-array JSON rejection, durable recovery evidence after failed state loading, durable recovery evidence after failed recovery persistence, malformed non-null identity for a live PID, and persisted result invariants. The runner reported 0 cancelled/skipped/todo tests and exited 1 after 8112.279695 ms.
+
+### Bounded implementation changes
+
+- Added a strict private `.task-store.recovery.json` marker (`0600`, 4 KiB cap) with a fixed schema and sanitized parsing. A recoverer writes and fsyncs this marker while holding the acquisition gate and before renaming the proven-stale owner lock.
+- The marker, rather than an in-memory takeover flag, is now authoritative recovery evidence. Any clean open fails recovery-required while it remains. An explicitly recovering open validates state, durably rewrites every `running` task to `unknown`, and only then removes the marker and fsyncs the root directory. Failed load/validation/serialization/write leaves the marker intact; a crash after the state rewrite but before marker removal is safe and idempotent.
+- Non-null process identity now must match the generated Linux boot-UUID/start-ticks form. `ESRCH` alone proves death; `EPERM` and other liveness-probe errors return ambiguous immediately; a definitely live PID is stale only when a valid observed start identity proves PID reuse.
+- Persisted results now use the same 64 KiB JSON bound as transition results and are rejected on nonterminal states.
+- JSON arrays now require exactly `length` own numeric index properties plus the built-in `length` property. Sparse arrays and arrays with extra string, symbol, or non-enumerable properties are rejected before canonicalization or persistence.
+- The open-time recovery option is snapshotted before asynchronous lock work, matching the existing transition-option immutability rule.
+
+### Focused GREEN evidence
+
+Exact command, run with the same narrow temporary-process permission:
+
+`node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`
+
+Final result after the fixes and fail-closed liveness self-review: 16 named tests ran; 16 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo; exit 0; duration 8779.064731 ms. Full named output confirmed the real child-process lock/recovery tests ran rather than only a wrapper file count.
+
+Typecheck command:
+
+`npm run typecheck`
+
+Result: `tsc --noEmit` exited 0 with no diagnostics.
+
+### Review-fix files and limits
+
+- Modified only `manager/task-store.ts`, `tests/manager-task-store.test.ts`, and this Task 1 report.
+- No contracts, public interfaces, HTTP/MCP/CLI exposure, executor/lifecycle behavior, Docker, distribution files, package metadata, dependencies, credentials, or production state were added or changed.
+- The recovery marker is cooperative private filesystem infrastructure under the same Task 1 trust boundary; it is not isolation from malicious code running as the same UID.
+- Automatic recovery still requires an explicit option and a strictly valid durable marker originating before proven-stale lock removal. Malformed markers, malformed identities, ambiguous liveness, live owners, and abandoned acquisition gates fail closed.
+- The npm upgrade advisory is controller-owned informational output and was not treated as a product defect or changed in this round.

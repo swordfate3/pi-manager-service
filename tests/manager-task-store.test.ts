@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -114,6 +114,45 @@ async function crashStoreChild(child: ChildProcessWithoutNullStreams): Promise<v
   await exited;
 }
 
+async function readStoredState(root: string): Promise<Record<string, any>> {
+  return JSON.parse(await readFile(path.join(root, "tasks.json"), "utf8")) as Record<string, any>;
+}
+
+async function writeStoredState(root: string, state: Record<string, any>): Promise<void> {
+  await writeFile(path.join(root, "tasks.json"), `${JSON.stringify(state)}\n`, { mode: 0o600 });
+}
+
+function addFillerTask(state: Record<string, any>, index: number, padding: string): Record<string, any> {
+  const id = `review-filler-${index}`;
+  const key = `review-filler-key-${index}`;
+  const now = "2026-10-26T00:00:00.000Z";
+  const task = {
+    id,
+    revision: 1,
+    state: "pending_approval",
+    createdAt: now,
+    updatedAt: now,
+    key,
+    requester: "review-filler",
+    target: `pi:filler-${index}`,
+    action: "inspect",
+    payload: { padding },
+  };
+  state.tasks[id] = task;
+  (state.idempotency[task.requester] ??= {})[key] = id;
+  return task;
+}
+
+function fillStateToExactLimit(state: Record<string, any>, limit: number): void {
+  for (let index = 0; index < 16; index += 1) addFillerTask(state, index, "x".repeat(60 * 1024));
+  const adjustable = addFillerTask(state, 16, "");
+  const currentBytes = Buffer.byteLength(`${JSON.stringify(state)}\n`, "utf8");
+  const needed = limit - currentBytes;
+  assert.ok(needed > 0 && needed < 60 * 1024, `expected adjustable padding below 60 KiB, got ${needed}`);
+  adjustable.payload.padding = "x".repeat(needed);
+  assert.equal(Buffer.byteLength(`${JSON.stringify(state)}\n`, "utf8"), limit);
+}
+
 test("requester-scoped idempotency returns the persisted task and rejects changed content", async (t) => {
   const { root } = await temporaryStore(t);
   const request = {
@@ -187,6 +226,17 @@ test("submitted request content is immutable and only bounded JSON values are ac
       approvalCredential: "must-not-be-ignored",
     } as never),
     /field|request/i,
+  );
+  const sparse = Array<string>(1);
+  await assert.rejects(
+    store.submit({
+      key: "sparse-array",
+      requester: "operator-a",
+      target: "pi:alpha",
+      action: "create",
+      payload: sparse,
+    }),
+    /JSON/i,
   );
   await store.close();
 });
@@ -343,6 +393,53 @@ test("explicit crash recovery marks running work unknown and never replays it", 
   await reopened.close();
 });
 
+test("failed recovery state loading leaves durable evidence for a later explicit recovery", async (t) => {
+  const { parent, root } = await temporaryStore(t);
+  const owner = await startStoreChild(parent, root, { mode: "running" });
+  assert.equal(owner.message.status, "ready");
+  const taskId = owner.message.taskId;
+  assert.ok(taskId);
+  await crashStoreChild(owner.child);
+  const validState = await readFile(path.join(root, "tasks.json"), "utf8");
+
+  await writeFile(path.join(root, "tasks.json"), '{"secret":"recovery-load-failure"', { mode: 0o600 });
+  await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /invalid task store data/i);
+  await writeFile(path.join(root, "tasks.json"), validState, { mode: 0o600 });
+  await assert.rejects(TaskStore.open(root), /recovery/i);
+
+  const recovered = await TaskStore.open(root, { recoverStaleLock: true });
+  assert.equal((await recovered.get(taskId))?.state, "unknown");
+  await recovered.close();
+});
+
+test("failed recovery persistence leaves durable evidence and cannot reopen a crashed task as running", async (t) => {
+  const { parent, root } = await temporaryStore(t);
+  const owner = await startStoreChild(parent, root, { mode: "running" });
+  assert.equal(owner.message.status, "ready");
+  const taskId = owner.message.taskId;
+  assert.ok(taskId);
+  await crashStoreChild(owner.child);
+
+  const state = await readStoredState(root);
+  state.tasks[taskId].revision = 9;
+  fillStateToExactLimit(state, 1024 * 1024);
+  await writeStoredState(root, state);
+  await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /size/i);
+
+  for (const id of Object.keys(state.tasks)) {
+    if (id.startsWith("review-filler-")) delete state.tasks[id];
+  }
+  delete state.idempotency["review-filler"];
+  await writeStoredState(root, state);
+  await assert.rejects(TaskStore.open(root), /recovery/i);
+
+  const recovered = await TaskStore.open(root, { recoverStaleLock: true });
+  const task = await recovered.get(taskId);
+  assert.equal(task?.state, "unknown");
+  assert.equal(task?.revision, 10);
+  await recovered.close();
+});
+
 test("requesting recovery without taking over a stale lock does not rewrite running work", async (t) => {
   const { root } = await temporaryStore(t);
   const store = await TaskStore.open(root);
@@ -413,6 +510,47 @@ test("malformed or identity-ambiguous locks fail closed without exposing raw con
   );
   await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /locked|ambiguous/i);
   assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
+
+  await rm(path.join(root, ".task-store.lock"), { recursive: true });
+  await mkdir(path.join(root, ".task-store.lock"), { mode: 0o700 });
+  await writeFile(
+    path.join(root, ".task-store.lock", "owner.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      processIdentity: "garbage",
+      token: randomUUID(),
+      createdAt: new Date().toISOString(),
+    }),
+    { mode: 0o600 },
+  );
+  await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /locked|ambiguous|malformed/i);
+  assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
+});
+
+test("reopen rejects oversized results and results attached to nonterminal states", async (t) => {
+  const { root } = await temporaryStore(t);
+  const store = await TaskStore.open(root);
+  const task = await store.submit({
+    key: "persisted-result",
+    requester: "operator-a",
+    target: "pi:alpha",
+    action: "inspect",
+    payload: null,
+  });
+  await store.close();
+  const original = await readStoredState(root);
+
+  const nonterminal = structuredClone(original);
+  nonterminal.tasks[task.id].result = { impossible: true };
+  await writeStoredState(root, nonterminal);
+  await assert.rejects(TaskStore.open(root), /invalid task store data/i);
+
+  const oversized = structuredClone(original);
+  oversized.tasks[task.id].state = "succeeded";
+  oversized.tasks[task.id].result = { value: "x".repeat(70 * 1024) };
+  await writeStoredState(root, oversized);
+  await assert.rejects(TaskStore.open(root), /invalid task store data|size/i);
 });
 
 test("malformed persisted JSON is rejected with a bounded sanitized error and releases the lock", async (t) => {

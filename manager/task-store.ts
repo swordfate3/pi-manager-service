@@ -33,16 +33,23 @@ interface OwnedLock {
 
 interface AcquiredWriterLock {
   lock: OwnedLock;
-  recoveredStale: boolean;
+}
+
+interface RecoveryMarker {
+  schemaVersion: 1;
+  reason: "stale-writer";
+  createdAt: string;
 }
 
 const STATE_FILE = "tasks.json";
 const LOCK_DIRECTORY = ".task-store.lock";
 const ACQUISITION_DIRECTORY = ".task-store.acquire";
+const RECOVERY_FILE = ".task-store.recovery.json";
 const OWNER_FILE = "owner.json";
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_STATE_BYTES = 1024 * 1024;
 const MAX_LOCK_BYTES = 4 * 1024;
+const MAX_RECOVERY_BYTES = 4 * 1024;
 const MAX_JSON_DEPTH = 32;
 const MAX_JSON_NODES = 10_000;
 
@@ -125,7 +132,21 @@ function validateJson(value: unknown, label: string): JsonValue {
     if (ancestors.has(candidate)) throw new TaskStoreRequestError(`${label} must contain valid JSON values`);
     ancestors.add(candidate);
     try {
-      if (Array.isArray(candidate)) return candidate.map((item) => visit(item, depth + 1));
+      if (Array.isArray(candidate)) {
+        const ownKeys = Reflect.ownKeys(candidate);
+        if (
+          ownKeys.length !== candidate.length + 1 ||
+          !ownKeys.includes("length") ||
+          ownKeys.some(
+            (key) =>
+              key !== "length" &&
+              (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= candidate.length),
+          )
+        ) {
+          throw new TaskStoreRequestError(`${label} must contain valid JSON values`);
+        }
+        return candidate.map((item) => visit(item, depth + 1));
+      }
       if (!isPlainObject(candidate)) throw new TaskStoreRequestError(`${label} must contain valid JSON values`);
       const result: Record<string, JsonValue> = {};
       for (const [key, item] of Object.entries(candidate)) setOwn(result, key, visit(item, depth + 1));
@@ -285,12 +306,15 @@ function validateTask(id: string, value: unknown): TaskRecord {
   ) {
     throw new TaskStoreDataError("Invalid task store data");
   }
-  const result = Object.hasOwn(value, "result") ? validateJson(value.result, "Task result") : undefined;
+  const state = value.state as TaskState;
+  const hasResult = Object.hasOwn(value, "result");
+  if (hasResult && !resultStates.has(state)) throw new TaskStoreDataError("Invalid task store data");
+  const result = hasResult ? boundedJson(value.result, "Task result", MAX_REQUEST_BYTES).value : undefined;
   return {
     ...request,
     id,
     revision: value.revision as number,
-    state: value.state as TaskState,
+    state,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
     ...(result === undefined ? {} : { result }),
@@ -353,10 +377,15 @@ async function readProcessIdentity(pid: number): Promise<string | null> {
     const fields = statContent.slice(commandEnd + 2).trim().split(/\s+/);
     const startTicks = fields[19];
     const boot = bootId.trim();
-    return startTicks && boot ? `${boot}:${startTicks}` : null;
+    const identity = startTicks && boot ? `${boot}:${startTicks}` : null;
+    return identity && isProcessIdentity(identity) ? identity : null;
   } catch {
     return null;
   }
+}
+
+function isProcessIdentity(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9]+$/i.test(value);
 }
 
 async function currentLockOwner(token: string): Promise<LockOwner> {
@@ -382,7 +411,8 @@ function parseLockOwner(content: string): LockOwner {
     value.schemaVersion !== 1 ||
     !Number.isSafeInteger(value.pid) ||
     (value.pid as number) <= 0 ||
-    (value.processIdentity !== null && typeof value.processIdentity !== "string") ||
+    (value.processIdentity !== null &&
+      (typeof value.processIdentity !== "string" || !isProcessIdentity(value.processIdentity))) ||
     typeof value.token !== "string" ||
     !/^[0-9a-f-]{36}$/i.test(value.token) ||
     !parseIsoDate(value.createdAt)
@@ -421,11 +451,66 @@ async function inspectLock(directory: string): Promise<"active" | "stale" | "amb
   const owner = await readLockOwner(directory);
   const liveness = probeProcess(owner.pid);
   if (liveness === "dead") return "stale";
+  if (liveness === "ambiguous") return "ambiguous";
   const observedIdentity = await readProcessIdentity(owner.pid);
   if (owner.processIdentity !== null && observedIdentity !== null) {
     return owner.processIdentity === observedIdentity ? "active" : "stale";
   }
   return "ambiguous";
+}
+
+function parseRecoveryMarker(content: string): RecoveryMarker {
+  let value: unknown;
+  try {
+    value = JSON.parse(content);
+  } catch {
+    throw new TaskStoreDataError("Task store recovery marker is invalid");
+  }
+  if (
+    !isPlainObject(value) ||
+    !hasOnlyKeys(value, ["schemaVersion", "reason", "createdAt"]) ||
+    value.schemaVersion !== 1 ||
+    value.reason !== "stale-writer" ||
+    !parseIsoDate(value.createdAt)
+  ) {
+    throw new TaskStoreDataError("Task store recovery marker is invalid");
+  }
+  return value as unknown as RecoveryMarker;
+}
+
+async function readRecoveryMarker(root: string): Promise<RecoveryMarker | undefined> {
+  try {
+    const content = await readBoundedPrivateFile(
+      path.join(root, RECOVERY_FILE),
+      MAX_RECOVERY_BYTES,
+      "Task store recovery marker",
+    );
+    return parseRecoveryMarker(content);
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) return undefined;
+    if (error instanceof TaskStoreDataError) throw error;
+    throw new TaskStoreDataError("Task store recovery marker is invalid");
+  }
+}
+
+async function ensureRecoveryMarker(root: string): Promise<void> {
+  const existing = await readRecoveryMarker(root);
+  if (existing) return;
+  const marker: RecoveryMarker = {
+    schemaVersion: 1,
+    reason: "stale-writer",
+    createdAt: new Date().toISOString(),
+  };
+  await writePrivateAtomic(path.join(root, RECOVERY_FILE), `${JSON.stringify(marker)}\n`);
+}
+
+async function clearRecoveryMarker(root: string): Promise<void> {
+  try {
+    await rm(path.join(root, RECOVERY_FILE));
+    await syncDirectory(root);
+  } catch {
+    throw new TaskStoreDataError("Task store recovery marker could not be cleared safely");
+  }
 }
 
 async function createOwnedDirectory(directory: string): Promise<OwnedLock> {
@@ -452,7 +537,7 @@ async function releaseOwnedDirectory(lock: OwnedLock): Promise<void> {
   await syncDirectory(path.dirname(lock.directory));
 }
 
-async function acquireWriterLock(root: string, options: TaskStoreOpenOptions): Promise<AcquiredWriterLock> {
+async function acquireWriterLock(root: string, recoverStaleLock: boolean): Promise<AcquiredWriterLock> {
   const acquisitionDirectory = path.join(root, ACQUISITION_DIRECTORY);
   let acquisition: OwnedLock;
   try {
@@ -470,7 +555,7 @@ async function acquireWriterLock(root: string, options: TaskStoreOpenOptions): P
   let quarantine: string | undefined;
   try {
     try {
-      return { lock: await createOwnedDirectory(lockDirectory), recoveredStale: false };
+      return { lock: await createOwnedDirectory(lockDirectory) };
     } catch (error) {
       if (!isErrno(error, "EEXIST")) throw error;
     }
@@ -481,7 +566,7 @@ async function acquireWriterLock(root: string, options: TaskStoreOpenOptions): P
         status === "active" ? "Task store is locked by another writer" : "Task store lock ownership is ambiguous",
       );
     }
-    if (!options.recoverStaleLock) {
+    if (!recoverStaleLock) {
       throw new TaskStoreRecoveryRequiredError("Task store recovery is required for a stale writer lock");
     }
 
@@ -489,6 +574,7 @@ async function acquireWriterLock(root: string, options: TaskStoreOpenOptions): P
     if (confirmedStatus !== "stale") {
       throw new TaskStoreLockedError("Task store lock can no longer be proven stale");
     }
+    await ensureRecoveryMarker(root);
     quarantine = path.join(root, `.task-store.stale-${randomUUID()}`);
     await rename(lockDirectory, quarantine);
     const lock = await createOwnedDirectory(lockDirectory);
@@ -501,7 +587,7 @@ async function acquireWriterLock(root: string, options: TaskStoreOpenOptions): P
       throw new TaskStoreLockedError("Task store stale lock recovery could not be completed safely");
     }
     quarantine = undefined;
-    return { lock, recoveredStale: true };
+    return { lock };
   } catch (error) {
     if (quarantine) {
       try {
@@ -550,11 +636,15 @@ export class TaskStore {
 
   static async open(root: string, options: TaskStoreOpenOptions = {}): Promise<TaskStore> {
     const resolvedRoot = await prepareRoot(root);
-    const { lock, recoveredStale } = await acquireWriterLock(resolvedRoot, options);
+    const recoverStaleLock = options.recoverStaleLock === true;
+    const { lock } = await acquireWriterLock(resolvedRoot, recoverStaleLock);
     try {
+      const recoveryMarker = await readRecoveryMarker(resolvedRoot);
+      if (recoveryMarker && !recoverStaleLock) {
+        throw new TaskStoreRecoveryRequiredError("Task store recovery is required after a stale writer");
+      }
       const stateFile = path.join(resolvedRoot, STATE_FILE);
       let state: StoredState;
-      let recoveredFromCrash = false;
       try {
         const content = await readBoundedPrivateFile(stateFile, MAX_STATE_BYTES, "Task store data");
         state = parseStoredState(content);
@@ -564,9 +654,10 @@ export class TaskStore {
         await writePrivateAtomic(stateFile, serializeState(state));
       }
 
-      if (recoveredStale) {
+      if (recoveryMarker) {
         const next = cloneJson(state);
         const now = new Date().toISOString();
+        let recoveredFromCrash = false;
         for (const [id, task] of Object.entries(next.tasks)) {
           if (task.state !== "running") continue;
           setOwn(next.tasks, id, { ...task, state: "unknown", revision: task.revision + 1, updatedAt: now });
@@ -576,6 +667,7 @@ export class TaskStore {
           await writePrivateAtomic(stateFile, serializeState(next));
           state = next;
         }
+        await clearRecoveryMarker(resolvedRoot);
       }
       return new TaskStore(resolvedRoot, state, lock);
     } catch (error) {

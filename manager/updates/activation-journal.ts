@@ -6,7 +6,7 @@ import { canonical } from '../validation.ts';
 import { boundedFile, hash, privateRoot, syncDir, writeNew } from './candidate-storage.ts';
 import { record, strictJson } from './json.ts';
 
-const fail = (reason: string): never => { throw Error(`Activation journal refused: ${reason}`); };
+function fail(reason: string): never { throw Error(`Activation journal refused: ${reason}`); }
 const hex = (x: unknown, n = 64): x is string => typeof x === 'string' && new RegExp(`^[a-f0-9]{${n}}$`).test(x);
 const identifier = (x: unknown): x is string => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(x);
 const fields = (x: unknown, keys: string): x is Record<string, any> => record(x) && Object.keys(x).sort().join() === keys;
@@ -34,7 +34,7 @@ function candidate(value: unknown): value is Candidate {
 }
 function plan(value: unknown, installation: string): ActivationPlan {
   if (!fields(value, 'candidate,consumers,expectedRevision,installationId,operationId,policyHash,requester,taskId') ||
-    !hex(value.operationId, 32) || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.taskId) ||
+    !hex(value.operationId, 32) || typeof value.taskId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value.taskId) ||
     !identifier(value.requester) || !hex(value.policyHash) || value.installationId !== installation ||
     !Number.isSafeInteger(value.expectedRevision) || value.expectedRevision < 0 || value.expectedRevision >= Number.MAX_SAFE_INTEGER ||
     !candidate(value.candidate) || !Array.isArray(value.consumers) || value.consumers.length > 32) fail('plan-invalid');
@@ -64,7 +64,7 @@ function options(value: { root: string; installationId: string }) {
     value.root.length > 4096 || !path.isAbsolute(value.root) || path.resolve(value.root) !== value.root || value.root === '/' || /\p{Cc}/u.test(value.root)) fail('options-invalid');
   return Object.freeze({ ...value });
 }
-type Lock = { file: FileHandle; dev: number; ino: number };
+type Lock = { file: FileHandle; dev: number; ino: number; barrierDev: number; barrierIno: number };
 
 /** Private transaction evidence only. TaskStore remains the sole task queue and approval authority. */
 export class ActivationJournal {
@@ -115,7 +115,7 @@ export class ActivationJournal {
           total += f.size;
           if (total + 1024 ** 2 > 16 * 1024 ** 2) fail('quota-limit');
         }
-      } else if (!['selection.json', '.writer'].includes(e.name) || !s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.() || (s.mode & 0o022) || s.size > 65536) fail('state-invalid');
+      } else if (!['selection.json', '.writer', '.reconciliation'].includes(e.name) || !s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.() || (s.mode & 0o022) || s.size > 65536) fail('state-invalid');
     }
   }
   async #lock(): Promise<Lock> {
@@ -124,31 +124,63 @@ export class ActivationJournal {
     let file: FileHandle | undefined;
     try {
       this.#fence();
+      this.#noBarrier();
       file = await open(path.join(this.#root, '.writer'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
       const s = await file.stat();
-      await file.writeFile(JSON.stringify({ token: randomBytes(32).toString('hex') })); await file.sync(); await syncDir(this.#root); this.#fence();
-      return { file, dev: s.dev, ino: s.ino };
+      this.#noBarrier();
+      const token = JSON.stringify({ token: randomBytes(32).toString('hex') });
+      await file.writeFile(token); await file.sync();
+      await writeNew(path.join(this.#root, '.reconciliation'), token);
+      await syncDir(this.#root); this.#fence();
+      const barrier = await lstat(path.join(this.#root, '.reconciliation'));
+      return { file, dev: s.dev, ino: s.ino, barrierDev: barrier.dev, barrierIno: barrier.ino };
     } catch (e) {
-      await file?.close(); this.#busy = false;
+      await file?.close().catch(() => {}); this.#busy = file !== undefined;
       if ((e as NodeJS.ErrnoException).code === 'EEXIST') fail('writer-reconciliation-required');
       throw e;
     }
   }
+  #noBarrier() {
+    try { lstatSync(path.join(this.#root, '.reconciliation')); }
+    catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
+    fail('writer-reconciliation-required');
+  }
+  #barrier(lock: Lock) {
+    const s = lstatSync(path.join(this.#root, '.reconciliation'));
+    if (!s.isFile() || s.nlink !== 1 || s.dev !== lock.barrierDev || s.ino !== lock.barrierIno) fail('reconciliation-barrier-changed');
+  }
+  async #retain(lock: Lock) { this.#busy = true; await lock.file.close().catch(() => {}); }
   async #unlock(lock: Lock) {
-    this.#fence(); const s = await lstat(path.join(this.#root, '.writer'));
-    if (!s.isFile() || s.nlink !== 1 || s.dev !== lock.dev || s.ino !== lock.ino) fail('writer-changed');
-    await unlink(path.join(this.#root, '.writer')); await syncDir(this.#root); await lock.file.close(); this.#busy = false;
+    try {
+      this.#fence(); this.#barrier(lock); const s = await lstat(path.join(this.#root, '.writer'));
+      if (!s.isFile() || s.nlink !== 1 || s.dev !== lock.dev || s.ino !== lock.ino) fail('writer-changed');
+      await unlink(path.join(this.#root, '.writer')); await syncDir(this.#root);
+      await lock.file.close(); this.#fence(); this.#barrier(lock);
+      // All state and writer removal are durable BEFORE this release point.
+      // No fallible operation/fsync follows barrier unlink. Its removal need not
+      // survive a crash: resurrection only blocks admission (safe reconciliation),
+      // whereas absence means every preceding durability boundary succeeded.
+      await unlink(path.join(this.#root, '.reconciliation')); this.#busy = false;
+    } catch (e) { await this.#retain(lock); throw e; }
   }
   async stage(value: ActivationPlan) {
     const p = plan(value, this.#installation), planHash = hash(canonical(p));
     const lock = await this.#lock();
+    let mutated = false;
     try {
       await this.#quota(); this.#fence();
-      const dir = path.join(this.#root, p.operationId); await mkdir(dir, { mode: 0o700 });
+      const dir = path.join(this.#root, p.operationId);
+      mutated = true;
+      try { await mkdir(dir, { mode: 0o700 }); }
+      catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') mutated = false; throw e; }
       await writeNew(path.join(dir, 'plan.json'), JSON.stringify({ schema: 1, plan: p, planHash }));
       await syncDir(dir); await syncDir(this.#root); this.#fence();
+      await this.#unlock(lock);
       return Object.freeze({ operationId: p.operationId, planHash });
-    } finally { await this.#unlock(lock); }
+    } catch (e) {
+      if (mutated) await this.#retain(lock); else await this.#unlock(lock);
+      throw e;
+    }
   }
   async #plan(operation: string, expectedHash?: string) {
     if (!hex(operation, 32) || (expectedHash !== undefined && !hex(expectedHash))) fail('plan-invalid');
@@ -159,6 +191,9 @@ export class ActivationJournal {
     return { p, planHash: actualHash, dir };
   }
   async inspect(operation: string): Promise<{ stage: Stage | 'staged'; planHash: string }> {
+    const { stage, planHash } = await this.#history(operation); return { stage, planHash };
+  }
+  async #history(operation: string) {
     const { planHash, dir } = await this.#plan(operation);
     const names: string[] = [];
     for await (const e of await opendir(dir, { bufferSize: 1 })) {
@@ -167,6 +202,7 @@ export class ActivationJournal {
     }
     names.sort();
     let stage: Stage | 'staged' = 'staged';
+    const digests: string[] = [];
     for (let i = 0; i < names.length; i++) {
       const e = await this.#read(path.join(dir, names[i]));
       if (!fields(e, 'evidenceHash,planHash,sequence,stage') || e.sequence !== i || e.planHash !== planHash || !hex(e.evidenceHash) ||
@@ -174,24 +210,32 @@ export class ActivationJournal {
         names[i] !== `${String(i).padStart(2, '0')}-${e.stage}.json` || ['aborted', 'unknown', 'selected'].includes(stage)) fail('stage-invalid');
       if ((e.stage === 'aborted' && (i < 1 || i > 2)) || (e.stage === 'unknown' && i < 1)) fail('stage-invalid');
       stage = e.stage;
+      digests.push(hash(canonical(e)));
     }
-    return { stage, planHash };
+    return { stage, planHash, digests };
   }
   async begin(operation: string, expectedHash: string): Promise<ActivationTransaction> {
     if (!hex(operation, 32) || !hex(expectedHash)) fail('plan-invalid');
     const lock = await this.#lock();
-    let p: ActivationPlan, planHash: string, dir: string, original: InstallationSelection;
+    let p: ActivationPlan, planHash: string, dir: string, original: InstallationSelection, directoryIdentity: string;
+    let reservationAttempted = false;
+    const history: string[] = [];
     try {
       ({ p, planHash, dir } = await this.#plan(operation, expectedHash));
       original = await this.selection();
       if (original.revision !== p.expectedRevision) fail('selection-revision-changed');
       if ((await this.inspect(operation)).stage !== 'staged') fail('stage-replay-refused');
-      await writeNew(path.join(dir, '00-reserved.json'), JSON.stringify({ sequence: 0, stage: 'reserved', planHash, evidenceHash: expectedHash })); await syncDir(dir);
-    } catch (e) { await this.#unlock(lock); throw e; }
-    const directoryIdentity = rootIdentity(dir);
+      directoryIdentity = rootIdentity(dir);
+      const reserved = { sequence: 0, stage: 'reserved', planHash, evidenceHash: expectedHash };
+      reservationAttempted = true;
+      await writeNew(path.join(dir, '00-reserved.json'), JSON.stringify(reserved)); await syncDir(dir);
+      this.#fence(); if (rootIdentity(dir) !== directoryIdentity) fail('directory-identity-changed');
+      history.push(hash(canonical(reserved)));
+    } catch (e) { if (reservationAttempted) await this.#retain(lock); else await this.#unlock(lock); throw e; }
     const transactionFence = () => {
       this.#fence();
       if (rootIdentity(dir) !== directoryIdentity) fail('directory-identity-changed');
+      this.#barrier(lock);
       const s = lstatSync(path.join(this.#root, '.writer'));
       if (!s.isFile() || s.nlink !== 1 || s.dev !== lock.dev || s.ino !== lock.ino) fail('writer-changed');
     };
@@ -207,15 +251,19 @@ export class ActivationJournal {
       try {
         transactionFence();
         await this.#plan(operation, expectedHash);
-        if ((await this.inspect(operation)).stage !== current) fail('stage-changed');
+        const observed = await this.#history(operation);
+        if (observed.stage !== current || canonical(observed.digests) !== canonical(history)) fail('stage-content-changed');
         transactionFence();
-        await writeNew(path.join(dir, `${String(sequence + 1).padStart(2, '0')}-${next}.json`), JSON.stringify({ sequence: sequence + 1, stage: next, planHash, evidenceHash }));
+        const accepted = { sequence: sequence + 1, stage: next, planHash, evidenceHash };
+        await writeNew(path.join(dir, `${String(sequence + 1).padStart(2, '0')}-${next}.json`), JSON.stringify(accepted));
         await syncDir(dir); transactionFence(); sequence++; current = next;
-      } catch { active = false; await lock.file.close(); fail('unknown-changed-or-invalid-durable-outcome'); }
+        history.push(hash(canonical(accepted)));
+      } catch { active = false; await this.#retain(lock); fail('unknown-changed-or-invalid-durable-outcome'); }
     };
     return Object.freeze({
       advance: (next, evidenceHash) => run(async () => {
-        if (next !== stages[stages.indexOf(current as typeof stages[number]) + 1] || next === 'selected') fail('stage-sequence-invalid');
+        if (!['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready'].includes(next) ||
+          next !== stages[stages.findIndex(stage => stage === current) + 1]) fail('stage-sequence-invalid');
         await event(next, evidenceHash);
       }),
       abort: (evidenceHash) => run(async () => {
@@ -228,20 +276,21 @@ export class ActivationJournal {
       }),
       publish: () => run(async () => {
         if (current !== 'ready') fail('stage-not-ready');
-        transactionFence();
-        const observed = await this.selection();
-        if (canonical(observed) !== canonical(original)) fail('selection-revision-changed');
-        await this.#plan(operation, expectedHash);
-        const selected: InstallationSelection = { schema: 1, installationId: this.#installation, revision: original.revision + 1, operationId: operation, candidate: p.candidate };
-        const temp = path.join(this.#root, `.selection-${operation}.tmp`);
         try {
-          if ((await this.inspect(operation)).stage !== 'ready') fail('stage-changed');
+          transactionFence();
+          const observed = await this.selection();
+          if (canonical(observed) !== canonical(original)) fail('selection-revision-changed');
+          await this.#plan(operation, expectedHash);
+          const accepted = await this.#history(operation);
+          if (accepted.stage !== 'ready' || canonical(accepted.digests) !== canonical(history)) fail('stage-content-changed');
+          const selected: InstallationSelection = { schema: 1, installationId: this.#installation, revision: original.revision + 1, operationId: operation, candidate: p.candidate };
+          const temp = path.join(this.#root, `.selection-${operation}.tmp`);
           await writeNew(temp, JSON.stringify(selected)); transactionFence();
           await rename(temp, path.join(this.#root, 'selection.json')); await syncDir(this.#root);
           await event('selected', hash(canonical(selected)));
           active = false; await this.#unlock(lock);
           return structuredClone(selected);
-        } catch { active = false; await lock.file.close(); fail('unknown-selection-outcome'); }
+        } catch { active = false; await this.#retain(lock); fail('unknown-selection-outcome'); }
       }),
     } satisfies ActivationTransaction);
   }

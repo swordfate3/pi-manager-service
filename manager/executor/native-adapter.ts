@@ -14,6 +14,7 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
   readonly #backend: NativeBackend;
   readonly #config: ExecutorConfig;
   readonly #owners = new Map<string, string>();
+  readonly #starting = new Map<string, AbortController>();
   constructor(config: ExecutorConfig) {
     requireThat(config.trustedLocalNative && config.native, 503);
     this.#config = structuredClone(config);
@@ -44,14 +45,22 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
       // A previously approved stop can therefore never cross resource generations.
       requireThat(!this.#owners.has(task.target), 409);
       this.#owners.set(task.target, task.requester);
-      await this.#workspace(task);
-      const w = this.#config.workspaces[record(task.payload).workspace as string];
-      const identity = await this.#backend.create({ instanceId: task.target, workspace: { root: w.root, path: w.path } });
-      // Backend loads only the explicitly configured thin Web and instance grant.
-      // Private paths/PID must never enter the public TaskView.
-      return { status: "created", instanceId: identity.instanceId };
+      const controller = new AbortController();
+      this.#starting.set(task.target, controller);
+      try {
+        await this.#workspace(task);
+        // A stop can arrive before the backend knows this create exists.
+        // Cancellation must survive workspace resolution and prevent a later launch.
+        controller.signal.throwIfAborted();
+        const w = this.#config.workspaces[record(task.payload).workspace as string];
+        const identity = await this.#backend.create({ instanceId: task.target, workspace: { root: w.root, path: w.path } }, { signal: controller.signal });
+        // Backend loads only the explicitly configured thin Web and instance grant.
+        // Private paths/PID must never enter the public TaskView.
+        return { status: "created", instanceId: identity.instanceId };
+      } finally { this.#starting.delete(task.target); }
     }
     await this.validate(task);
+    this.#starting.get(task.target)?.abort();
     const result = await this.#backend.stop(task.target);
     if (result.status === "ownership-lost") throw new ExecutionOutcomeUnknownError();
     return { status: result.status, instanceId: task.target };

@@ -67,4 +67,12 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   const webState = await backend.snapshotRuntime('managed');
   assert.equal((await backend.prepareRuntime('managed', operation, webState)).session_id, after.session_id);
   await backend.cancelRuntime('managed', operation);
+  const captures = path.join(root, 'captures'); await mkdir(captures, { mode: 0o700 });
+  const finalState = await backend.snapshotRuntime('managed');
+  await backend.prepareRuntime('managed', operation, finalState);
+  const captured = await backend.captureRuntime('managed', operation, captures);
+  assert.equal(captured.descriptor().sessionId, snapshot.session_id);
+  assert.deepEqual(await backend.commitRuntime('managed', operation, captured), finalState);
+  await assert.rejects(backend.generate('managed', 'cannot reopen after verified native commit'), /fenced/);
+  await assert.rejects(backend.cancelRuntime('managed', operation));
 });

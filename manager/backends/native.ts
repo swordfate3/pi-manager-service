@@ -8,6 +8,7 @@ import { matchesProcessIdentity, readProcessIdentity } from "../process-identity
 import { ExecutionOutcomeUnknownError } from "../errors.ts";
 import { issueSession, readHubConfig, revokeSession, type HubConfig } from "../../hub/config.ts";
 import { RuntimeClient } from "./runtime-client.ts";
+import { SessionCapture } from "../updates/session-capture.ts";
 
 export interface NativeBackendConfig {
   readonly piExecutable: string;
@@ -99,11 +100,20 @@ interface OwnedChild {
   pending: Map<string, Pending>;
   generation?: Generation;
   enrollment?: { config: HubConfig; runId: string; revokeFailed?: boolean };
-  runtime?: { client: RuntimeClient; runId: string; barrier?: string; uncertain?: boolean };
+  runtime?: {
+    client: RuntimeClient; runId: string; barrier?: string; uncertain?: boolean; inFlight?: boolean;
+    lease?: { snapshot: NativeRuntimeSnapshot; expiresAt: number; capture?: SessionCapture };
+    committed?: boolean;
+  };
 }
 
 function object(value: unknown): value is RecordValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function sameRuntime(a: NativeRuntimeSnapshot, b: NativeRuntimeSnapshot): boolean {
+  return Object.keys(a).length === Object.keys(b).length &&
+    Object.entries(a).every(([key, value]) => b[key as keyof NativeRuntimeSnapshot] === value);
 }
 
 function instanceId(value: unknown): asserts value is string {
@@ -259,37 +269,94 @@ export class NativeBackend {
   /** Cooperative input lease only; this does not authorize stopping or replacing a process. */
   async prepareRuntime(id: string, operation: string, expected: NativeRuntimeSnapshot): Promise<NativeRuntimeSnapshot> {
     const entry = this.#runtimeEntry(id), runtime = entry.runtime;
-    if (!/^[a-f0-9]{32}$/.test(operation)) throw Error('Invalid runtime operation');
+    if (typeof operation !== 'string' || !/^[a-f0-9]{32}$/.test(operation)) throw Error('Invalid runtime operation');
     if (runtime.barrier || runtime.uncertain || entry.generation || entry.pending.size) throw Error('Runtime barrier unavailable');
     const copy = structuredClone(expected);
+    const expiresAt = performance.now() + 150_000;
     // Reserve BEFORE the first await: a simultaneous parent prompt cannot cross preparation.
     runtime.barrier = operation;
+    runtime.inFlight = true;
     let sent = false;
     try {
       const valid = await this.#runtimeSnapshot(entry, copy);
-      if (!valid.idle || valid.pending || valid.busy || !valid.session_file) throw Error('Runtime snapshot is busy');
+      if (!valid.idle || valid.pending || valid.busy || !valid.session_file || performance.now() >= expiresAt) throw Error('Runtime snapshot is busy or expired');
       sent = true;
       const value = await runtime.client.request({ action: 'prepare', operation_id: operation,
         expected: { runtime_id: valid.runtime_id, session_id: valid.session_id, leaf_id: valid.leaf_id } });
       const held = await this.#runtimeSnapshot(entry, value);
-      if (held.runtime_id !== valid.runtime_id || held.session_id !== valid.session_id || held.leaf_id !== valid.leaf_id ||
-        held.session_file !== valid.session_file || held.version !== valid.version || !held.idle || held.pending || held.busy) throw Error('Runtime changed during preparation');
+      if (!sameRuntime(held, valid) || performance.now() >= expiresAt) throw Error('Runtime changed or expired during preparation');
+      runtime.lease = { snapshot: held, expiresAt };
       return held;
     } catch (error) {
       if (sent) { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
       runtime.barrier = undefined; throw error;
-    }
+    } finally { runtime.inFlight = false; }
+  }
+
+  #runtimeLease(id: string, operation: string) {
+    const entry = this.#runtimeEntry(id), runtime = entry.runtime;
+    if (typeof operation !== 'string' || !/^[a-f0-9]{32}$/.test(operation) || runtime.barrier !== operation ||
+      !runtime.lease || runtime.inFlight || runtime.uncertain || runtime.committed ||
+      performance.now() >= runtime.lease.expiresAt) throw Error('Original runtime lease unavailable or expired');
+    return { entry, runtime, lease: runtime.lease };
+  }
+
+  /** Executor-private data capture. The original lease and child generation cannot be substituted. */
+  async captureRuntime(id: string, operation: string, capturesRoot: string): Promise<SessionCapture> {
+    const { entry, runtime, lease } = this.#runtimeLease(id, operation);
+    if (lease.capture) throw Error('Original runtime capture already exists');
+    runtime.inFlight = true;
+    try {
+      const fresh = await this.#runtimeSnapshot(entry, await runtime.client.request({ action: 'snapshot' }));
+      if (!sameRuntime(fresh, lease.snapshot)) throw Error('Runtime changed during capture');
+      const capture = await SessionCapture.create({ root: capturesRoot, sessionsRoot: path.join(entry.identity.stateDir, 'sessions'),
+        operationId: operation, snapshot: lease.snapshot, expiresAt: lease.expiresAt });
+      if (this.#runtimeEntry(id) !== entry || runtime.lease !== lease) throw Error('Original runtime generation changed');
+      capture.fence(lease.snapshot);
+      lease.capture = capture;
+      return capture;
+    } finally { runtime.inFlight = false; }
+  }
+
+  /** Permanent child input latch only; stopping still requires independently authorized ownership. */
+  async commitRuntime(id: string, operation: string, capture: SessionCapture): Promise<NativeRuntimeSnapshot> {
+    const { entry, runtime, lease } = this.#runtimeLease(id, operation);
+    if (lease.capture !== capture || !(capture instanceof SessionCapture)) throw Error('Original runtime capture required');
+    runtime.inFlight = true;
+    let sent = false;
+    try {
+      await capture.verify(lease.snapshot);
+      const fresh = await this.#runtimeSnapshot(entry, await runtime.client.request({ action: 'snapshot' }));
+      if (!sameRuntime(fresh, lease.snapshot) || runtime.lease !== lease) throw Error('Runtime changed before final commit');
+      capture.fence(fresh);
+      // Parent writes remain blocked; the child synchronously rechecks full live
+      // state at its own irreversible latch. Never retry an uncertain dispatch.
+      sent = true;
+      const reply = await runtime.client.request({ action: 'commit', operation_id: operation, expected: fresh });
+      if (!object(reply) || Object.keys(reply).sort().join() !== 'committed,operation_id,snapshot' ||
+        reply.committed !== true || reply.operation_id !== operation) throw Error('Invalid runtime commit acknowledgement');
+      const confirmed = await this.#runtimeSnapshot(entry, reply.snapshot);
+      if (!sameRuntime(confirmed, lease.snapshot) || performance.now() >= lease.expiresAt) throw Error('Runtime commit acknowledgement changed or expired');
+      runtime.committed = true;
+      return confirmed;
+    } catch (error) {
+      if (sent) { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+      throw error;
+    } finally { runtime.inFlight = false; }
   }
 
   async cancelRuntime(id: string, operation: string): Promise<void> {
     const entry = this.#runtimeEntry(id), runtime = entry.runtime;
-    if (!/^[a-f0-9]{32}$/.test(operation) || runtime.barrier !== operation) throw Error('Runtime lease operation mismatch');
+    if (typeof operation !== 'string' || !/^[a-f0-9]{32}$/.test(operation) || runtime.barrier !== operation ||
+      runtime.inFlight || runtime.uncertain || runtime.committed) throw Error('Runtime lease operation mismatch or unavailable');
+    runtime.inFlight = true;
     try {
       const reply = await runtime.client.request({ action: 'cancel', operation_id: operation });
       if (!object(reply) || Object.keys(reply).join() !== 'cancelled' || reply.cancelled !== true) throw Error();
       if (this.#runtimeEntry(id) !== entry) throw Error('Original runtime generation is no longer owned');
-      runtime.barrier = undefined; runtime.uncertain = undefined;
+      runtime.barrier = undefined; runtime.lease = undefined;
     } catch { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+    finally { runtime.inFlight = false; }
   }
 
   async generate(id: string, message: string): Promise<NativeGeneration> {

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
 const socket = process.env.PI_RUNTIME_EXTENSION_SOCKET;
 const sessionFile = path.join(path.dirname(path.dirname(socket)), 'sessions', 'fixture.jsonl');
-writeFileSync(sessionFile, '{"type":"session"}\n', { mode: 0o600 });
+writeFileSync(sessionFile, JSON.stringify({ type: 'session', version: 3, id: 'fixture-session', cwd: process.cwd() }) + '\n', { mode: 0o600 });
 let barrier;
 const controls = () => { try { return JSON.parse(readFileSync('control.json', 'utf8')); } catch { return {}; } };
 const snapshot = () => ({ run_id: process.env.PI_RUNTIME_RUN_ID, runtime_id: 'fixture-runtime', session_id: 'fixture-session',
@@ -26,7 +26,12 @@ const server = net.createServer({ allowHalfOpen: true }, peer => {
       if (barrier !== request.operation_id || config.loseCancelReply) { peer.destroy(); return; }
       barrier = undefined;
     }
-    const result = request.action === 'cancel' ? { cancelled: true } : snapshot();
+    if (request.action === 'commit') {
+      writeFileSync('commit-observed', request.operation_id);
+      if (config.loseCommitReply) { peer.destroy(); return; }
+    }
+    const result = request.action === 'cancel' ? { cancelled: true } : request.action === 'commit' ?
+      { committed: true, operation_id: request.operation_id, snapshot: snapshot() } : snapshot();
     const reply = () => peer.end(JSON.stringify({ ok: true, result }) + '\n');
     if (request.action === 'prepare' && config.delayPrepare) setTimeout(reply, 100); else reply();
   });

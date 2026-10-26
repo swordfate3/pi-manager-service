@@ -103,6 +103,101 @@ test('lost prepare or cancel replies preserve the parent fence instead of claimi
   }
 });
 
+test('native preparation binds the complete original snapshot, including provider, model and thinking', async t => {
+  for (const snapshot of [{ provider: 'other' }, { model: 'other' }, { thinking: 'low' }]) {
+    const f = await runtimeFixture(t), id = f.request.instanceId;
+    const state = await f.backend.snapshotRuntime(id);
+    await f.control({ snapshot });
+    await assert.rejects(f.backend.prepareRuntime(id, 'a'.repeat(32), state), /unknown|changed/i);
+    await assert.rejects(f.backend.generate(id, 'cannot-cross-drift'), /fenced/i);
+  }
+});
+
+test('native final commit requires its own original lease and captured saved data, and cannot reopen input', async t => {
+  const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'e'.repeat(32);
+  assert.equal(typeof backend.captureRuntime, 'function', 'Native backend must bind capture to its original lease');
+  assert.equal(typeof backend.commitRuntime, 'function', 'Native backend must verify a private final commit');
+  const root = path.join(f.parent, 'captures'); await mkdir(root, { mode: 0o700 });
+  const state = await backend.snapshotRuntime(id);
+  await assert.rejects(backend.captureRuntime(id, operation, root));
+  await backend.prepareRuntime(id, operation, state);
+  const captured = await backend.captureRuntime(id, operation, root);
+  assert.equal(captured.descriptor().sessionId, 'fixture-session');
+  const committed = await backend.commitRuntime(id, operation, captured);
+  assert.deepEqual(committed, state);
+  assert.equal(await readFile(path.join(f.workspace, 'commit-observed'), 'utf8'), operation);
+  await assert.rejects(backend.cancelRuntime(id, operation));
+  await assert.rejects(backend.commitRuntime(id, operation, captured));
+  await assert.rejects(backend.generate(id, 'not-after-commit'), /fenced/i);
+});
+
+test('native final commit refuses changed live bytes before IPC and lost acknowledgement stays unknown', async t => {
+  for (const mode of ['changed-session', 'lost-reply']) {
+    const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'f'.repeat(32);
+    assert.equal(typeof backend.captureRuntime, 'function', 'Original lease capture must exist');
+    const root = path.join(f.parent, 'captures'); await mkdir(root, { mode: 0o700 });
+    const state = await backend.snapshotRuntime(id);
+    await backend.prepareRuntime(id, operation, state);
+    const captured = await backend.captureRuntime(id, operation, root);
+    if (mode === 'changed-session') {
+      await writeFile(state.session_file, '{"type":"session","id":"changed"}\n');
+      await assert.rejects(backend.commitRuntime(id, operation, captured));
+      await assert.rejects(access(path.join(f.workspace, 'commit-observed')));
+    } else {
+      await f.control({ loseCommitReply: true });
+      await assert.rejects(backend.commitRuntime(id, operation, captured), /unknown/i);
+      assert.equal(await readFile(path.join(f.workspace, 'commit-observed'), 'utf8'), operation);
+      await assert.rejects(backend.cancelRuntime(id, operation));
+      await assert.rejects(backend.commitRuntime(id, operation, captured));
+    }
+    await assert.rejects(backend.generate(id, 'must-stay-held'), /fenced/i);
+  }
+});
+
+test('native capture cannot renew the monotonic deadline reserved before preparation awaits', async t => {
+  const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'c'.repeat(32);
+  const state = await backend.snapshotRuntime(id), root = path.join(f.parent, 'captures');
+  await mkdir(root, { mode: 0o700 });
+  let now = performance.now();
+  const clock = t.mock.method(performance, 'now', () => now);
+  try {
+    await backend.prepareRuntime(id, operation, state);
+    now += 149_900;
+    const capture = await backend.captureRuntime(id, operation, root);
+    assert.ok(capture.descriptor().expiresAt <= now + 100, 'Capturing cannot mint a new 150-second lease');
+    now += 101;
+    await assert.rejects(backend.commitRuntime(id, operation, capture), /expired|lease/i);
+    await assert.rejects(access(path.join(f.workspace, 'commit-observed')));
+    await assert.rejects(backend.generate(id, 'deadline-cannot-reopen-input'), /fenced/i);
+  } finally { clock.mock.restore(); }
+});
+
+test('post-dispatch native commit cannot complete against a replacement of the original owned child', async t => {
+  const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'd'.repeat(32);
+  const previous = f.backend.list()[0], state = await backend.snapshotRuntime(id), root = path.join(f.parent, 'captures');
+  await mkdir(root, { mode: 0o700 });
+  await backend.prepareRuntime(id, operation, state);
+  const capture = await backend.captureRuntime(id, operation, root);
+  const original = RuntimeClient.prototype.request;
+  let received!: () => void, release!: () => void;
+  const replyReceived = new Promise<void>(resolve => { received = resolve; });
+  const continueReply = new Promise<void>(resolve => { release = resolve; });
+  const held = t.mock.method(RuntimeClient.prototype, 'request', async function (this: RuntimeClient, value: RuntimeCommand) {
+    const result = await original.call(this, value);
+    if (value.action === 'commit') { received(); await continueReply; }
+    return result;
+  });
+  const pending = backend.commitRuntime(id, operation, capture); void pending.catch(() => {});
+  try {
+    await replyReceived;
+    await assert.rejects(backend.cancelRuntime(id, operation), /unavailable|lease/i);
+    await backend.stop(id); await backend.resume(f.request, previous);
+    release(); await assert.rejects(pending, /unknown/i);
+    assert.notEqual((await backend.snapshotRuntime(id)).run_id, state.run_id);
+    await backend.generate(id, 'replacement must not inherit old commit authority');
+  } finally { release(); await pending.catch(() => {}); held.mock.restore(); }
+});
+
 test('an old generation cannot finish prepare or cancel against a replacement with the same instance ID', async t => {
   for (const action of ['prepare', 'cancel'] as const) {
     const f = await runtimeFixture(t), id = f.request.instanceId;

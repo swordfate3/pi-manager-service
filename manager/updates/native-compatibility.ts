@@ -114,11 +114,13 @@ export class NativeCandidateCompatibility {
   readonly #captures: string;
   readonly #fixed: string;
   readonly #policy: string;
+  readonly #admission: string;
   readonly #proofs = new WeakMap<NativeCompatibilityProof, { request: NativeCompatibilityRequest; binding: string; intent: string;
     run: { root: string; identity: string }; artifacts: { name: string; sha256: string }[] }>();
   #unknown = false;
-  private constructor(o: NativeCompatibilityOptions, root: string, captures: string, fixed: string, policy: string) {
-    this.#o = o; this.#root = root; this.#captures = captures; this.#fixed = fixed; this.#policy = policy;
+  #busy = false;
+  private constructor(o: NativeCompatibilityOptions, root: string, captures: string, fixed: string, policy: string, admission: string) {
+    this.#o = o; this.#root = root; this.#captures = captures; this.#fixed = fixed; this.#policy = policy; this.#admission = admission;
   }
   static async create(value: NativeCompatibilityOptions) {
     if (!keys(value, 'captures,installer,root,trustedLocal,web') || value.trustedLocal !== true || !(value.installer instanceof CandidateInstaller) ||
@@ -132,11 +134,22 @@ export class NativeCandidateCompatibility {
     if ((await webInventory(o.web.root)).sha256 !== o.web.sha256) refuse('web-changed');
     await privateRoot(path.dirname(o.root)); await mkdir(o.root, { mode: 0o700 });
     const policy = JSON.stringify({ root: o.root, captures: o.captures, web: o.web, trustedLocal: true, fixed: JSON.parse(fixed), installerRoot: o.installer.config.root });
+    // Permanent reservation for this issuer, NOT a recoverable lock. Never
+    // remove or adopt it, even after successful attempts. In particular it
+    // survives unlink/fsync ambiguity when releasing the per-attempt writer.
+    // create() requires a NEW root; no constructor/open path adopts old roots.
+    const admission = JSON.stringify({ issuer: randomBytes(32).toString('hex'), reopen: false });
+    await writeNew(path.join(o.root, '.admission'), admission);
     await writeNew(path.join(o.root, 'policy.json'), policy); await syncDir(o.root); await syncDir(path.dirname(o.root));
-    return new NativeCandidateCompatibility(o, await rootIdentity(o.root), captures, fixed, policy);
+    return new NativeCandidateCompatibility(o, await rootIdentity(o.root), captures, fixed, policy, admission);
   }
   async #checkRoot() {
-    if (await rootIdentity(this.#o.root) !== this.#root || (await fileBytes(path.join(this.#o.root, 'policy.json'))).toString() !== this.#policy) refuse('root-changed');
+    if (await rootIdentity(this.#o.root) !== this.#root || (await fileBytes(path.join(this.#o.root, 'policy.json'))).toString() !== this.#policy ||
+      (await fileBytes(path.join(this.#o.root, '.admission'))).toString() !== this.#admission) refuse('root-changed');
+  }
+  async #mutate<T>(action: () => T | Promise<T>): Promise<T> {
+    try { return await action(); }
+    catch (e) { this.#unknown = true; throw e; }
   }
   async #inputs(r: NativeCompatibilityRequest) {
     const o = this.#o;
@@ -162,60 +175,73 @@ export class NativeCandidateCompatibility {
     return { binding, bytes, tree, web, model };
   }
   async verify(value: NativeCompatibilityRequest): Promise<NativeCompatibilityProof> {
-    const r = request(value), o = this.#o;
-    if (this.#unknown) refuse('reconciliation-required');
+    const r = request(value);
+    if (this.#unknown || this.#busy) refuse('reconciliation-required');
+    // Covers the entire finalizer, including the interval after writer unlink.
+    this.#busy = true;
+    try { return await this.#verify(r); } finally { this.#busy = false; }
+  }
+  async #verify(r: NativeCompatibilityRequest): Promise<NativeCompatibilityProof> {
+    const o = this.#o;
     await this.#checkRoot();
     let lock;
     try { lock = await open(path.join(o.root, '.writer'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
-    catch { return refuse('reconciliation-required'); }
-    let directory: string | undefined, unknown = false, failure: unknown, proof: NativeCompatibilityProof | undefined;
+    catch (e: any) {
+      if (e.code === 'EEXIST') return refuse('reconciliation-required');
+      this.#unknown = true; return refuse('native-outcome-unknown');
+    }
+    let directory: string | undefined, failure: unknown, proof: NativeCompatibilityProof | undefined;
     const written = new Map<string, string>();
     let backend: NativeBackend | undefined, active = false, stopFailed = false;
     const persist = async (name: string, data: unknown) => {
-      try { const bytes = JSON.stringify(data); await writeNew(path.join(directory!, name), bytes); await syncDir(directory!); written.set(name, digest(bytes)); }
-      catch (e) { unknown = true; throw e; }
+      const bytes = JSON.stringify(data);
+      await this.#mutate(async () => { await writeNew(path.join(directory!, name), bytes); await syncDir(directory!); });
+      written.set(name, digest(bytes));
     };
     const stop = async () => {
       if (!active || stopFailed) return;
       try {
         if (!backend || (await backend.stop('probe')).status !== 'stopped') refuse('native-outcome-unknown');
         active = false;
-      } catch (e) { stopFailed = true; unknown = true; throw e; }
+      } catch (e) { stopFailed = true; this.#unknown = true; throw e; }
     };
     try {
       const entries = await readdir(o.root);
-      if (entries.filter(n => n.startsWith('v-')).length >= 8 || entries.some(n => !['policy.json', '.writer'].includes(n) && !/^v-[a-f0-9]{64}$/.test(n))) refuse('evidence-limit');
+      if (entries.filter(n => n.startsWith('v-')).length >= 8 || entries.some(n => !['policy.json', '.admission', '.writer'].includes(n) && !/^v-[a-f0-9]{64}$/.test(n))) refuse('evidence-limit');
       const inputs = await this.#inputs(r), binding = JSON.stringify(inputs.binding), key = 'v-' + digest(binding);
       const target = path.join(o.root, key);
-      try { await mkdir(target, { mode: 0o700 }); } catch (e: any) { if (e.code === 'EEXIST') refuse('evidence-exists'); throw e; }
+      try { await mkdir(target, { mode: 0o700 }); }
+      catch (e: any) { if (e.code === 'EEXIST') refuse('evidence-exists'); this.#unknown = true; throw e; }
       directory = target;
-      await lock.writeFile(JSON.stringify({ evidenceKey: key })); await lock.sync(); await syncDir(o.root);
+      await this.#mutate(async () => { await lock.writeFile(JSON.stringify({ evidenceKey: key })); await lock.sync(); await syncDir(o.root); });
       // Evidence roots can be deeply nested. All socket-bearing runtime paths
       // live in this new short private root, durably bound before any spawn.
       // Never reopen/adopt/prune it, including after a known failure.
-      const runRoot = await mkdtemp('/tmp/ncv-run-');
+      const runRoot = await this.#mutate(() => mkdtemp('/tmp/ncv-run-'));
       const run = { root: runRoot, identity: await rootIdentity(runRoot) };
       const intent = { binding: inputs.binding, trustedLocal: true, updates: false, run };
-      await persist('intent.json', intent); await syncDir('/tmp');
+      await persist('intent.json', intent); await this.#mutate(() => syncDir('/tmp'));
       // Resolve SDK entrypoints without importing ANY candidate code here.
       const sdk = await selectedModule(inputs.tree, '@earendil-works/pi-coding-agent');
       const ai = await selectedModule(inputs.tree, '@earendil-works/pi-ai');
       const compat = await selectedModule(inputs.tree, '@earendil-works/pi-ai', './compat');
-      const webRoot = path.join(directory, 'web'); await mkdir(webRoot, { mode: 0o700 });
+      const webRoot = path.join(directory, 'web'); await this.#mutate(() => mkdir(webRoot, { mode: 0o700 }));
       for (const f of inputs.web.files) {
-        const dest = path.join(webRoot, f.path); await mkdir(path.dirname(dest), { recursive: true, mode: 0o700 });
+        const dest = path.join(webRoot, f.path); await this.#mutate(() => mkdir(path.dirname(dest), { recursive: true, mode: 0o700 }));
         const bytes = await fileBytes(path.join(o.web.root, f.path), 32 * 1024 ** 2);
-        if (digest(bytes) !== f.sha256) refuse('web-changed'); await writeNew(dest, bytes);
+        if (digest(bytes) !== f.sha256) refuse('web-changed'); await this.#mutate(() => writeNew(dest, bytes));
       }
-      await mkdir(path.join(webRoot, 'node_modules/@earendil-works'), { recursive: true, mode: 0o700 });
+      await this.#mutate(() => mkdir(path.join(webRoot, 'node_modules/@earendil-works'), { recursive: true, mode: 0o700 }));
       for (const name of ['ws', '@earendil-works/pi-coding-agent', '@earendil-works/pi-ai'])
-        await symlink(path.join(inputs.tree, 'node_modules', name), path.join(webRoot, 'node_modules', name));
+        await this.#mutate(() => symlink(path.join(inputs.tree, 'node_modules', name), path.join(webRoot, 'node_modules', name)));
       const provider = path.join(directory, 'provider.mjs');
-      await writeNew(provider, await sourceBytes('manager/updates/native-compatibility-provider.mjs'));
+      const providerBytes = await sourceBytes('manager/updates/native-compatibility-provider.mjs');
+      await this.#mutate(() => writeNew(provider, providerBytes));
       await persist('provider.json', { ai, compat, ...inputs.model });
-      const workspace = path.join(runRoot, 'workspace'); await mkdir(workspace, { mode: 0o700 });
-      const hubConfigFile = path.join(runRoot, 'registrar/hub.json'); initializeHub(hubConfigFile, { port: 0 });
-      const reserve = await listen(async (_req, res) => { res.end(); }, 0), port = reserve.port; await reserve.close();
+      const workspace = path.join(runRoot, 'workspace'); await this.#mutate(() => mkdir(workspace, { mode: 0o700 }));
+      const hubConfigFile = path.join(runRoot, 'registrar/hub.json'); await this.#mutate(() => initializeHub(hubConfigFile, { port: 0 }));
+      const reserve = await this.#mutate(() => listen(async (_req, res) => { res.end(); }, 0)), port = reserve.port;
+      await this.#mutate(() => reserve.close());
       const backendConfig = { piExecutable: path.join(inputs.tree, CLI), workspaceRoots: { private: runRoot },
         stateRoot: path.join(runRoot, 'state'), agentRoot: path.join(runRoot, 'agent'), runtimeControl: true,
         provider: { extensionPath: provider, name: inputs.model.provider, model: inputs.model.model },
@@ -225,7 +251,7 @@ export class NativeCandidateCompatibility {
       const create = { instanceId: 'probe', workspace: { root: 'private', path: 'workspace' } };
       // Startup failures have no public exact terminal receipt: conservatively retain admission.
       let previous;
-      try { previous = await backend.create(create); active = true; } catch (e) { unknown = true; throw e; }
+      try { previous = await backend.create(create); active = true; } catch (e) { this.#unknown = true; throw e; }
       await persist('seed-child.json', previous);
       const seed = await backend.generate('probe', 'NATIVE_SEED'); requireBehavior(seed.settled && seed.text === 'NATIVE_COMPAT_OK 中文🙂');
       const operation = randomBytes(16).toString('hex');
@@ -233,7 +259,7 @@ export class NativeCandidateCompatibility {
       await until(async () => { try { return (await fileBytes(path.join(directory!, 'busy'))).toString() === '1'; } catch (e: any) { if (e.code === 'ENOENT') return false; throw e; } });
       const busy = await backend.snapshotRuntime('probe'); requireBehavior(!busy.idle || busy.busy);
       await rejects(() => backend!.prepareRuntime('probe', operation, busy));
-      await writeNew(path.join(directory, 'release'), '1');
+      await this.#mutate(() => writeNew(path.join(directory!, 'release'), '1'));
       const generation = await busyGeneration;
       requireBehavior(generation.settled && generation.agentEndObserved && !generation.aborted && generation.text === 'NATIVE_COMPAT_OK 中文🙂');
       const cliIdle = await backend.snapshotRuntime('probe'); await backend.prepareRuntime('probe', operation, cliIdle);
@@ -245,24 +271,25 @@ export class NativeCandidateCompatibility {
       const initial = await backend.snapshotRuntime('probe'); await stop();
       requireBehavior(initial.session_file && initial.version === inputs.binding.release.version);
       // Overwrite only our own stopped seed's session copy, never the supplied capture.
-      await writeFile(initial.session_file!, inputs.bytes, { mode: 0o600 });
-      await chmod(initial.session_file!, 0o600);
+      await this.#mutate(async () => { await writeFile(initial.session_file!, inputs.bytes, { mode: 0o600 }); await chmod(initial.session_file!, 0o600); });
       const restoredExpected = { ...initial, session_id: r.session.sessionId, leaf_id: r.session.leafId, provider: inputs.model.provider, model: inputs.model.model, thinking: inputs.model.thinking };
       const runtime = path.join(directory, 'restore-runtime.mjs');
-      await writeNew(runtime, await sourceBytes('manager/updates/native-compatibility-runtime.mjs'), 0o500);
+      const runtimeBytes = await sourceBytes('manager/updates/native-compatibility-runtime.mjs');
+      await this.#mutate(() => writeNew(runtime, runtimeBytes, 0o500));
       await persist('restore-runtime.json', { module: sdk, version: inputs.binding.release.version, file: initial.session_file, workspace, ...inputs.model });
       backend = new NativeBackend({ ...backendConfig, piExecutable: runtime });
       try { const child = await backend.resumeForActivation(create, previous, { operationId: operation, snapshot: restoredExpected }); active = true; await persist('restored-child.json', child); }
-      catch (e) { unknown = true; throw e; }
+      catch (e) { this.#unknown = true; throw e; }
       const restored = await backend.snapshotRuntime('probe');
       requireBehavior(restored.session_id === r.session.sessionId && restored.leaf_id === r.session.leafId && restored.version === inputs.binding.release.version);
       const checkCopy = async () => { if (digest(await fileBytes(initial.session_file!)) !== r.session.sha256) refuse('session-copy-changed'); };
       await checkCopy();
       const web = await this.#webHistory(port, r.session.sessionId, inputs.model);
-      const sdkFile = path.join(directory, 'sdk-copy.jsonl'); await writeNew(sdkFile, inputs.bytes, 0o600);
+      const sdkFile = path.join(directory, 'sdk-copy.jsonl'); await this.#mutate(() => writeNew(sdkFile, inputs.bytes, 0o600));
       await persist('sdk-request.json', { module: sdk, version: inputs.binding.release.version, file: sdkFile, sessions: path.join(directory, 'sdk-sessions'), workspace });
       let sdkResult;
-      try { sdkResult = await sdkRead(directory, runRoot, persist); } catch (e: any) { if (e.code === 'native-outcome-unknown') unknown = true; throw e; }
+      try { sdkResult = await sdkRead(directory, runRoot, persist, action => this.#mutate(action)); }
+      catch (e: any) { if (e.code === 'native-outcome-unknown') this.#unknown = true; throw e; }
       await persist('sdk-output.json', sdkResult);
       requireBehavior(sdkResult.version === inputs.binding.release.version && sdkResult.node === process.version && sdkResult.abi === process.versions.modules && sdkResult.sessionId === r.session.sessionId && sdkResult.leafId === r.session.leafId);
       if (digest(await fileBytes(sdkFile)) !== r.session.sha256) refuse('session-copy-changed');
@@ -310,24 +337,31 @@ export class NativeCandidateCompatibility {
       this.#proofs.set(proof, { request: r, binding, intent: digest(JSON.stringify(intent)), run, artifacts });
     } catch (e) {
       failure = e;
-      if (directory) await persist('failure.json', { code: (e as any).code ?? 'behavior-incompatible', message: String((e as any).message).slice(0, 1024) }).catch(() => { unknown = true; });
+      if (directory) await persist('failure.json', { code: (e as any).code ?? 'behavior-incompatible', message: String((e as any).message).slice(0, 1024) }).catch(() => { this.#unknown = true; });
     } finally {
-      try { await stop(); } catch { unknown = true; }
+      try { await stop(); } catch { this.#unknown = true; }
       try {
-        if (!unknown) {
+        if (!this.#unknown) {
           await this.#checkRoot(); const current = await lstat(path.join(o.root, '.writer')), original = await lock.stat();
           if (current.ino !== original.ino || current.dev !== original.dev) refuse('root-changed');
-          await unlink(path.join(o.root, '.writer')); await syncDir(o.root);
+          await this.#mutate(() => syncDir(o.root));
         }
-      } catch { unknown = true; } finally { await lock.close(); }
+      } catch { this.#unknown = true; }
+      // Close exactly once, BEFORE exposing per-attempt release. Even a compound
+      // sync/close failure must reach the sticky outcome below. Never retry it.
+      try { await this.#mutate(() => lock.close()); } catch { this.#unknown = true; }
+      if (!this.#unknown) {
+        try { await this.#mutate(async () => { await unlink(path.join(o.root, '.writer')); await syncDir(o.root); }); }
+        catch { this.#unknown = true; }
+      }
     }
-    if (unknown) { this.#unknown = true; return refuse('native-outcome-unknown'); }
+    if (this.#unknown) return refuse('native-outcome-unknown');
     if (failure) throw failure;
     return proof!;
   }
   async revalidate(proof: NativeCompatibilityProof): Promise<void> {
     const record = this.#proofs.get(proof); if (!record) refuse('proof-invalid');
-    if (this.#unknown) refuse('reconciliation-required');
+    if (this.#unknown || this.#busy) refuse('reconciliation-required');
     await this.#checkRoot();
     try { await lstat(path.join(this.#o.root, '.writer')); refuse('reconciliation-required'); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
     if (JSON.stringify((await this.#inputs(record.request)).binding) !== record.binding) refuse('inputs-changed');
@@ -379,13 +413,14 @@ export class NativeCandidateCompatibility {
   }
 }
 
-async function sdkRead(directory: string, runRoot: string, persist: (name: string, value: unknown) => Promise<void>): Promise<any> {
-  for (const name of ['sdk-home', 'sdk-tmp', 'sdk-config', 'sdk-cache']) await mkdir(path.join(runRoot, name), { mode: 0o700 });
-  const child = spawn(process.execPath, [path.join(SOURCE, 'manager/updates/native-compatibility-sdk.mjs'), path.join(directory, 'sdk-request.json')], {
+async function sdkRead(directory: string, runRoot: string, persist: (name: string, value: unknown) => Promise<void>,
+  mutate: <T>(action: () => T | Promise<T>) => Promise<T>): Promise<any> {
+  for (const name of ['sdk-home', 'sdk-tmp', 'sdk-config', 'sdk-cache']) await mutate(() => mkdir(path.join(runRoot, name), { mode: 0o700 }));
+  const child = await mutate(() => spawn(process.execPath, [path.join(SOURCE, 'manager/updates/native-compatibility-sdk.mjs'), path.join(directory, 'sdk-request.json')], {
     cwd: path.join(runRoot, 'workspace'), env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: path.join(runRoot, 'sdk-home'),
       TMPDIR: path.join(runRoot, 'sdk-tmp'), XDG_CONFIG_HOME: path.join(runRoot, 'sdk-config'), XDG_CACHE_HOME: path.join(runRoot, 'sdk-cache'),
       PI_OFFLINE: '1', PI_SKIP_VERSION_CHECK: '1' }, stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  }));
   const identity = child.pid ? readProcessIdentity(child.pid) : null;
   const completion = new Promise<any>((resolve, reject) => {
     const chunks: Buffer[] = []; let count = 0, failed = false, spawnError = false;

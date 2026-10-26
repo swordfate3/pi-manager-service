@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
+import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { Server } from 'node:net';
 import { chmod, copyFile, cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -62,7 +66,7 @@ test('closed requests reject path/argv injection and nonprimitive identities bef
     { session: { ...f.request.session, sessionId: {} } }, { session: { ...f.request.session, leafId: null } }]) {
     await assert.rejects(f.verifier.verify({ ...f.request, ...patch } as any), { code: 'request-invalid' });
   }
-  assert.deepEqual(await readdir(f.options.root), ['policy.json']);
+  assert.deepEqual(await readdir(f.options.root), ['.admission', 'policy.json']);
   await assert.rejects(f.verifier.revalidate({ result: {} } as any), { code: 'proof-invalid' });
 });
 
@@ -77,7 +81,7 @@ test('nested coordinator evidence roots are accepted without weakening private s
   await mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
   const verifier = await f.mod.NativeCandidateCompatibility.create({ ...f.options, root });
   await assert.rejects(verifier.verify({ ...f.request, receiptHash: '0'.repeat(64) }), { code: 'content-invalid' });
-  assert.deepEqual(await readdir(root), ['policy.json']);
+  assert.deepEqual(await readdir(root), ['.admission', 'policy.json']);
 });
 
 test('non-Linux host refuses explicitly before creating an evidence root', async t => {
@@ -161,7 +165,7 @@ test('construction pins shipped provider code and rejects later source mutation 
   const verifier = await Verifier.create({ ...f.options, installer: await Installer.open(f.options.installer.config), root: path.join(f.root, 'pinned') });
   await writeFile(path.join(source, 'manager/updates/native-compatibility-provider.mjs'), '// changed shipped code');
   await assert.rejects(verifier.verify(f.request), { code: 'host-or-source-changed' });
-  assert.deepEqual(await readdir(path.join(f.root, 'pinned')), ['policy.json']);
+  assert.deepEqual(await readdir(path.join(f.root, 'pinned')), ['.admission', 'policy.json']);
 });
 
 test('exclusive admission and bounded quota refuse without replay or pruning', async t => {
@@ -172,5 +176,109 @@ test('exclusive admission and bounded quota refuse without replay or pruning', a
   const full = await fixture(t);
   for (let i = 0; i < 8; i++) await mkdir(path.join(full.options.root, 'v-' + String(i).padStart(64, '0')), { mode: 0o700 });
   await assert.rejects(full.verifier.verify(full.request), { code: 'evidence-limit' });
-  assert.equal((await readdir(full.options.root)).length, 9);
+  assert.equal((await readdir(full.options.root)).length, 10);
+});
+
+// Faults happen AFTER the real FS side effect. No candidate/IPC success is
+// simulated: tripwires fail the test if execution ever reaches either boundary.
+const persistenceFaults = [
+  'writer close', 'directory sync and writer close', 'unlink completion', 'post-unlink directory sync',
+  'writer open', 'writer write', 'writer sync', 'attempt mkdir', 'run-root mkdir', 'run-root binding sync',
+  'intent sync', 'Web copy write', 'Web copy sync', 'Web copy chmod', 'Web copy close',
+  'Web directory mkdir', 'Web dependency symlink', 'provider copy sync',
+] as const;
+for (const fault of persistenceFaults) test(`FS-only uncertainty: ${fault} retains admission`, async t => {
+  const f = await fixture(t), writer = path.join(f.options.root, '.writer');
+  const finalization = ['writer close', 'directory sync and writer close', 'unlink completion', 'post-unlink directory sync'].includes(fault);
+  const hits: string[] = [];
+  let unlinked = false, forbidden = 0;
+  const fail = (boundary: string) => { hits.push(boundary); throw Object.assign(Error(`injected ${boundary}`), { code: 'EIO' }); };
+  const noExecution = () => { forbidden++; throw Error('FS-only test reached forbidden child/IPC boundary'); };
+  t.mock.method(childProcess, 'spawn', noExecution);
+  t.mock.method(Server.prototype, 'listen', noExecution);
+  const originalOpen = fs.open, originalUnlink = fs.unlink, originalMkdir = fs.mkdir;
+  const originalMkdtemp = fs.mkdtemp, originalSymlink = fs.symlink;
+  t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    const handle = await originalOpen(...args), name = String(args[0]);
+    if (fault === 'writer open' && name === writer) { await handle.close(); fail(fault); }
+    const copy = name.startsWith(f.options.root + '/v-') && name.endsWith('/web/dist/index.html');
+    for (const method of ['writeFile', 'sync', 'chmod', 'close'] as const) {
+      const original = handle[method].bind(handle) as (...values: any[]) => Promise<unknown>;
+      t.mock.method(handle, method, async (...values: any[]) => {
+        const result = await original(...values);
+        const writerFault = name === writer && (
+          (method === 'close' && (fault === 'writer close' || fault === 'directory sync and writer close')) ||
+          (method === 'writeFile' && fault === 'writer write') || (method === 'sync' && fault === 'writer sync'));
+        const directoryFault = method === 'sync' && name === f.options.root &&
+          (fault === 'directory sync and writer close' || (fault === 'post-unlink directory sync' && unlinked));
+        const copyMethod = method === 'writeFile' ? 'write' : method;
+        if (writerFault || directoryFault || (copy && fault === `Web copy ${copyMethod}`) ||
+          (method === 'sync' && ((fault === 'run-root binding sync' && name === '/tmp') ||
+            (fault === 'intent sync' && name.endsWith('/intent.json')) ||
+            (fault === 'provider copy sync' && name.endsWith('/provider.mjs'))))) fail(`${fault}:${method}`);
+        return result;
+      });
+    }
+    return handle;
+  });
+  t.mock.method(fs, 'unlink', async (name: Parameters<typeof fs.unlink>[0]) => {
+    await originalUnlink(name);
+    if (String(name) === writer) { unlinked = true; if (fault === 'unlink completion') fail(fault); }
+  });
+  t.mock.method(fs, 'mkdir', async (...args: any[]) => {
+    const result = await (originalMkdir as any)(...args), name = String(args[0]);
+    if ((fault === 'attempt mkdir' && /^v-[a-f0-9]{64}$/.test(path.basename(name))) ||
+      (fault === 'Web directory mkdir' && name.endsWith('/web'))) fail(fault);
+    return result;
+  });
+  t.mock.method(fs, 'mkdtemp', async (...args: any[]) => {
+    const result = await (originalMkdtemp as any)(...args);
+    if (fault === 'run-root mkdir' && String(args[0]) === '/tmp/ncv-run-') fail(fault);
+    return result;
+  });
+  t.mock.method(fs, 'symlink', async (...args: Parameters<typeof fs.symlink>) => {
+    await originalSymlink(...args);
+    if (fault === 'Web dependency symlink' && String(args[1]).includes('/web/node_modules/')) fail(fault);
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(f.verifier.verify(finalization ? { ...f.request, receiptHash: '0'.repeat(64) } : f.request), { code: 'native-outcome-unknown' });
+    assert.ok(hits.length > 0, 'named fault actually reached');
+    if (fault === 'directory sync and writer close') assert.deepEqual(hits, [`${fault}:sync`, `${fault}:close`]);
+    const barrier = await readFile(path.join(f.options.root, '.admission'), 'utf8');
+    assert.ok(barrier.length > 0, 'durable issuer barrier survives even if writer was unlinked');
+    // A different, otherwise valid-shaped request must fail BEFORE input checks.
+    await assert.rejects(f.verifier.verify({ ...f.request, receiptHash: '1'.repeat(64) }), { code: 'reconciliation-required' });
+    await assert.rejects(f.mod.NativeCandidateCompatibility.create(f.options), { code: 'EEXIST' });
+    assert.equal(await readFile(path.join(f.options.root, '.admission'), 'utf8'), barrier);
+    const attempt = (await readdir(f.options.root)).find(n => n.startsWith('v-'));
+    if (attempt && !['writer open', 'attempt mkdir'].includes(fault)) {
+      const failure = JSON.parse(await readFile(path.join(f.options.root, attempt, 'failure.json'), 'utf8'));
+      assert.equal(failure.code, 'EIO', 'later successful failure record cannot clear the earlier uncertainty');
+    }
+    assert.equal(forbidden, 0);
+  } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+});
+
+test('FS-only finalization keeps admission exclusive after unlink until completion', async t => {
+  const f = await fixture(t), original = fs.unlink;
+  let entered!: () => void, release!: () => void;
+  const atUnlink = new Promise<void>(resolve => { entered = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let paused = false;
+  t.mock.method(fs, 'unlink', async (name: Parameters<typeof fs.unlink>[0]) => {
+    await original(name);
+    if (String(name) === path.join(f.options.root, '.writer') && !paused) { paused = true; entered(); await released; }
+  });
+  syncBuiltinESMExports();
+  const first = f.verifier.verify({ ...f.request, receiptHash: '0'.repeat(64) });
+  void first.catch(() => {});
+  try {
+    await atUnlink;
+    await assert.rejects(f.verifier.verify({ ...f.request, receiptHash: '1'.repeat(64) }), { code: 'reconciliation-required' });
+  } finally {
+    release(); await assert.rejects(first, { code: 'content-invalid' });
+    t.mock.restoreAll(); syncBuiltinESMExports();
+  }
+  await assert.rejects(f.verifier.verify({ ...f.request, receiptHash: '1'.repeat(64) }), { code: 'content-invalid' });
 });

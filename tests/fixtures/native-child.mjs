@@ -1,7 +1,8 @@
 // Executed as a real, isolated child; deliberately adversarial RPC peer, not a Pi substitute.
 import { readFileSync, writeFileSync } from "node:fs";
 const scenario = JSON.parse(readFileSync("scenario.json", "utf8"));
-writeFileSync("observed.json", JSON.stringify({ pid: process.pid, env: process.env, argv: process.argv.slice(2), cwd: process.cwd() }));
+writeFileSync("observed.json", JSON.stringify({ pid: process.pid, env: process.env, argv: process.argv.slice(2), cwd: process.cwd(),
+  runtimeTransport: globalThis[Symbol.for("pi.runtime.stdin-guard.v1")]?.transport ?? null }));
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\n");
 const hold = setInterval(() => {}, 1000);
 if (["hung", "stubborn"].includes(scenario)) process.on("SIGTERM", () => {});

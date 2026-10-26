@@ -87,7 +87,9 @@ export function executorConfig(value: unknown): ExecutorConfig {
   if (c.native !== null) {
     requireThat(c.trustedLocalNative === true, 403);
     const n = record(c.native);
-    keys(n, ["piExecutable", "workspaceRoots", "stateRoot", "agentRoot"], ["provider", "web", "startupTimeoutMs", "rpcTimeoutMs", "generationTimeoutMs", "stopTimeoutMs", "maxFrameBytes", "maxStderrBytes"]);
+    keys(n, ["piExecutable", "workspaceRoots", "stateRoot", "agentRoot"], ["provider", "web", "runtimeControl", "startupTimeoutMs", "rpcTimeoutMs", "generationTimeoutMs", "stopTimeoutMs", "maxFrameBytes", "maxStderrBytes"]);
+    requireThat(n.runtimeControl === undefined || typeof n.runtimeControl === "boolean");
+    requireThat(!n.runtimeControl || n.web !== undefined);
     absolute(n.piExecutable); absolute(n.stateRoot); absolute(n.agentRoot);
     for (const [id, root] of Object.entries(record(n.workspaceRoots))) { identifier(id); absolute(root); }
     if (n.provider !== undefined) { const p = record(n.provider); keys(p, ["extensionPath", "name", "model"]); absolute(p.extensionPath); }

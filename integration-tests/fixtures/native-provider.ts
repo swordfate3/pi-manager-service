@@ -8,10 +8,10 @@ import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   const log = (value: unknown) => appendFileSync(path.join(process.env.HOME!, "acceptance.jsonl"), JSON.stringify(value) + "\n");
   const faux = registerFauxProvider({ provider: "native-fixture", models: [{ id: "deterministic", name: "Native lifecycle acceptance", reasoning: false }] });
-  faux.setResponses([async (context) => {
+  faux.setResponses(Array.from({ length: 2 }, () => async (context) => {
     log({ event: "model_call", projectContextLoaded: JSON.stringify(context).includes("PROJECT_CONTEXT_MUST_NOT_LOAD") });
     return fauxAssistantMessage("NATIVE_PI_GENERATION_OK 答复🙂\u2028line\u2029end");
-  }]);
+  }));
   const model = faux.getModel();
   pi.registerProvider("native-fixture", {
     name: "Native lifecycle acceptance", baseUrl: model.baseUrl, apiKey: "synthetic-not-a-credential", api: faux.api as never,

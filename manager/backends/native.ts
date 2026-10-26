@@ -1,11 +1,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, open, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { matchesProcessIdentity, readProcessIdentity } from "../process-identity.ts";
 import { ExecutionOutcomeUnknownError } from "../errors.ts";
 import { issueSession, readHubConfig, revokeSession, type HubConfig } from "../../hub/config.ts";
+import { RuntimeClient } from "./runtime-client.ts";
 
 export interface NativeBackendConfig {
   readonly piExecutable: string;
@@ -16,6 +18,8 @@ export interface NativeBackendConfig {
   readonly provider?: { readonly extensionPath: string; readonly name: string; readonly model: string };
   /** Explicit installed thin Web package + private registrar; no HOME discovery. */
   readonly web?: { readonly extensionPath: string; readonly hubConfigFile: string; readonly port: number };
+  /** Optional cooperative RPC fence; always uses this distribution's fixed preload. */
+  readonly runtimeControl?: boolean;
   readonly startupTimeoutMs?: number;
   readonly rpcTimeoutMs?: number;
   readonly generationTimeoutMs?: number;
@@ -61,6 +65,14 @@ export interface NativeGeneration {
   readonly aborted: boolean;
 }
 
+/** Private executor evidence; never projected as a public task result. */
+export interface NativeRuntimeSnapshot {
+  readonly run_id: string; readonly runtime_id: string; readonly session_id: string; readonly leaf_id: string | null;
+  readonly session_file: string | null; readonly cwd: string; readonly version: string;
+  readonly idle: boolean; readonly pending: boolean; readonly busy: boolean;
+  readonly provider: string | null; readonly model: string | null; readonly thinking: string;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -87,6 +99,7 @@ interface OwnedChild {
   pending: Map<string, Pending>;
   generation?: Generation;
   enrollment?: { config: HubConfig; runId: string; revokeFailed?: boolean };
+  runtime?: { client: RuntimeClient; runId: string; barrier?: string; uncertain?: boolean };
 }
 
 function object(value: unknown): value is RecordValue {
@@ -151,6 +164,8 @@ export class NativeBackend {
     });
     if (config.provider && [config.provider.name, config.provider.model].some((value) => typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(value))) throw new Error("Invalid administrator provider selection");
     if (config.web && (!Number.isInteger(config.web.port) || config.web.port < 1 || config.web.port > 65535)) throw new Error("Invalid administrator Web port");
+    if (config.runtimeControl !== undefined && typeof config.runtimeControl !== "boolean") throw new Error("Invalid runtime control option");
+    if (config.runtimeControl && !config.web) throw new Error("Managed runtime control requires an explicit Web profile");
     this.#startupMs = limit(config.startupTimeoutMs, 10_000, 120_000);
     this.#rpcMs = limit(config.rpcTimeoutMs, 5000, 120_000);
     this.#generationMs = limit(config.generationTimeoutMs, 30_000, 600_000);
@@ -205,10 +220,83 @@ export class NativeBackend {
     return { status: "not-owned" };
   }
 
+  #runtimeEntry(id: string) {
+    instanceId(id);
+    const entry = this.#owned.get(id);
+    if (!entry || entry.exited || entry.status !== "ready" || entry.error ||
+      !matchesProcessIdentity(entry.identity.pid, entry.identity.processIdentity)) throw Error("Runtime is not ready and owned");
+    if (!entry.runtime) throw Error("Runtime control is unavailable");
+    return entry as OwnedChild & { runtime: NonNullable<OwnedChild['runtime']> };
+  }
+
+  async #runtimeSnapshot(entry: OwnedChild, value: unknown): Promise<NativeRuntimeSnapshot> {
+    const identifier = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 256 && !/\p{Cc}/u.test(v);
+    if (!object(value) || Object.keys(value).sort().join() !== 'busy,cwd,idle,leaf_id,model,pending,provider,run_id,runtime_id,session_file,session_id,thinking,version' ||
+      value.run_id !== entry.runtime!.runId || value.cwd !== entry.identity.workspace ||
+      !identifier(value.runtime_id) || !identifier(value.session_id) || (value.leaf_id !== null && !identifier(value.leaf_id)) ||
+      typeof value.version !== 'string' || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value.version) || value.version.length > 64 ||
+      ['idle', 'pending', 'busy'].some(k => typeof value[k] !== 'boolean') ||
+      ['provider', 'model'].some(k => value[k] !== null && !identifier(value[k])) || !identifier(value.thinking)) throw Error('Invalid runtime snapshot');
+    if (value.session_file !== null) {
+      const file = value.session_file, root = path.join(entry.identity.stateDir, 'sessions');
+      if (typeof file !== 'string' || !file.startsWith(root + path.sep) || path.resolve(file) !== file || file.length > 4096 || /\p{Cc}/u.test(file)) throw Error('Invalid runtime session');
+      const s = await lstat(file), directory = await lstat(root);
+      // Pi inherits the local umask (e.g. 0002 -> files 0664). Privacy and
+      // exclusion of other users come from the canonical 0700 session root,
+      // not from changing Pi's global umask or chmod-ing a live session file.
+      if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o7777) !== 0o700 ||
+        !s.isFile() || s.uid !== process.getuid?.() || s.nlink !== 1 || (s.mode & 0o7111) !== 0 || await realpath(file) !== file || await realpath(root) !== root) throw Error('Invalid runtime session');
+    }
+    this.#runtimeEntry(entry.identity.instanceId);
+    return Object.freeze(structuredClone(value)) as unknown as NativeRuntimeSnapshot;
+  }
+
+  async snapshotRuntime(id: string): Promise<NativeRuntimeSnapshot> {
+    const entry = this.#runtimeEntry(id);
+    return this.#runtimeSnapshot(entry, await entry.runtime.client.request({ action: 'snapshot' }));
+  }
+
+  /** Cooperative input lease only; this does not authorize stopping or replacing a process. */
+  async prepareRuntime(id: string, operation: string, expected: NativeRuntimeSnapshot): Promise<NativeRuntimeSnapshot> {
+    const entry = this.#runtimeEntry(id), runtime = entry.runtime;
+    if (!/^[a-f0-9]{32}$/.test(operation)) throw Error('Invalid runtime operation');
+    if (runtime.barrier || runtime.uncertain || entry.generation || entry.pending.size) throw Error('Runtime barrier unavailable');
+    const copy = structuredClone(expected);
+    // Reserve BEFORE the first await: a simultaneous parent prompt cannot cross preparation.
+    runtime.barrier = operation;
+    let sent = false;
+    try {
+      const valid = await this.#runtimeSnapshot(entry, copy);
+      if (!valid.idle || valid.pending || valid.busy || !valid.session_file) throw Error('Runtime snapshot is busy');
+      sent = true;
+      const value = await runtime.client.request({ action: 'prepare', operation_id: operation,
+        expected: { runtime_id: valid.runtime_id, session_id: valid.session_id, leaf_id: valid.leaf_id } });
+      const held = await this.#runtimeSnapshot(entry, value);
+      if (held.runtime_id !== valid.runtime_id || held.session_id !== valid.session_id || held.leaf_id !== valid.leaf_id ||
+        held.session_file !== valid.session_file || held.version !== valid.version || !held.idle || held.pending || held.busy) throw Error('Runtime changed during preparation');
+      return held;
+    } catch (error) {
+      if (sent) { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+      runtime.barrier = undefined; throw error;
+    }
+  }
+
+  async cancelRuntime(id: string, operation: string): Promise<void> {
+    const entry = this.#runtimeEntry(id), runtime = entry.runtime;
+    if (!/^[a-f0-9]{32}$/.test(operation) || runtime.barrier !== operation) throw Error('Runtime lease operation mismatch');
+    try {
+      const reply = await runtime.client.request({ action: 'cancel', operation_id: operation });
+      if (!object(reply) || Object.keys(reply).join() !== 'cancelled' || reply.cancelled !== true) throw Error();
+      this.#runtimeEntry(id);
+      runtime.barrier = undefined; runtime.uncertain = undefined;
+    } catch { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+  }
+
   async generate(id: string, message: string): Promise<NativeGeneration> {
     instanceId(id);
     const entry = this.#owned.get(id);
     if (!entry || entry.exited || entry.status !== "ready" || entry.error) throw new Error("Instance is not ready and owned");
+    if (entry.runtime?.barrier || entry.runtime?.uncertain) throw new Error('Runtime input is fenced by an update lease');
     if (entry.generation) throw new Error("Instance is busy");
     if (typeof message !== "string" || !message.length || Buffer.byteLength(JSON.stringify(message)) + 256 > this.#frameBytes) throw new Error("Invalid or oversized prompt");
     const generation: Generation = { ...deferred<void>(), text: "", agentEndObserved: false, settled: false, aborted: false, lastMessageFailed: false };
@@ -287,6 +375,15 @@ export class NativeBackend {
       args.push("--extension", await realpath(provider.extensionPath), "--provider", provider.name, "--model", provider.model);
     }
     let enrollment: OwnedChild["enrollment"];
+    let runtime: OwnedChild["runtime"], runtimeEnv: NodeJS.ProcessEnv = {}, preload: string | undefined;
+    if (this.#config.runtimeControl) {
+      const socketPath = subdir("run/control.sock"), token = randomBytes(32).toString("hex"), runId = randomBytes(16).toString("hex");
+      const client = new RuntimeClient({ socketPath, token });
+      preload = await realpath(fileURLToPath(new URL("../../runtime/pi_rpc_guard.mjs", import.meta.url)));
+      await access(preload, constants.R_OK);
+      runtime = { client, runId };
+      runtimeEnv = { PI_RUNTIME_RUN_ID: runId, PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath };
+    }
     let webEnv: NodeJS.ProcessEnv = {};
     if (this.#config.web) {
       const web = this.#config.web;
@@ -301,7 +398,7 @@ export class NativeBackend {
         PI_WEB_UI_REGISTRY_SOCKET: config.socketPath, PI_WEB_UI_REGISTRY_CREDENTIAL_FILE: credentialFile };
     }
     signal.throwIfAborted();
-    const child = spawn(executable, args, {
+    const child = spawn(preload ? process.execPath : executable, preload ? ["--import", preload, executable, ...args] : args, {
       cwd: workspace, shell: false, stdio: ["pipe", "pipe", "pipe"],
       env: {
         // Allowlist from scratch: no NODE_OPTIONS, provider/admin secrets, proxy or project config inheritance.
@@ -310,13 +407,13 @@ export class NativeBackend {
         PI_AGENT_DIR: agentDir, PI_CODING_AGENT_DIR: agentDir, PI_CODING_AGENT_SESSION_DIR: subdir("sessions"),
         PI_MANAGER_CONFIG: subdir("manager.json"), PI_WEB_UI_HUB_CONFIG: subdir("legacy-manager.json"),
         PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0",
-        ...webEnv,
+        ...webEnv, ...runtimeEnv,
       },
     });
     const processIdentity = child.pid ? readProcessIdentity(child.pid) : null;
     const auditFile = previous ? `identity-${randomUUID()}.json` : "identity.json";
     const identity = Object.freeze({ instanceId: request.instanceId, pid: child.pid ?? 0, processIdentity: processIdentity ?? "", workspace, stateDir, agentDir, auditFile, generation: (previous?.generation ?? -1) + 1 });
-    const entry: OwnedChild = { child, identity, status: "starting", exited: false, exit: deferred<void>(), buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), stderrTruncated: false, pending: new Map(), enrollment };
+    const entry: OwnedChild = { child, identity, status: "starting", exited: false, exit: deferred<void>(), buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), stderrTruncated: false, pending: new Map(), enrollment, runtime };
     this.#owned.set(request.instanceId, entry);
     child.on("error", () => { this.#fail(entry, new Error("Pi child spawn or process error")); if (!child.pid) this.#finish(entry); });
     child.once("exit", () => this.#finish(entry));

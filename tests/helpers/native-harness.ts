@@ -27,9 +27,7 @@ export async function harness(t: TestContext, scenario = "normal", overrides: Pa
     maxStderrBytes: 512,
     ...overrides,
   };
-  const module = await import("../../manager/backends/native.ts").catch(() => {
-    assert.fail("NativeBackend must implement the approved owned-child lifecycle");
-  });
+  const module = await import("../../manager/backends/native.ts");
   const backend: NativeBackend = new module.NativeBackend(config);
   t.after(async () => {
     for (const instance of backend.list()) {

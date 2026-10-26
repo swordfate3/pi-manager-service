@@ -132,7 +132,6 @@ async function processIdentity(pid: number): Promise<{ bootId: string; startTick
   const startTicks = statContent.slice(commandEnd + 2).trim().split(/\s+/)[19];
   const bootId = bootIdContent.trim();
   assert.match(bootId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
-  assert.match(bootId, /[a-f]/, "boot UUID must contain a letter to exercise uppercase rejection");
   assert.match(startTicks, /^(0|[1-9][0-9]*)$/);
   return { bootId, startTicks };
 }
@@ -189,6 +188,38 @@ test("requester-scoped idempotency returns the persisted task and rejects change
   const reopened = await TaskStore.open(root);
   assert.equal((await reopened.get(first.id))?.state, "pending_approval");
   assert.equal((await reopened.get(secondRequester.id))?.requester, "operator-b");
+  await reopened.close();
+});
+
+test("idempotency preserves distinct Unicode keys across reordered retries and reopen", async (t) => {
+  const { root } = await temporaryStore(t);
+  const original = {
+    key: "unicode-order",
+    requester: "operator-a",
+    target: "pi:alpha",
+    action: "inspect",
+    payload: { "é": 1, "é": 2 },
+  };
+  const reordered = {
+    ...original,
+    payload: { "é": 2, "é": 1 },
+  };
+
+  const store = await TaskStore.open(root);
+  const first = await store.submit(original);
+  assert.equal((await store.submit(reordered)).id, first.id);
+  await store.close();
+
+  const persisted = await readStoredState(root);
+  assert.deepEqual(Object.keys(persisted.tasks[first.id].payload), ["é", "é"]);
+  assert.deepEqual(persisted.tasks[first.id].payload, original.payload);
+
+  const reopened = await TaskStore.open(root);
+  assert.equal((await reopened.submit(reordered)).id, first.id);
+  await assert.rejects(
+    reopened.submit({ ...reordered, payload: { "é": 3, "é": 1 } }),
+    /idempotency/i,
+  );
   await reopened.close();
 });
 
@@ -542,11 +573,26 @@ test("malformed or identity-ambiguous locks fail closed without exposing raw con
   await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /locked|ambiguous|malformed/i);
   assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
 
+  await rm(path.join(root, ".task-store.lock"), { recursive: true });
+  await mkdir(path.join(root, ".task-store.lock"), { mode: 0o700 });
+  await writeFile(
+    path.join(root, ".task-store.lock", "owner.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      processIdentity: "ABCDEFAB-CDEF-CDEF-CDEF-ABCDEFABCDEF:1",
+      token: randomUUID(),
+      createdAt: new Date().toISOString(),
+    }),
+    { mode: 0o600 },
+  );
+  await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /locked|ambiguous|malformed/i);
+  assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
+
   const identity = await processIdentity(process.pid);
-  const noncanonicalIdentities = [
-    `${identity.bootId.toUpperCase()}:${identity.startTicks}`,
-    `${identity.bootId}:0${identity.startTicks}`,
-  ];
+  const noncanonicalIdentities = [`${identity.bootId}:0${identity.startTicks}`];
+  const uppercaseBootId = identity.bootId.toUpperCase();
+  if (uppercaseBootId !== identity.bootId) noncanonicalIdentities.unshift(`${uppercaseBootId}:${identity.startTicks}`);
   const rejected: boolean[] = [];
   for (const processIdentity of noncanonicalIdentities) {
     await rm(path.join(root, ".task-store.lock"), { recursive: true, force: true });
@@ -572,7 +618,7 @@ test("malformed or identity-ambiguous locks fail closed without exposing raw con
       rejected.push(true);
     }
   }
-  assert.deepEqual(rejected, [true, true]);
+  assert.deepEqual(rejected, noncanonicalIdentities.map(() => true));
 });
 
 test("reopen rejects oversized results and results attached to nonterminal states", async (t) => {

@@ -100,3 +100,9 @@ node --test tests/manager-dist.test.mjs tests/manager-package.test.mjs
 | 合计 | 571 | 13 | 0 |
 
 跳过项属于显式 opt-in：1 项实际浏览器交互、8 项本机 npm transport，以及 4 项实际 Pi runtime probe/driver。这里未启用它们，也未执行 Docker 或真实更新/回退验收。另行执行的 `integration-tests/native-lifecycle.test.ts` 是新原生库的实际 Pi 验收，不替代这些遗留 runtime 集成测试。
+
+### Task 2 首次独立审查
+
+审查 `127f382..ecf3135` 确认主要实现及真实 Pi 证据，同时发现一项重要问题：失败的 assistant 消息若带有部分文字，自动重试成功后仍会累加到成功结果。原有夹具的失败 `content` 为空，未覆盖此场景；定向实验复现 `FAILED_PARTIAL|SUCCESSFUL_REPLY`。此项必须补回归和修复后再验收。
+
+另有一项延后到最终分支审查的小问题：测试辅助函数把所有模块导入错误改写成“后端尚未实现”，会掩盖语法/依赖等真实原因。此处保留发现，不把先前全套测试通过当成审查问题不存在。

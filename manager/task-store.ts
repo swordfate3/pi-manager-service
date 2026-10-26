@@ -58,7 +58,7 @@ const resultStates = new Set<TaskState>(["succeeded", "failed", "cancelled", "un
 const allowedTransitions: Readonly<Record<TaskState, ReadonlySet<TaskState>>> = {
   pending_approval: new Set(["queued", "cancelled"]),
   queued: new Set(["waiting_idle", "running", "cancelled"]),
-  waiting_idle: new Set(["running", "cancelled"]),
+  waiting_idle: new Set(["running", "cancelled", "failed", "unknown"]),
   running: new Set(["succeeded", "failed", "cancelled", "unknown"]),
   succeeded: new Set(),
   failed: new Set(),

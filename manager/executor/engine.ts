@@ -24,6 +24,7 @@ export class TaskEngine {
   readonly #adapterPolicy: string;
   readonly #approvals = new Map<string, ApprovalBinding>();
   readonly #running = new Set<Promise<void>>();
+  readonly #shutdown = new AbortController();
   #tail: Promise<unknown> = Promise.resolve();
   #closing = false;
   #closePromise?: Promise<void>;
@@ -37,7 +38,7 @@ export class TaskEngine {
     const engine = new TaskEngine(config, store, adapter);
     try {
       for (const task of await store.list()) {
-        if (task.state === "running") await store.transition(task.id, "running", "unknown", { expectedRevision: task.revision });
+        if (task.state === "running" || task.state === "waiting_idle") await store.transition(task.id, task.state, "unknown", { expectedRevision: task.revision });
       }
       await adapter?.restore?.(await store.list());
       return engine;
@@ -117,28 +118,51 @@ export class TaskEngine {
       this.#assertPolicy();
       requireThat(this.#adapter?.actions.includes(t.action), 503); await this.#adapter!.validate(t);
       this.#assertPolicy();
-      const running = await this.#store.transition(t.id, "queued", "running", { expectedRevision: t.revision });
+      const started = await this.#store.transition(t.id, "queued", this.#adapter!.waitForIdle ? "waiting_idle" : "running", { expectedRevision: t.revision });
       this.#approvals.delete(t.id);
       // Backend work belongs to the executor, never the HTTP client lifetime.
-      const operation = this.#execute(running); this.#running.add(operation);
-      void operation.finally(() => this.#running.delete(operation)); return view(running);
+      const operation = this.#execute(started); this.#running.add(operation);
+      void operation.finally(() => this.#running.delete(operation)); return view(started);
     }
     throw new ManagerError(400);
   }
   async #execute(task: TaskRecord) {
+    let executionStarted = false;
     try {
-      const result = await this.#adapter!.execute(task);
+      if (task.state === "waiting_idle") {
+        await this.#waitForIdle(task);
+        this.#shutdown.signal.throwIfAborted(); this.#assertPolicy();
+        await this.#adapter!.validate(structuredClone(task));
+        this.#shutdown.signal.throwIfAborted(); this.#assertPolicy();
+        task = await this.#store.transition(task.id, "waiting_idle", "running", { expectedRevision: task.revision });
+      }
+      this.#shutdown.signal.throwIfAborted();
+      executionStarted = true;
+      const result = await this.#adapter!.execute(structuredClone(task));
       await this.#store.transition(task.id, "running", "succeeded", { expectedRevision: task.revision, result });
     } catch (error) {
       // If persistence is uncertain TaskStore poisons writes. Restart turns any remaining running task unknown.
       const unknown = error instanceof DockerOutcomeUnknownError || error instanceof ExecutionOutcomeUnknownError;
-      await this.#store.transition(task.id, "running", unknown ? "unknown" : "failed", {
-        expectedRevision: task.revision, result: { status: unknown ? "execution-outcome-unknown" : "execution-failed" },
+      const stopping = !executionStarted && error === this.#shutdown.signal.reason;
+      await this.#store.transition(task.id, task.state, unknown ? "unknown" : stopping ? "cancelled" : "failed", {
+        expectedRevision: task.revision, result: { status: unknown ? "execution-outcome-unknown" : stopping ? "executor-stopping" : "execution-failed" },
       }).catch(() => {});
     }
   }
+  async #waitForIdle(task: TaskRecord) {
+    const signal = this.#shutdown.signal; signal.throwIfAborted();
+    let rejectAbort!: (reason: unknown) => void;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const onAbort = () => rejectAbort(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      // The abandoned observation cannot write task state or authorize execution.
+      await Promise.race([this.#adapter!.waitForIdle!(structuredClone(task), signal), aborted]);
+    } finally { signal.removeEventListener("abort", onAbort); }
+  }
   close() {
     this.#closing = true;
+    this.#shutdown.abort();
     return this.#closePromise ??= (async () => {
       await this.#tail; await Promise.all(this.#running);
       // Close store even when child ownership cannot be confirmed; report failure, never claim clean exit.

@@ -11,7 +11,7 @@ import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
 import { packedWeb } from "./fixtures/packed-web.ts";
 
-async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false, observeAdmission = false, bootstrap = false) {
+async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false, observeAdmission = false, bootstrap = false, deferReadiness = false) {
   const root = await mkdtemp(path.join(tmpdir(), "manager-rpc-fence-"));
   let child: ChildProcessWithoutNullStreams | undefined, ws: WebSocket | undefined;
   let errors = "";
@@ -75,22 +75,29 @@ async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false,
     expected: { runtime_id: state.runtime_id, session_id: state.session_id, leaf_id: state.leaf_id } });
   const trace = async () => (await readFile(path.join(probe, "observations.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
   await waitFor(async () => (await trace().catch(error => { if (error.code === "ENOENT") return []; throw error; })).some(frame => frame.event === "rpc_ready"), 15_000);
-  await write({ id: "ready", type: "get_state" });
-  await waitFor(async () => rpc.some(frame => frame.type === "response" && frame.id === "ready"), 15_000)
-    .catch(error => { throw Error(`RPC readiness failed (exit ${child?.exitCode}, signal ${child?.signalCode}): ${errors}; frames=${JSON.stringify(rpc)}`, { cause: error }); });
-  assert.equal(rpc.find(frame => frame.id === "ready").success, true, errors);
-  assert.equal((await snapshot()).busy, false, `Guard must be eligible after readiness: ${JSON.stringify(await trace())}; frames=${JSON.stringify(rpc)}`);
-  ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.0.0.1:${port}` });
-  const messages: any[] = [];
-  ws.on("message", data => messages.push(JSON.parse(data.toString())));
-  await once(ws, "open");
-  await waitFor(async () => messages.some(frame => frame.event === "state_sync"));
+  const ready = async () => {
+    await write({ id: "ready", type: "get_state" });
+    await waitFor(async () => rpc.some(frame => frame.type === "response" && frame.id === "ready"), 15_000)
+      .catch(error => { throw Error(`RPC readiness failed (exit ${child?.exitCode}, signal ${child?.signalCode}): ${errors}; frames=${JSON.stringify(rpc)}`, { cause: error }); });
+    assert.equal(rpc.find(frame => frame.id === "ready").success, true, errors);
+    assert.equal((await snapshot()).busy, false, `Guard must be eligible after readiness: ${JSON.stringify(await trace())}; frames=${JSON.stringify(rpc)}`);
+  };
+  if (!deferReadiness) await ready();
+  let messages: any[] = [];
+  const connectWeb = async () => {
+    ws?.terminate(); messages = [];
+    ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.0.0.1:${port}` });
+    ws.on("message", data => messages.push(JSON.parse(data.toString())));
+    await once(ws, "open");
+    await waitFor(async () => messages.some(frame => frame.event === "state_sync"));
+  };
+  await connectWeb();
   const webRequest = async (id: string, method: string, params: unknown) => {
     ws!.send(JSON.stringify({ type: "req", id, method, params }));
     await waitFor(async () => messages.some(frame => frame.type === "res" && frame.id === id));
     return messages.find(frame => frame.type === "res" && frame.id === id);
   };
-  return { probe, operation, rpc, write, control, snapshot, prepare, trace, webRequest, errors: () => errors };
+  return { probe, operation, rpc, write, control, snapshot, prepare, trace, webRequest, ready, connectWeb, errors: () => errors };
 }
 
 // Removing the preload, admitting an unknown guard, releasing before settled,
@@ -135,7 +142,16 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
 test('real restored successor refuses Web mutations before preparation and after cancel until exact admission', {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
 }, async t => {
-  const f = await rpcFenceFixture(t, false, true, false, true);
+  const f = await rpcFenceFixture(t, false, true, false, true, true);
+  assert.equal(f.rpc.some(frame => frame.command === 'get_state'), false);
+  assert.equal((await f.webRequest('before-first-read', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  assert.equal((await f.webRequest('before-first-thinking', 'set_thinking_level', { level: 'low' })).ok, false);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'stdin').length, 0, 'No RPC readiness request has reached Pi yet');
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 0);
+  const beforeRead = await f.snapshot();
+  assert.equal(beforeRead.session_id, 'synthetic-restored-session'); assert.equal(beforeRead.leaf_id, 'saved-leaf');
+  assert.equal(beforeRead.thinking, 'off');
+  await f.ready();
   const expected = await f.snapshot();
   assert.equal(expected.session_id, 'synthetic-restored-session');
   assert.equal(expected.leaf_id, 'saved-leaf');
@@ -153,6 +169,29 @@ test('real restored successor refuses Web mutations before preparation and after
   await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
   assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 1);
   assert.equal((await f.snapshot()).busy, false);
+  assert.equal(f.errors(), '');
+});
+
+test('admitted real Pi remains Web-input usable after supported extension reload without a second activation', {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  // Ordinary/default Web input intentionally retains its existing permanent
+  // taint semantics. Reload is a lifecycle command, not correlated plain text.
+  const f = await rpcFenceFixture(t, false, false, false, true);
+  const expected = await f.snapshot();
+  assert.equal((await f.prepare(expected)).ok, true);
+  assert.equal((await f.control({ action: 'admit', operation_id: f.operation, expected })).ok, true);
+  assert.equal((await f.webRequest('reload', 'prompt', { message: '/probe-reload' })).ok, true);
+  await waitFor(async () => (await f.trace()).filter(frame => frame.event === 'rpc_ready').length === 2, 15_000);
+  await f.connectWeb();
+  const reloaded = await f.snapshot();
+  assert.notEqual(reloaded.runtime_id, expected.runtime_id, 'The actual extension runtime must be recreated');
+  assert.equal(reloaded.session_id, expected.session_id); assert.equal(reloaded.leaf_id, expected.leaf_id);
+  assert.equal((await f.webRequest('after-reload', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, true);
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 1);
+  assert.equal((await f.snapshot()).session_id, expected.session_id);
+  assert.equal((await f.control({ action: 'admit', operation_id: f.operation, expected: reloaded })).ok, false);
   assert.equal(f.errors(), '');
 });
 

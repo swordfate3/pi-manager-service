@@ -6,6 +6,8 @@ import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
+  // Test-only command invokes the supported Pi lifecycle; no production test hook.
+  pi.registerCommand('probe-reload', { description: 'Reload the isolated runtime fixture', handler: async (_args, ctx) => { await ctx.reload(); } });
   const root = process.env.PI_RUNTIME_PROBE_STATE!;
   const record = (event: string, fields = {}) => appendFileSync(path.join(root, "observations.jsonl"), JSON.stringify({ event, ...fields }) + "\n");
   const waitForRelease = async (stage: string) => {

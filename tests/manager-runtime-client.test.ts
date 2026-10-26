@@ -92,7 +92,8 @@ test('private final commit transmits only an immutable complete snapshot on the 
   let observed: any;
   const endpoint = await fixture(t, (request, peer) => {
     observed = request;
-    peer.end(JSON.stringify({ ok: true, result: { committed: true, operation_id: request.operation_id, snapshot: request.expected } }) + '\n');
+    peer.end(JSON.stringify({ ok: true, result: { [request.action === 'admit' ? 'admitted' : 'committed']: true,
+      operation_id: request.operation_id, snapshot: request.expected } }) + '\n');
   });
   const expected = { run_id: 'c'.repeat(32), runtime_id: 'runtime', session_id: 'session', leaf_id: 'leaf',
     session_file: '/private/sessions/dialogue.jsonl', cwd: '/workspace', version: '1.4.0', idle: true,
@@ -103,7 +104,10 @@ test('private final commit transmits only an immutable complete snapshot on the 
   const result: any = await pending;
   assert.equal(result.committed, true); assert.deepEqual(observed.expected, before);
   assert.deepEqual(Object.keys(observed).sort(), ['action', 'expected', 'operation_id', 'token']);
-  await client.request({ action: 'admit', operation_id: 'b'.repeat(32), expected: before } as never);
+  const admitted = await client.request({ action: 'admit', operation_id: 'b'.repeat(32), expected: before });
+  // strictJson deliberately returns null-prototype records. Compare wire data,
+  // not prototypes; action-specific acknowledgement enforcement is in NativeBackend.
+  assert.deepEqual(structuredClone(admitted), { admitted: true, operation_id: 'b'.repeat(32), snapshot: before });
   assert.equal(observed.action, 'admit'); assert.deepEqual(observed.expected, before);
   for (const altered of [{ ...before, extra: 'forbidden' }, { ...before, busy: true }, { ...before, run_id: 'invalid' },
     { ...before, session_file: '/private/../escape' }, { ...before, idle: false }]) {

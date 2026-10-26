@@ -247,7 +247,7 @@ export class NativeBackend {
       if (!directory.isDirectory() || directory.uid !== process.getuid?.() || (directory.mode & 0o7777) !== 0o700 ||
         !s.isFile() || s.uid !== process.getuid?.() || s.nlink !== 1 || (s.mode & 0o7111) !== 0 || await realpath(file) !== file || await realpath(root) !== root) throw Error('Invalid runtime session');
     }
-    this.#runtimeEntry(entry.identity.instanceId);
+    if (this.#runtimeEntry(entry.identity.instanceId) !== entry) throw Error('Original runtime generation is no longer owned');
     return Object.freeze(structuredClone(value)) as unknown as NativeRuntimeSnapshot;
   }
 
@@ -287,7 +287,7 @@ export class NativeBackend {
     try {
       const reply = await runtime.client.request({ action: 'cancel', operation_id: operation });
       if (!object(reply) || Object.keys(reply).join() !== 'cancelled' || reply.cancelled !== true) throw Error();
-      this.#runtimeEntry(id);
+      if (this.#runtimeEntry(id) !== entry) throw Error('Original runtime generation is no longer owned');
       runtime.barrier = undefined; runtime.uncertain = undefined;
     } catch { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
   }

@@ -6,6 +6,7 @@ import { NativeBackend } from "../manager/backends/native.ts";
 import { initializeHub } from "../hub/config.ts";
 import { harness, observation } from "./helpers/native-harness.ts";
 import { executorConfig } from "../manager/config.ts";
+import { RuntimeClient, type RuntimeCommand } from '../manager/backends/runtime-client.ts';
 
 test("optional managed native runtime loads only the shipped guard and private per-generation credentials", async t => {
   const cleanups: (() => Promise<void>)[] = [];
@@ -98,6 +99,36 @@ test('lost prepare or cancel replies preserve the parent fence instead of claimi
     await assert.rejects(backend.generate(id, 'unsafe-after-uncertainty'), /barrier|lease|fenced/i);
     await assert.rejects(backend.prepareRuntime(id, 'b'.repeat(32), state), /barrier|lease|uncertain/i);
     await assert.rejects(access(path.join(f.workspace, 'prompt-delivered')));
+  }
+});
+
+test('an old generation cannot finish prepare or cancel against a replacement with the same instance ID', async t => {
+  for (const action of ['prepare', 'cancel'] as const) {
+    const f = await runtimeFixture(t), id = f.request.instanceId;
+    const oldIdentity = f.backend.list()[0], state = await f.backend.snapshotRuntime(id), operation = 'd'.repeat(32);
+    if (action === 'cancel') await f.backend.prepareRuntime(id, operation, state);
+    const original = RuntimeClient.prototype.request;
+    let received!: () => void, release!: () => void;
+    const replyReceived = new Promise<void>(resolve => { received = resolve; });
+    const continueReply = new Promise<void>(resolve => { release = resolve; });
+    // Keep the real IPC and reply; hold its delivery to the backend at the
+    // dependency boundary so lifecycle replacement happens deterministically.
+    const mock = t.mock.method(RuntimeClient.prototype, 'request', async function (this: RuntimeClient, value: RuntimeCommand) {
+      const result = await original.call(this, value);
+      if (value.action === action) { received(); await continueReply; }
+      return result;
+    });
+    const pending = action === 'prepare' ? f.backend.prepareRuntime(id, operation, state) : f.backend.cancelRuntime(id, operation);
+    void pending.catch(() => {});
+    try {
+      await replyReceived;
+      await f.backend.stop(id);
+      await f.backend.resume(f.request, oldIdentity);
+      release();
+      await assert.rejects(pending, /unknown|generation/i, 'Old generation evidence must not validate against a replacement');
+      assert.notEqual((await f.backend.snapshotRuntime(id)).run_id, state.run_id);
+      await f.backend.generate(id, 'replacement remains independently usable');
+    } finally { release(); await pending.catch(() => {}); mock.mock.restore(); }
   }
 });
 

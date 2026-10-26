@@ -105,8 +105,9 @@ el('approve').onclick = async () => {
 el('refresh').onclick = () => refresh().catch(e => message(e.message));
 el('cancel').onclick = hideReview;
 el('logout').onclick = async () => {
-  catalogGeneration++;
-  try { if (administrator) await api('logout',{}); } catch(e) { message(e.message); return; }
+  catalogGeneration++; el('catalog-status').textContent = 'Catalog refresh paused while logout is pending.';
+  try { if (administrator) await api('logout',{}); }
+  catch(e) { el('catalog-status').textContent = 'Logout failed. The catalog refresh was cancelled; search again to refresh.'; message(e.message); return; }
   credential = ''; lastSubmission = null; hideReview(); resetCatalog(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
 };
 resetCatalog();

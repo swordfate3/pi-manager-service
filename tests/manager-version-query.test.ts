@@ -274,3 +274,61 @@ test("administrator logout invalidates a pending catalog response before the log
   await logout;
   assert.equal(elements.content.hidden, true); assert.match(elements["catalog-status"].textContent, /locked/i);
 });
+
+test("failed administrator logout leaves a truthful retryable catalog state without accepting the cancelled response", async () => {
+  const ids = ["message", "content", "login", "logout", "credential", "capabilities", "action", "submit", "workspace", "tasks", "task", "target",
+    "review", "review-data", "approve", "refresh", "cancel", "version-search", "version-query", "catalog-status", "versions", "versions-next"];
+  const elements = Object.fromEntries(ids.map(id => [id, new FakeElement(id)])) as Record<string, FakeElement>;
+  const main = new FakeElement("main"); main.dataset.admin = "true";
+  const cancelledVersion = deferred<any>(), failedLogout = deferred<any>();
+  let versionCalls = 0, logoutCalls = 0;
+  const fetch = async (requestPath: string, init: any) => {
+    const route = requestPath.replace("/api/manager/", "");
+    let value: unknown;
+    if (route === "login") value = { authenticated: true, sessionToken: "administrator-session-token" };
+    else if (route === "capabilities") value = { native: false, docker: false, enrollment: false, updates: false, approval: true };
+    else if (route === "workspaces" || route === "tasks") value = [];
+    else if (route === "versions") {
+      versionCalls++;
+      if (versionCalls === 1) value = { status: "fresh", checkedAt: 1, versions: [] };
+      else if (versionCalls === 2) return cancelledVersion.promise;
+      else {
+        assert.equal(init.headers.Authorization, "Bearer administrator-session-token");
+        value = { status: "fresh", checkedAt: 3, versions: ["2100.0.0"] };
+      }
+    } else if (route === "logout") { logoutCalls++; return failedLogout.promise; }
+    else throw new Error(`unexpected route ${route}`);
+    return { ok: true, json: async () => value };
+  };
+  const document = {
+    getElementById: (id: string) => elements[id],
+    querySelector: (selector: string) => selector === "main" ? main : null,
+    createElement: () => new FakeElement(),
+  };
+  vm.runInNewContext(browserScript, { document, fetch, crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" }, confirm: () => true, setTimeout, clearTimeout });
+
+  elements.credential.value = administrator;
+  await elements.login.onsubmit!({ preventDefault() {} });
+  elements["version-query"].value = "2099";
+  const search = elements["version-search"].onsubmit!({ preventDefault() {} });
+  await waitFor(() => versionCalls === 2);
+  const logout = elements.logout.onclick!() as Promise<void>;
+  await waitFor(() => logoutCalls === 1);
+
+  failedLogout.resolve({ ok: false, json: async () => ({ error: "Logout failed" }) });
+  await logout;
+  cancelledVersion.resolve({ ok: true, json: async () => ({ status: "fresh", checkedAt: 2, versions: [future] }) });
+  await search;
+
+  assert.doesNotMatch(elements["catalog-status"].textContent, /checking/i);
+  assert.match(elements["catalog-status"].textContent, /logout failed/i);
+  assert.match(elements["catalog-status"].textContent, /search again/i);
+  assert.equal(elements.versions.children.length, 0); assert.equal(elements.content.hidden, false);
+  const messageText = elements["message"].textContent;
+  assert.match(messageText, /logout failed/i); assert.doesNotMatch(messageText, /locked/i);
+
+  elements["version-query"].value = "2100";
+  await elements["version-search"].onsubmit!({ preventDefault() {} });
+  assert.deepEqual(elements.versions.children.map(x => x.textContent), ["2100.0.0"]);
+  assert.match(elements["catalog-status"].textContent, /fresh/i); assert.equal(versionCalls, 3);
+});

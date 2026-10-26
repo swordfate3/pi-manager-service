@@ -49,11 +49,11 @@ assert.equal((await reopened.get(first.id)).state, "pending_approval");
 
 **Interfaces:** `NativeBackend.create({instanceId, workspace, piExecutable, agentDir})` 返回受管身份；`stop(instanceId)`、`inspect(instanceId)` 只接受存储中的身份。配置由管理员给出可执行路径和允许工作区根，前端仅选择根内的相对目录。启动使用无 shell 的固定参数数组，独立 agent 目录；登记沿用版本化 Web 协议。
 
-- [ ] 先验证未实现时 RED。真实临时进程测试：创建、检查、关 stdin 有序退出；无 Pi 时 API 报空列表，停止 Pi 不终止管理器。
-- [ ] 写并运行目录穿越、根外符号链接、冒名 PID、重复停止、可执行文件缺失、启动失败/超时测试；失败不得遗留自有进程。
-- [ ] 用实际开发 Pi 和确定性测试 provider 在独立工作区跑一次 RPC 创建/生成/停止。仅进程替身通过不得称为真实 Pi 验收。
-- [ ] 记录 `agent_end` 与 `agent_settled` 的区别；本任务不加入更新能力，不能从一个“空闲”快照推断可以安全激活更新。
-- [ ] 运行上述两个测试文件并提交，清楚记录仅已测平台；Windows/macOS 不从 Linux 结果推断通过。
+- [x] 先验证未实现时 RED。真实临时进程测试：创建、检查、关 stdin 有序退出；无 Pi 时 API 报空列表，停止 Pi 不终止管理器。
+- [x] 写并运行目录穿越、根外符号链接、冒名 PID、重复停止、可执行文件缺失、启动失败/超时测试；失败不得遗留自有进程。
+- [x] 用实际开发 Pi 和确定性测试 provider 在独立工作区跑一次 RPC 创建/生成/停止。仅进程替身通过不得称为真实 Pi 验收。
+- [x] 记录 `agent_end` 与 `agent_settled` 的区别；本任务不加入更新能力，不能从一个“空闲”快照推断可以安全激活更新。
+- [x] 运行上述两个测试文件并提交，清楚记录仅已测平台；Windows/macOS 不从 Linux 结果推断通过。
 
 ## Task 3: 独立入口与管理网页任务闭环
 

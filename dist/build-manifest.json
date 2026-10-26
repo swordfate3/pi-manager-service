@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": {
     "count": 77,
-    "sha256": "7c3732f6dfa75ee80933942894f074a261d3e17000138926e2680c8db5d07c0a",
+    "sha256": "21a7006c1080de81b9770f77ed0f6a0fc97ee57a24cf592afe76f3f889b44bb2",
     "files": [
       {
         "path": "bin/pi-web-hub.mjs",
@@ -210,7 +210,7 @@
       },
       {
         "path": "manager/backends/native.ts",
-        "sha256": "7b83d342d6e0a0727c74459f96e4f053662ec6a1fdaab690b5d806f341c20a35"
+        "sha256": "768b1e08313475269ef73e8f4bfff42bafb7b072822ed0e4243790f03524ff3b"
       },
       {
         "path": "manager/contracts.ts",
@@ -316,11 +316,11 @@
   },
   "outputs": {
     "count": 1,
-    "sha256": "9766c3ce068384e8d2dcc9c8ec0c17e23b1f4255a777a095e9c6fe6773825633",
+    "sha256": "83cf230ac92b337769ef07f54b8807545687fc66fe601d8bc8f4412e8d9b6804",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "3ccc2003f0866c46fdadc566d524ddabf945ae81f69bf2fe3882ff26e19fda58"
+        "sha256": "936b9a109ad7266f64cdaebda430084f38475b4afac7bf1ecb21bd372a0b4956"
       }
     ]
   }

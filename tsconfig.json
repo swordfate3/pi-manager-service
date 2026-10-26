@@ -15,6 +15,6 @@
     "types": ["node", "vite/client"],
     "ignoreDeprecations": "6.0"
   },
-  "include": ["bin/**/*.mjs", "hub/**/*.ts", "protocol/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
+  "include": ["bin/**/*.mjs", "hub/**/*.ts", "manager/**/*.ts", "protocol/**/*.ts", "tests/**/*.ts", "vite.config.ts"],
   "exclude": ["integration-tests/**", "dist/**", "node_modules/**"]
 }

@@ -149,6 +149,32 @@ test('opt-in correlated packed Web prompt holds preflight and restores update el
   assert.equal(f.errors(), '');
 });
 
+test('real Pi final commit preserves a shutdown latch across acknowledgement and cancellation attempts', {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, false, true);
+  await f.write({ id: 'bootstrap', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
+  const expected = await f.snapshot();
+  assert.equal((await f.prepare(expected)).ok, true);
+  const bad = await f.control({ action: 'commit', operation_id: f.operation, expected: { ...expected, thinking: 'xhigh' } });
+  assert.equal(bad.ok, false, 'Complete final state mismatch must refuse without releasing the lease');
+  const committed = await f.control({ action: 'commit', operation_id: f.operation, expected });
+  assert.equal(committed.ok, true, 'Actual packed Web must implement the final runtime commit handshake');
+  assert.deepEqual(committed.result, { committed: true, operation_id: f.operation, snapshot: expected });
+  assert.equal((await f.control({ action: 'cancel', operation_id: f.operation })).ok, false);
+  assert.equal((await f.control({ action: 'commit', operation_id: f.operation, expected })).ok, false);
+  assert.equal((await f.prepare(expected)).ok, false);
+  assert.equal((await f.webRequest('committed-web', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  const delivered = (await f.trace()).filter(frame => frame.event === 'stdin').length;
+  await f.write({ id: 'committed-terminal', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
+  await waitFor(async () => (await f.snapshot()).busy === true);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'stdin').length, delivered);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 1);
+  assert.equal((await f.webRequest('read-only', 'get_state', {})).ok, true);
+  assert.equal(f.errors(), '');
+});
+
 test('opt-in correlated Web handled preflight remains ineligible after unrelated settlement', {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
 }, async t => {

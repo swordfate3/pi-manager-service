@@ -86,3 +86,25 @@ test("private runtime client bounds connected IPC time and refuses request autho
   assert.ok(Date.now() - started >= 40, "A silent connected server must actually reach the deadline");
   assert.equal(calls, 1);
 });
+
+test('private final commit transmits only an immutable complete snapshot on the existing credential-bound channel', async t => {
+  const { RuntimeClient } = await import('../manager/backends/runtime-client.ts');
+  let observed: any;
+  const endpoint = await fixture(t, (request, peer) => {
+    observed = request;
+    peer.end(JSON.stringify({ ok: true, result: { committed: true, operation_id: request.operation_id, snapshot: request.expected } }) + '\n');
+  });
+  const expected = { run_id: 'c'.repeat(32), runtime_id: 'runtime', session_id: 'session', leaf_id: 'leaf',
+    session_file: '/private/sessions/dialogue.jsonl', cwd: '/workspace', version: '1.4.0', idle: true,
+    pending: false, busy: false, provider: 'test', model: 'fixture', thinking: 'off' };
+  const client = new RuntimeClient(endpoint), before = structuredClone(expected);
+  const pending = client.request({ action: 'commit', operation_id: 'b'.repeat(32), expected } as never);
+  expected.thinking = 'injected-after-call';
+  const result: any = await pending;
+  assert.equal(result.committed, true); assert.deepEqual(observed.expected, before);
+  assert.deepEqual(Object.keys(observed).sort(), ['action', 'expected', 'operation_id', 'token']);
+  for (const altered of [{ ...before, extra: 'forbidden' }, { ...before, busy: true }, { ...before, run_id: 'invalid' },
+    { ...before, session_file: '/private/../escape' }, { ...before, idle: false }]) {
+    await assert.rejects(client.request({ action: 'commit', operation_id: 'b'.repeat(32), expected: altered } as never), /Invalid runtime request/);
+  }
+});

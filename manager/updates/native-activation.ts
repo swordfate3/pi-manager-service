@@ -321,7 +321,9 @@ export class NativeInstallation {
         request: h.consumer.request, snapshot: h.snapshot, capture: h.capture!.descriptor(), proof: h.proof!.result })));
       journalAttempted = true;
       const staged = await this.#journal.stage(plan); tx = await this.#journal.begin(operationId, staged.planHash);
-      await tx.advance('prepared', hash(canonical(plan.consumers)));
+      // Journal persistence failures are untyped. Latch uncertainty at this
+      // mutating boundary before the catch path can cancel any original lease.
+      await this.#mutate(() => tx!.advance('prepared', hash(canonical(plan.consumers))));
       for (const h of held) { await h.verifier!.revalidate(h.proof!); await h.capture!.verify(h.snapshot); }
       await this.#checkSelected(selectedRuntime.inputs); await this.#fence();
       // From durable intent onward, never cancel, reopen inputs or replay.

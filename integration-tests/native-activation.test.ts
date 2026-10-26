@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { initializeHub } from '../hub/config.ts';
 import { NativeInstallation } from '../manager/updates/native-activation.ts';
+import { NativeBackend, type NativeIdentity } from '../manager/backends/native.ts';
+import { ExecutionOutcomeUnknownError } from '../manager/errors.ts';
 import { CandidateInstaller } from '../manager/updates/candidate.ts';
 import { webInventory } from '../manager/updates/compatibility-inputs.ts';
 import type { TaskRecord } from '../manager/contracts.ts';
@@ -14,10 +18,15 @@ import { packedWeb } from './fixtures/packed-web.ts';
 
 // Executor-private coordinator acceptance. The gateway/approval adapters are a
 // later integration, so public updates stays false even if this test passes.
-test('native installation coordinates every official-candidate consumer and publishes before admission', {
+// R1 fault modes are authored but UNRUN: they require separately authorized
+// genuine candidate proofs, not a substitute positive verifier or FS fixture.
+const preparedFault = process.env.PI_MANAGER_TEST_PREPARED_JOURNAL_FAULT;
+test(preparedFault ? `native installation retains original leases after prepared journal ${preparedFault} uncertainty`
+  : 'native installation coordinates every official-candidate consumer and publishes before admission', {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT || !process.env.PI_MANAGER_TEST_CANDIDATE_ROOT || !process.env.PI_MANAGER_TEST_RECEIPT_SHA256,
   timeout: 300_000,
 }, async t => {
+  assert.ok(preparedFault === undefined || ['write', 'file-sync', 'directory-sync'].includes(preparedFault));
   const candidateRoot = process.env.PI_MANAGER_TEST_CANDIDATE_ROOT!;
   assert.equal(candidateRoot, '/tmp/manager-candidate-official-SPwX0o/candidates');
   const candidateId = 'c-e302720684b002296b28295be46b483bf2ec8a1fa9e0d08850056e66e92abe2e';
@@ -62,9 +71,29 @@ test('native installation coordinates every official-candidate consumer and publ
       provider: { extensionPath: provider, name: 'native-selected-fixture', model: 'fixed' },
       web: { extensionPath: path.join(initialWeb, 'extensions/mirror-server.ts'), hubConfigFile, port },
       startupTimeoutMs: 15000, stopTimeoutMs: 2000, generationTimeoutMs: 20000 } });
+  let faultAttempted = false, faultAssertionsComplete = false;
+  const originalOwners: { backend: NativeBackend; identity: NativeIdentity }[] = [];
+  if (preparedFault) {
+    const create = NativeBackend.prototype.create;
+    t.mock.method(NativeBackend.prototype, 'create', async function (this: NativeBackend, ...args: Parameters<typeof create>) {
+      const identity = await create.apply(this, args);
+      if (identity.stateDir.startsWith(path.join(root, 'state') + path.sep)) originalOwners.push({ backend: this, identity });
+      return identity;
+    });
+  }
   t.after(async () => {
     // No broad cleanup, no adoption or retry after unknown. Preserve exact
     // operation/capture/audit/proof evidence even on a successful acceptance.
+    if (faultAttempted) {
+      t.diagnostic(`prepared journal fault evidence retained: ${root}`);
+      // Never ask the poisoned coordinator to reconcile or cancel. Only after
+      // all assertions, terminate the exact known disposable fixture handles
+      // once. If assertions/stop fail, retain resources; no adoption or retry.
+      if (faultAssertionsComplete) for (const owned of originalOwners) {
+        assert.equal((await owned.backend.stop(owned.identity.instanceId)).status, 'stopped');
+      }
+      return;
+    }
     try { await installation.close(); }
     catch (error) { throw Error(`Activation cleanup uncertain; retained ${root}`, { cause: error }); }
     t.diagnostic(`private activation evidence retained: ${root}`);
@@ -80,6 +109,61 @@ test('native installation coordinates every official-candidate consumer and publ
   const task: TaskRecord = { id: '00000000-0000-4000-8000-000000000091', key: 'official-native', requester: 'agent', target: 'shared', action: 'pi-update',
     state: 'running', revision: 2, createdAt: '2026-10-26T00:00:00.000Z', updatedAt: '2026-10-26T00:00:00.000Z',
     payload: { ...await installation.review(), candidateId, receiptHash, releaseIdentity: receipt.release.identity, version: '1.4.0' } };
+  if (preparedFault) {
+    const operation = task.id.replaceAll('-', '');
+    const journal = path.join(root, 'installation/journal'), dir = path.join(journal, operation);
+    const prepared = path.join(dir, '01-prepared.json');
+    let written = false, injected = false;
+    const open = fs.open;
+    const fault = () => { injected = true; throw Error('injected prepared journal persistence uncertainty'); };
+    t.mock.method(fs, 'open', async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args), file = String(args[0]);
+      if (file === prepared) {
+        const write = handle.writeFile.bind(handle), sync = handle.sync.bind(handle);
+        handle.writeFile = async (...values: Parameters<typeof write>) => {
+          await write(...values); written = true;
+          if (preparedFault === 'write' && !injected) fault();
+        };
+        handle.sync = async () => { await sync(); if (preparedFault === 'file-sync' && !injected) fault(); };
+      } else if (file === dir) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { await sync(); if (written && preparedFault === 'directory-sync' && !injected) fault(); };
+      }
+      return handle;
+    });
+    syncBuiltinESMExports();
+    t.after(() => { fs.open = open; syncBuiltinESMExports(); });
+    assert.equal(originalOwners.length, consumerIds.length);
+    const mutations: string[] = [];
+    for (const method of ['cancelRuntime', 'commitRuntime', 'stop'] as const) {
+      const originalMethod = NativeBackend.prototype[method];
+      t.mock.method(NativeBackend.prototype, method, function (this: NativeBackend, ...args: any[]) {
+        if (originalOwners.some(o => o.backend === this && o.identity.instanceId === args[0])) mutations.push(method);
+        return (originalMethod as Function).apply(this, args);
+      });
+    }
+    faultAttempted = true;
+    await assert.rejects(installation.activate(task), ExecutionOutcomeUnknownError);
+    assert.equal(injected, true, 'must reach the real prepared journal event after genuine proofs');
+    assert.deepEqual(mutations, [], 'unknown must be latched BEFORE any original cancel/commit/stop');
+    assert.deepEqual(installation.list(), original.map(o => o.identity));
+    for (const old of original) {
+      assert.equal((await installation.inspect(old.identity.instanceId))?.pid, old.identity.pid);
+      assert.deepEqual(await readFile(old.snapshot.session_file!), old.bytes);
+    }
+    assert.ok((await readFile(path.join(journal, '.writer'))).length);
+    assert.equal(JSON.parse(await readFile(prepared, 'utf8')).stage, 'prepared');
+    assert.equal(JSON.parse(await readFile(path.join(journal, 'selection.json'), 'utf8')).revision, 0);
+    assert.equal(JSON.parse(await readFile(path.join(root, 'installation/operations', operation, 'outcome.json'), 'utf8')).status, 'unknown');
+    await assert.rejects(installation.generate('one', 'must stay fenced'), ExecutionOutcomeUnknownError);
+    await assert.rejects(installation.create({ instanceId: 'later', workspace: { root: 'projects', path: 'one' } }), ExecutionOutcomeUnknownError);
+    await assert.rejects(installation.stop('one'), ExecutionOutcomeUnknownError);
+    await assert.rejects(installation.activate(task), ExecutionOutcomeUnknownError);
+    await assert.rejects(installation.close(), ExecutionOutcomeUnknownError);
+    assert.deepEqual(mutations, []);
+    faultAssertionsComplete = true;
+    return;
+  }
   const result = await installation.activate(task);
   assert.equal(result.status, 'updated'); assert.equal(result.revision, 1);
   const review = await installation.review(); assert.equal(review.expectedRevision, 1); assert.equal(review.consumers.length, consumerIds.length);

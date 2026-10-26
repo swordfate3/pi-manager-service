@@ -8,6 +8,33 @@ import { type ExtensionAPI, VERSION } from "@earendil-works/pi-coding-agent";
 export default function (pi: ExtensionAPI) {
   const root = process.env.PI_RUNTIME_PROBE_STATE!;
   const record = (event: string, fields = {}) => appendFileSync(path.join(root, "observations.jsonl"), JSON.stringify({ event, ...fields }) + "\n");
+  const waitForRelease = async (stage: string) => {
+    const deadline = Date.now() + 20_000;
+    while (!existsSync(path.join(root, `release-${stage}`))) {
+      if (Date.now() >= deadline) throw Error(`Preflight ${stage} release deadline`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  };
+  if (process.env.PI_RUNTIME_PROBE_PREFLIGHT === "1") {
+    pi.on("input", async event => {
+      if (event.text === "PROBE_PREFLIGHT_input") {
+        record("preflight_paused", { stage: "input" });
+        await waitForRelease("input");
+      }
+      if (event.text === "PROBE_HANDLED") {
+        record("handled_pending");
+        await waitForRelease("handled");
+        record("handled_finished");
+        return { action: "handled" };
+      }
+      return { action: "continue" };
+    });
+    pi.on("before_agent_start", async event => {
+      if (event.prompt !== "PROBE_PREFLIGHT_before_agent_start") return;
+      record("preflight_paused", { stage: "before_agent_start" });
+      await waitForRelease("before_agent_start");
+    });
+  }
   const faux = registerFauxProvider({ provider: "rpc-fence-fixture", models: [{ id: "deterministic", name: "RPC fence acceptance", reasoning: true }] });
   const answer = async (context: any) => {
     const last = context.messages.findLast((entry: any) => entry.role === "user");
@@ -19,7 +46,7 @@ export default function (pi: ExtensionAPI) {
         if (Date.now() >= deadline) throw Error("Generation release deadline");
         await new Promise(resolve => setTimeout(resolve, 10));
       }
-    } else if (message !== "PROBE_BOOTSTRAP_ONCE") throw Error("Unexpected fixture request");
+    } else if (!["PROBE_BOOTSTRAP_ONCE", "PROBE_PREFLIGHT_input", "PROBE_PREFLIGHT_before_agent_start"].includes(message)) throw Error("Unexpected fixture request");
     return fauxAssistantMessage("RPC_FENCE_RESPONSE_COMPLETED");
   };
   faux.setResponses(Array.from({ length: 4 }, () => answer));

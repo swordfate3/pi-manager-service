@@ -11,11 +11,7 @@ import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
 import { packedWeb } from "./fixtures/packed-web.ts";
 
-// Removing the preload, admitting an unknown guard, releasing before settled,
-// or bypassing the Web mutation barrier must each break this real-runtime test.
-test("real RPC Pi and packed Web freeze both input channels only after generation settles", {
-  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
-}, async t => {
+async function rpcFenceFixture(t: any, preflight = false) {
   const root = await mkdtemp(path.join(tmpdir(), "manager-rpc-fence-"));
   let child: ChildProcessWithoutNullStreams | undefined, ws: WebSocket | undefined;
   let errors = "";
@@ -37,12 +33,14 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
   const cli = await realpath(path.resolve("node_modules/.bin/pi"));
   child = spawn(process.execPath, ["--import", path.resolve("runtime/pi_rpc_guard.mjs"), cli,
     "--mode", "rpc", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp",
-    "--session-dir", path.join(root, "sessions"), "--extension", path.resolve("integration-tests/fixtures/rpc-fence-provider.ts"),
-    "--extension", path.join(web, "extensions", "mirror-server.ts"), "--provider", "rpc-fence-fixture", "--model", "deterministic"], {
+    // The pausing input hook must run AFTER Web's actual input gate.
+    "--session-dir", path.join(root, "sessions"), "--extension", path.join(web, "extensions", "mirror-server.ts"),
+    "--extension", path.resolve("integration-tests/fixtures/rpc-fence-provider.ts"), "--provider", "rpc-fence-fixture", "--model", "deterministic"], {
     cwd: path.join(root, "workspace"), stdio: ["pipe", "pipe", "pipe"],
     env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: path.join(root, "home"), LANG: "C.UTF-8",
       PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_AGENT_DIR: path.join(root, "agent"),
       PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_RUNTIME_PROBE_STATE: probe,
+      ...(preflight ? { PI_RUNTIME_PROBE_PREFLIGHT: "1" } : {}),
       PI_RUNTIME_RUN_ID: "c".repeat(32), PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
       PI_WEB_UI_HOST: "127.0.0.1", PI_WEB_UI_PORT: String(port), PI_WEB_UI_DISABLED: "false",
     },
@@ -82,7 +80,17 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
     await waitFor(async () => messages.some(frame => frame.type === "res" && frame.id === id));
     return messages.find(frame => frame.type === "res" && frame.id === id);
   };
-  assert.equal((await webRequest("generation", "prompt", { message: "PROBE_GENERATION" })).ok, true);
+  return { probe, operation, rpc, write, control, snapshot, prepare, trace, webRequest, errors: () => errors };
+}
+
+// Removing the preload, admitting an unknown guard, releasing before settled,
+// or bypassing the Web mutation barrier must each break this real-runtime test.
+test("real RPC Pi and packed Web freeze both input channels only after generation settles", {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const { probe, operation, rpc, write, control, snapshot, prepare, trace, webRequest, errors } = await rpcFenceFixture(t);
+  // Correlated stdin has completion evidence; Web's void dispatch does not.
+  await write({ id: "generation", type: "prompt", message: "PROBE_GENERATION" });
   await waitFor(async () => (await trace()).some(frame => frame.event === "provider_call"));
   const busy = await snapshot(); assert.equal(busy.idle, false);
   assert.equal((await prepare(busy)).ok, false, "generating Pi must not be prepared");
@@ -95,7 +103,7 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
   assert.equal((await webRequest("blocked-thinking", "set_thinking_level", { level: "low" })).ok, false);
   assert.equal((await trace()).filter(frame => frame.event === "provider_call").length, 1);
   assert.equal((await control({ action: "cancel", operation_id: operation })).ok, true);
-  assert.equal((await webRequest("released-web", "prompt", { message: "PROBE_BOOTSTRAP_ONCE" })).ok, true);
+  await write({ id: "second-generation", type: "prompt", message: "PROBE_BOOTSTRAP_ONCE" });
   await waitFor(async () => rpc.filter(frame => frame.type === "agent_settled").length === 2, 10_000);
   const secondIdle = await snapshot(); assert.equal((await prepare(secondIdle)).ok, true);
   const delivered = (await trace()).filter(frame => frame.event === "stdin").length;
@@ -106,8 +114,84 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
   assert.equal((await trace()).filter(frame => frame.event === "stdin").length, delivered);
   assert.equal((await control({ action: "cancel", operation_id: operation })).ok, true);
   assert.equal((await prepare(await snapshot())).ok, false);
+  assert.equal((await webRequest("released-web", "prompt", { message: "PROBE_BOOTSTRAP_ONCE" })).ok, true);
+  await waitFor(async () => rpc.filter(frame => frame.type === "agent_settled").length === 3, 10_000);
   assert.equal((await webRequest("final-read", "get_state", {})).ok, true);
-  assert.equal((await trace()).filter(frame => frame.event === "provider_call").length, 2);
+  assert.equal((await trace()).filter(frame => frame.event === "provider_call").length, 3);
   assert.equal(rpc.some(frame => frame.id === "blocked-terminal"), false);
-  assert.equal(errors, "");
+  assert.equal(errors(), "");
+});
+
+// These new tests run the installed archive and real guard. Restoring Web's
+// untracked void dispatch must let prepare succeed during the held preflight.
+for (const [method, stage] of [["prompt", "input"], ["steer", "input"], ["follow_up", "input"], ["prompt", "before_agent_start"]]) {
+  test(`RPC preflight ${method} remains ineligible after Web input gate during ${stage}`, {
+    skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+  }, async t => {
+    const f = await rpcFenceFixture(t, true);
+    // Persist a session so a missing session file cannot mask unsafe admission.
+    await f.write({ id: "bootstrap", type: "prompt", message: "PROBE_BOOTSTRAP_ONCE" });
+    await waitFor(async () => f.rpc.some(frame => frame.type === "agent_settled"));
+    assert.equal((await f.trace()).find(frame => frame.event === "rpc_ready").version, "1.1.0");
+    assert.equal((await f.prepare(await f.snapshot())).ok, true);
+    assert.equal((await f.webRequest("denied", method, { message: "PROBE_BOOTSTRAP_ONCE" })).ok, false);
+    assert.equal((await f.control({ action: "cancel", operation_id: f.operation })).ok, true);
+    assert.equal((await f.snapshot()).busy, false, "Rejected input must not taint a later accepted dispatch");
+
+    assert.equal((await f.webRequest("accepted", method, { message: `PROBE_PREFLIGHT_${stage}` })).ok, true);
+    await waitFor(async () => (await f.trace()).some(frame => frame.event === "preflight_paused" && frame.stage === stage));
+    assert.equal(f.rpc.filter(frame => frame.type === "agent_start").length, 1, "No new generation before release");
+    const held = await f.snapshot();
+    assert.equal(held.idle, true, "Pi still reports idle in the deferred interval");
+    assert.equal(held.pending, false);
+    const prepared = await f.prepare(held);
+    // On RED, release any accidentally granted lease before fixture cleanup.
+    if (prepared.ok) await f.control({ action: "cancel", operation_id: f.operation });
+    assert.equal(prepared.ok, false, "Accepted Web preflight must reject prepare before agent_start");
+    await writeFile(path.join(f.probe, `release-${stage}`), "release");
+    await waitFor(async () => f.rpc.filter(frame => frame.type === "agent_settled").length === 2);
+    assert.equal((await f.trace()).filter(frame => frame.event === "provider_call").length, 2);
+    assert.equal((await f.prepare(await f.snapshot())).ok, false, "Uncorrelated settlement cannot clear void dispatch uncertainty");
+    assert.equal((await f.webRequest("later", "prompt", { message: "PROBE_BOOTSTRAP_ONCE" })).ok, true);
+    await waitFor(async () => f.rpc.filter(frame => frame.type === "agent_settled").length === 3);
+    assert.equal((await f.webRequest("read", "get_state", {})).ok, true);
+    assert.equal(f.errors(), "");
+  });
+}
+
+test("RPC preflight handled Web input stays ineligible across an unrelated generation settlement", {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, true);
+  await f.write({ id: "bootstrap", type: "prompt", message: "PROBE_BOOTSTRAP_ONCE" });
+  await waitFor(async () => f.rpc.some(frame => frame.type === "agent_settled"));
+  assert.equal((await f.webRequest("handled", "prompt", { message: "PROBE_HANDLED" })).ok, true);
+  await waitFor(async () => (await f.trace()).some(frame => frame.event === "handled_pending"));
+  const prepared = await f.prepare(await f.snapshot());
+  if (prepared.ok) await f.control({ action: "cancel", operation_id: f.operation });
+  assert.equal(prepared.ok, false, "Handled input owns deferred work without agent_start");
+  await f.write({ id: "unrelated", type: "prompt", message: "PROBE_BOOTSTRAP_ONCE" });
+  await waitFor(async () => f.rpc.filter(frame => frame.type === "agent_settled").length === 2);
+  assert.equal((await f.prepare(await f.snapshot())).ok, false);
+  await writeFile(path.join(f.probe, "release-handled"), "release");
+  await waitFor(async () => (await f.trace()).some(frame => frame.event === "handled_finished"));
+  assert.equal((await f.prepare(await f.snapshot())).ok, false);
+  assert.equal((await f.trace()).filter(frame => frame.event === "provider_call").length, 2);
+  assert.equal(f.errors(), "");
+});
+
+test("RPC preflight queued Web follow-up cannot regain eligibility after generation settles", {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, true);
+  await f.write({ id: "generation", type: "prompt", message: "PROBE_GENERATION" });
+  await waitFor(async () => (await f.trace()).some(frame => frame.event === "provider_call"));
+  assert.equal((await f.webRequest("queued", "follow_up", { message: "PROBE_BOOTSTRAP_ONCE" })).ok, true);
+  await waitFor(async () => (await f.snapshot()).pending === true);
+  assert.equal((await f.prepare(await f.snapshot())).ok, false);
+  await writeFile(path.join(f.probe, "release-generation"), "release");
+  await waitFor(async () => f.rpc.some(frame => frame.type === "agent_settled"));
+  assert.equal((await f.trace()).filter(frame => frame.event === "provider_call").length, 2);
+  assert.equal((await f.prepare(await f.snapshot())).ok, false, "Queued void dispatch has no correlated completion");
+  assert.equal(f.errors(), "");
 });

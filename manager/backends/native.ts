@@ -350,11 +350,17 @@ export class NativeBackend {
       await capture.verify(lease.snapshot);
       const fresh = await this.#runtimeSnapshot(entry, await runtime.client.request({ action: 'snapshot' }));
       if (!sameRuntime(fresh, lease.snapshot) || runtime.lease !== lease) throw Error('Runtime changed before final commit');
-      capture.fence(fresh);
       // Parent writes remain blocked; the child synchronously rechecks full live
       // state at its own irreversible latch. Never retry an uncertain dispatch.
-      sent = true;
-      const reply = await runtime.client.request({ action: 'commit', operation_id: operation, expected: fresh });
+      const reply = await runtime.client.request({ action: 'commit', operation_id: operation, expected: fresh }, () => {
+        if (this.#runtimeEntry(id) !== entry || entry.runtime !== runtime || runtime.lease !== lease ||
+          runtime.barrier !== operation || !runtime.inFlight || runtime.uncertain || runtime.committed ||
+          lease.capture !== capture || performance.now() >= lease.expiresAt) throw Error('Original runtime commit lease unavailable');
+        capture.fence(fresh);
+        // No asynchronous work may separate this guard from the credential write.
+        sent = true;
+        return undefined;
+      });
       if (!object(reply) || Object.keys(reply).sort().join() !== 'committed,operation_id,snapshot' ||
         reply.committed !== true || reply.operation_id !== operation) throw Error('Invalid runtime commit acknowledgement');
       const confirmed = await this.#runtimeSnapshot(entry, reply.snapshot);
@@ -386,15 +392,25 @@ export class NativeBackend {
     const { entry, runtime, lease } = this.#runtimeLease(id, operation);
     if (runtime.pendingAdmission !== operation || !sameRuntime(expected, lease.snapshot)) throw Error('Original successor admission required');
     runtime.inFlight = true;
+    let sent = false;
     try {
-      const reply = await runtime.client.request({ action: 'admit', operation_id: operation, expected: lease.snapshot });
+      const reply = await runtime.client.request({ action: 'admit', operation_id: operation, expected: lease.snapshot }, () => {
+        if (this.#runtimeEntry(id) !== entry || entry.runtime !== runtime || runtime.lease !== lease ||
+          runtime.barrier !== operation || runtime.pendingAdmission !== operation || !runtime.inFlight ||
+          runtime.uncertain || runtime.committed || performance.now() >= lease.expiresAt) throw Error('Original successor lease unavailable');
+        sent = true;
+        return undefined;
+      });
       if (!object(reply) || Object.keys(reply).sort().join() !== 'admitted,operation_id,snapshot' ||
         reply.admitted !== true || reply.operation_id !== operation) throw Error('Invalid successor acknowledgement');
       const confirmed = await this.#runtimeSnapshot(entry, reply.snapshot);
       if (!sameRuntime(confirmed, lease.snapshot) || performance.now() >= lease.expiresAt) throw Error('Successor acknowledgement changed or expired');
       runtime.pendingAdmission = undefined; runtime.barrier = undefined; runtime.lease = undefined;
       return confirmed;
-    } catch { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+    } catch (error) {
+      if (sent) { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+      throw error;
+    }
     finally { runtime.inFlight = false; }
   }
 

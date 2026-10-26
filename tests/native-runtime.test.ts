@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import net from 'node:net';
 import test from "node:test";
 import { NativeBackend } from "../manager/backends/native.ts";
 import { initializeHub } from "../hub/config.ts";
@@ -44,6 +45,65 @@ async function runtimeFixture(t: any) {
   t.after(async () => { try { for (const i of backend.list()) await backend.stop(i.instanceId); } finally { for (const cleanup of cleanups) await cleanup(); } });
   await backend.create(f.request);
   return { ...f, backend, control: (value: unknown) => writeFile(path.join(f.workspace, 'control.json'), JSON.stringify(value)) };
+}
+
+// Keep the actual socket/endpoint checks. Hold only delivery of its connected
+// event, at the last asynchronous dependency before RuntimeClient writes bytes.
+function pauseConnected(t: any, nth: number) {
+  let reached!: () => void, release!: () => void;
+  const connected = new Promise<void>(resolve => { reached = resolve; });
+  const resume = new Promise<void>(resolve => { release = resolve; });
+  const original = net.createConnection;
+  const mock = t.mock.method(net, 'createConnection', (...args: any[]) => {
+    const peer = (original as any)(...args) as net.Socket;
+    if (--nth === 0) {
+      const on = peer.on;
+      peer.on = function (event: string, listener: (...args: any[]) => void) {
+        return on.call(this, event, event === 'connect' ? () => { reached(); void resume.then(() => listener()); } : listener);
+      };
+    }
+    return peer;
+  });
+  return { connected, release, restore: () => mock.mock.restore() };
+}
+
+for (const action of ['commit', 'admit'] as const) {
+  for (const mode of action === 'commit' ? ['copy-change', 'deadline', 'replacement'] : ['deadline', 'replacement']) {
+    test(`native ${action} checks ${mode} after connect and before credential dispatch`, { timeout: 10_000 }, async t => {
+      const f = await runtimeFixture(t), id = f.request.instanceId, operation = 'a'.repeat(32);
+      let previous = f.backend.list()[0], state = await f.backend.snapshotRuntime(id);
+      if (action === 'admit') {
+        await f.backend.stop(id);
+        previous = await f.backend.resumeForActivation(f.request, previous, { operationId: operation, snapshot: state });
+        state = await f.backend.snapshotRuntime(id);
+      }
+      let now = performance.now();
+      const clock = t.mock.method(performance, 'now', () => now);
+      await f.backend.prepareRuntime(id, operation, state);
+      const root = path.join(f.parent, 'captures'); await mkdir(root, { mode: 0o700 });
+      const capture = action === 'commit' ? await f.backend.captureRuntime(id, operation, root) : undefined;
+      const paused = pauseConnected(t, action === 'commit' ? 2 : 1);
+      const pending = action === 'commit' ? f.backend.commitRuntime(id, operation, capture!) : f.backend.admitRuntime(id, operation, state);
+      void pending.catch(() => {});
+      try {
+        await paused.connected;
+        if (mode === 'copy-change') {
+          const copy = path.join(root, capture!.descriptor().reference);
+          await chmod(copy, 0o600); await writeFile(copy, 'tampered capture copy\n');
+        } else if (mode === 'deadline') now += 150_001;
+        else {
+          await f.backend.stop(id);
+          await f.backend.resume(f.request, previous);
+        }
+        paused.release();
+        await assert.rejects(pending, error => !/unknown/i.test(String(error)), 'No bytes dispatched is a definite refusal, not an unknown outcome');
+        await assert.rejects(access(path.join(f.workspace, `${action}-observed`)), 'The child must receive zero final requests');
+        if (capture) await access(path.join(root, capture.descriptor().reference));
+        if (mode !== 'replacement') await assert.rejects(f.backend.generate(id, 'parent gate remains held'), /fenced/i);
+        else await f.backend.generate(id, 'replacement did not inherit old authority');
+      } finally { paused.release(); await pending.catch(() => {}); paused.restore(); clock.mock.restore(); }
+    });
+  }
 }
 
 test('native update lease blocks parent input synchronously through prepare and requires exact cancellation', async t => {
@@ -182,8 +242,9 @@ test('post-dispatch native commit cannot complete against a replacement of the o
   let received!: () => void, release!: () => void;
   const replyReceived = new Promise<void>(resolve => { received = resolve; });
   const continueReply = new Promise<void>(resolve => { release = resolve; });
-  const held = t.mock.method(RuntimeClient.prototype, 'request', async function (this: RuntimeClient, value: RuntimeCommand) {
-    const result = await original.call(this, value);
+  const held = t.mock.method(RuntimeClient.prototype, 'request', async function (this: RuntimeClient, ...args: Parameters<RuntimeClient['request']>) {
+    const [value] = args;
+    const result = await original.apply(this, args);
     if (value.action === 'commit') { received(); await continueReply; }
     return result;
   });

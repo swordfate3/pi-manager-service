@@ -49,7 +49,9 @@ export class RuntimeClient {
     if (this.#identity && identity !== this.#identity) throw Error("Changed runtime endpoint");
     this.#identity = identity;
   }
-  async request(value: RuntimeCommand): Promise<unknown> {
+  // Executor-local only: never serialized. Returning undefined makes an async
+  // guard a type error; the runtime check also refuses a mistakenly supplied promise.
+  async request(value: RuntimeCommand, beforeWrite?: () => undefined): Promise<unknown> {
     const fields = command(value);
     if (this.#pending) throw Error("Runtime request refused");
     this.#pending = true;
@@ -62,7 +64,14 @@ export class RuntimeClient {
         const timer = setTimeout(fail, this.#timeout);
         peer.on("error", fail);
         peer.on("close", () => { clearTimeout(timer); if (!done) fail(); });
-        peer.on("connect", () => peer.end(JSON.stringify({ token: this.#token, ...fields }) + "\n"));
+        peer.on("connect", () => {
+          if (done) return;
+          try {
+            const frame = JSON.stringify({ token: this.#token, ...fields }) + "\n";
+            if (beforeWrite && beforeWrite() !== undefined) throw Error('Runtime write guard must be synchronous');
+            peer.end(frame);
+          } catch { fail(); }
+        });
         peer.on("data", (chunk: Buffer) => {
           if (done) return;
           if (data.length + chunk.length > 16384) { fail(); return; }

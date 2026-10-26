@@ -126,3 +126,15 @@ test('private admission rejects coercible operation and run identities before op
   await assert.rejects(client.request({ action: 'admit', operation_id: 'b'.repeat(32), expected: { ...expected, run_id: ['c'.repeat(32)] } } as never), /Invalid runtime request/);
   assert.equal(delivered, 0, 'Malformed identities must not receive the runtime credential');
 });
+
+test('executor pre-write refusal sends no request and never awaits a promise guard', async t => {
+  const { RuntimeClient } = await import('../manager/backends/runtime-client.ts');
+  const delivered: unknown[] = [];
+  const endpoint = await fixture(t, (request, peer) => { delivered.push(request); peer.end('{"ok":true,"result":{}}\n'); });
+  const client = new RuntimeClient(endpoint);
+  await assert.rejects(client.request({ action: 'snapshot' }, () => { throw Error('local fence refused'); }), /refused/);
+  await assert.rejects(client.request({ action: 'snapshot' }, (() => Promise.resolve()) as never), /refused/);
+  assert.deepEqual(delivered, []);
+  await client.request({ action: 'snapshot' }, () => undefined);
+  assert.deepEqual(delivered, [{ token: endpoint.token, action: 'snapshot' }], 'The executor callback is not wire authority');
+});

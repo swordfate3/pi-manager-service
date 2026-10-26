@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { access, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -75,6 +76,13 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   assert.deepEqual(await backend.commitRuntime('managed', operation, captured), finalState);
   await assert.rejects(backend.generate('managed', 'cannot reopen after verified native commit'), /fenced/);
   await assert.rejects(backend.cancelRuntime('managed', operation));
+  const committedPromptId = `post-commit-${randomUUID()}`;
+  ws.send(JSON.stringify({ type: 'req', id: committedPromptId, method: 'prompt', params: { message: 'child must reject after final commit' } }));
+  await waitFor(async () => messages.some(m => m.type === 'res' && m.id === committedPromptId));
+  assert.equal(messages.find(m => m.type === 'res' && m.id === committedPromptId).ok, false);
+  const stillCommitted = await backend.snapshotRuntime('managed');
+  assert.equal(stillCommitted.session_id, finalState.session_id);
+  assert.equal(stillCommitted.leaf_id, finalState.leaf_id);
   await backend.stop('managed');
   // A newer unrelated session must not win a --continue-style discovery.
   await writeFile(path.join(identity.stateDir, 'sessions', 'newer-decoy.jsonl'), [

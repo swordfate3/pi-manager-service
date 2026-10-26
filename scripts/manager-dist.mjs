@@ -17,6 +17,7 @@ const SOURCE_FILES = [
   "runtime/pi-session-control",
   "runtime/pi_launch_policy.py",
   "runtime/pi_model_sync.py",
+  "runtime/pi_rpc_guard.mjs",
   "runtime/pi_stdin_guard.mjs",
   "runtime/pi_supervisor.py",
   "runtime/runtime_identity.py",

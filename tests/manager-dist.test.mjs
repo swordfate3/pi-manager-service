@@ -146,6 +146,16 @@ test("new manager service sources are fingerprinted and cannot drift unnoticed",
   await assert.rejects(f.module.verifyManifest(f.directory), /Source inventory differs/);
 });
 
+test('distribution verification rejects changes to the shipped RPC input guard', async t => {
+  const f = await fixture();
+  t.after(() => rmSync(f.directory, { recursive: true, force: true }));
+  await f.module.writeManifest(f.directory);
+  await f.module.verifyManifest(f.directory);
+  const guard = path.join(f.directory, 'runtime', 'pi_rpc_guard.mjs');
+  writeFileSync(guard, `${readFileSync(guard, 'utf8')}\n// changed shipped guard\n`);
+  await assert.rejects(f.module.verifyManifest(f.directory), /Source inventory differs/);
+});
+
 test("distribution inventory refuses source symlinks", async (t) => {
   const f = await fixture();
   t.after(() => rmSync(f.directory, { recursive: true, force: true }));

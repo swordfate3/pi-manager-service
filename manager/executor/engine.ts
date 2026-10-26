@@ -4,6 +4,8 @@ import type { ExecutorConfig } from "../config.ts";
 import { canonical, digest, equalHash, identifier, keys, ManagerError, record, requireThat, revision, taskId, token } from "../validation.ts";
 import type { TaskBackendAdapter } from "./adapter.ts";
 import type { ApprovalBinding, TaskView } from "../api.ts";
+import { DockerOutcomeUnknownError } from "../backends/docker-engine.ts";
+import { ExecutionOutcomeUnknownError } from "../errors.ts";
 
 type Principal = ExecutorConfig["principals"][number];
 function requestHash(t: TaskRequest) { return digest(canonical({ key: t.key, requester: t.requester, target: t.target, action: t.action, payload: t.payload })); }
@@ -37,6 +39,7 @@ export class TaskEngine {
       for (const task of await store.list()) {
         if (task.state === "running") await store.transition(task.id, "running", "unknown", { expectedRevision: task.revision });
       }
+      await adapter?.restore?.(await store.list());
       return engine;
     } catch (error) { await store.close(); throw error; }
   }
@@ -65,17 +68,20 @@ export class TaskEngine {
   }
   async #handle(p: Principal, admin: boolean, m: Record<string, unknown>): Promise<unknown> {
     if (m.op === "capabilities") {
-      keys(m, ["op"]); return { native: !!this.#adapter, isolation: this.#adapter ? "trusted-local-development" : "unavailable", enrollment: false, docker: false, updates: false, approval: admin };
+      keys(m, ["op"]);
+      const capabilities = this.#adapter?.capabilities;
+      return { native: capabilities?.native ?? false, docker: capabilities?.docker ?? false,
+        isolation: capabilities?.isolation ?? "unavailable", enrollment: false, updates: false, approval: admin };
     }
     if (m.op === "workspaces") { keys(m, ["op"]); return Object.entries(this.#config.workspaces).map(([id, w]) => ({ id, label: w.label })); }
-    if (m.op === "resources") { keys(m, ["op"]); return this.#adapter?.resources(p.id) ?? []; }
+    if (m.op === "resources") { keys(m, ["op"]); return await this.#adapter?.resources(p.id) ?? []; }
     if (m.op === "list") {
       keys(m, ["op"]); const list = await this.#store.list();
       return list.filter((t): t is TaskRecord => !!t && (admin || t.requester === p.id)).map(view);
     }
     if (m.op === "submit") {
       keys(m, ["op", "request"]); const r = record(m.request);
-      requireThat(r.action === "create" || r.action === "stop", 503);
+      requireThat(r.action === "create" || r.action === "stop" || r.action === "start", 503);
       keys(r, r.action === "create" ? ["key", "action", "target", "workspace"] : ["key", "action", "target"]);
       const request: TaskRequest = { key: identifier(r.key), requester: p.id, target: identifier(r.target), action: r.action, payload: r.action === "create" ? { workspace: identifier(r.workspace) } : {} };
       if (r.action === "create") requireThat(Object.hasOwn(this.#config.workspaces, r.workspace as string));
@@ -123,9 +129,12 @@ export class TaskEngine {
     try {
       const result = await this.#adapter!.execute(task);
       await this.#store.transition(task.id, "running", "succeeded", { expectedRevision: task.revision, result });
-    } catch {
+    } catch (error) {
       // If persistence is uncertain TaskStore poisons writes. Restart turns any remaining running task unknown.
-      await this.#store.transition(task.id, "running", "failed", { expectedRevision: task.revision, result: { status: "execution-failed" } }).catch(() => {});
+      const unknown = error instanceof DockerOutcomeUnknownError || error instanceof ExecutionOutcomeUnknownError;
+      await this.#store.transition(task.id, "running", unknown ? "unknown" : "failed", {
+        expectedRevision: task.revision, result: { status: unknown ? "execution-outcome-unknown" : "execution-failed" },
+      }).catch(() => {});
     }
   }
   close() {

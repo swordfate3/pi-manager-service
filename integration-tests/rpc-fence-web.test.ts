@@ -11,7 +11,7 @@ import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
 import { packedWeb } from "./fixtures/packed-web.ts";
 
-async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false, observeAdmission = false) {
+async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false, observeAdmission = false, bootstrap = false) {
   const root = await mkdtemp(path.join(tmpdir(), "manager-rpc-fence-"));
   let child: ChildProcessWithoutNullStreams | undefined, ws: WebSocket | undefined;
   let errors = "";
@@ -30,11 +30,18 @@ async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false,
   const reserve = await listen(async (_req, res) => { res.end(); }, 0);
   const port = reserve.port; await reserve.close();
   const token = "a".repeat(64), operation = "b".repeat(32), socketPath = path.join(root, "run", "control.sock");
+  const restored = path.join(root, 'sessions', 'saved.jsonl');
+  if (bootstrap) await writeFile(restored, [
+    { type: 'session', version: 3, id: 'synthetic-restored-session', timestamp: '2026-10-26T00:00:00.000Z', cwd: path.join(root, 'workspace') },
+    { type: 'thinking_level_change', id: 'saved-thinking', parentId: null, timestamp: '2026-10-26T00:00:00.000Z', thinkingLevel: 'off' },
+    { type: 'message', id: 'saved-leaf', parentId: 'saved-thinking', timestamp: '2026-10-26T00:00:00.000Z',
+      message: { role: 'user', content: 'synthetic saved text', timestamp: 1 } },
+  ].map(value => JSON.stringify(value)).join('\n') + '\n', { mode: 0o600 });
   const cli = await realpath(path.resolve("node_modules/.bin/pi"));
   child = spawn(process.execPath, ["--import", path.resolve("runtime/pi_rpc_guard.mjs"), cli,
     "--mode", "rpc", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp",
     // The pausing input hook must run AFTER Web's actual input gate.
-    "--session-dir", path.join(root, "sessions"), "--extension", path.join(web, "extensions", "mirror-server.ts"),
+    "--session-dir", path.join(root, "sessions"), ...(bootstrap ? ['--session', restored] : []), "--extension", path.join(web, "extensions", "mirror-server.ts"),
     "--extension", path.resolve("integration-tests/fixtures/rpc-fence-provider.ts"), "--provider", "rpc-fence-fixture", "--model", "deterministic"], {
     cwd: path.join(root, "workspace"), stdio: ["pipe", "pipe", "pipe"],
     env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: path.join(root, "home"), LANG: "C.UTF-8",
@@ -43,6 +50,7 @@ async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false,
       ...(preflight ? { PI_RUNTIME_PROBE_PREFLIGHT: "1" } : {}),
       ...(correlatedWeb ? { PI_RUNTIME_RPC_WEB_INPUT: "correlated-text-v1" } : {}),
       ...(observeAdmission ? { PI_RUNTIME_PROBE_ADMISSION: '1' } : {}),
+      ...(bootstrap ? { PI_RUNTIME_PENDING_ACTIVATION: operation } : {}),
       PI_RUNTIME_RUN_ID: "c".repeat(32), PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
       PI_WEB_UI_HOST: "127.0.0.1", PI_WEB_UI_PORT: String(port), PI_WEB_UI_DISABLED: "false",
     },
@@ -122,6 +130,30 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
   assert.equal((await trace()).filter(frame => frame.event === "provider_call").length, 3);
   assert.equal(rpc.some(frame => frame.id === "blocked-terminal"), false);
   assert.equal(errors(), "");
+});
+
+test('real restored successor refuses Web mutations before preparation and after cancel until exact admission', {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, false, true, false, true);
+  const expected = await f.snapshot();
+  assert.equal(expected.session_id, 'synthetic-restored-session');
+  assert.equal(expected.leaf_id, 'saved-leaf');
+  assert.equal((await f.webRequest('before-prepare', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  assert.equal((await f.webRequest('before-thinking', 'set_thinking_level', { level: 'low' })).ok, false);
+  assert.equal((await f.prepare(expected)).ok, true);
+  assert.equal((await f.webRequest('during-prepare', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  assert.equal((await f.control({ action: 'cancel', operation_id: f.operation })).ok, true);
+  assert.equal((await f.webRequest('after-cancel', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 0);
+  assert.deepEqual(await f.snapshot(), expected, 'Refused Web mutations cannot change the saved context');
+  assert.equal((await f.prepare(expected)).ok, true);
+  assert.equal((await f.control({ action: 'admit', operation_id: f.operation, expected })).ok, true);
+  assert.equal((await f.webRequest('admitted', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, true);
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 1);
+  assert.equal((await f.snapshot()).busy, false);
+  assert.equal(f.errors(), '');
 });
 
 test('opt-in correlated packed Web prompt holds preflight and restores update eligibility after real settlement', {

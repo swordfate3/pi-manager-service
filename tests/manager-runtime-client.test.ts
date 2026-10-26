@@ -103,8 +103,26 @@ test('private final commit transmits only an immutable complete snapshot on the 
   const result: any = await pending;
   assert.equal(result.committed, true); assert.deepEqual(observed.expected, before);
   assert.deepEqual(Object.keys(observed).sort(), ['action', 'expected', 'operation_id', 'token']);
+  await client.request({ action: 'admit', operation_id: 'b'.repeat(32), expected: before } as never);
+  assert.equal(observed.action, 'admit'); assert.deepEqual(observed.expected, before);
   for (const altered of [{ ...before, extra: 'forbidden' }, { ...before, busy: true }, { ...before, run_id: 'invalid' },
     { ...before, session_file: '/private/../escape' }, { ...before, idle: false }]) {
     await assert.rejects(client.request({ action: 'commit', operation_id: 'b'.repeat(32), expected: altered } as never), /Invalid runtime request/);
   }
+});
+
+test('private admission rejects coercible operation and run identities before opening the credential channel', async t => {
+  const { RuntimeClient } = await import('../manager/backends/runtime-client.ts');
+  let delivered = 0;
+  const endpoint = await fixture(t, (_request, peer) => { delivered++; peer.end('{"ok":true,"result":{}}\n'); });
+  const client = new RuntimeClient(endpoint);
+  const expected = { run_id: 'c'.repeat(32), runtime_id: 'runtime', session_id: 'session', leaf_id: null,
+    session_file: '/private/sessions/dialogue.jsonl', cwd: '/workspace', version: '1.4.0', idle: true,
+    pending: false, busy: false, provider: 'test', model: 'fixture', thinking: 'off' };
+  for (const action of ['prepare', 'cancel', 'commit', 'admit']) {
+    const full = action === 'prepare' ? { runtime_id: 'runtime', session_id: 'session', leaf_id: null } : expected;
+    await assert.rejects(client.request({ action, operation_id: ['b'.repeat(32)], ...(action === 'cancel' ? {} : { expected: full }) } as never), /Invalid runtime request/);
+  }
+  await assert.rejects(client.request({ action: 'admit', operation_id: 'b'.repeat(32), expected: { ...expected, run_id: ['c'.repeat(32)] } } as never), /Invalid runtime request/);
+  assert.equal(delivered, 0, 'Malformed identities must not receive the runtime credential');
 });

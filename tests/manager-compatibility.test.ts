@@ -8,7 +8,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { CandidateInstaller } from '../manager/updates/candidate.ts';
 import { hash, treeHash } from '../manager/updates/candidate-storage.ts';
-import { inventory, webInventory } from '../manager/updates/compatibility-inputs.ts';
+import { inventory, parseProbe, webInventory } from '../manager/updates/compatibility-inputs.ts';
 import { prepared, IMAGE as TEST_IMAGE, DAEMON as TEST_DAEMON } from '../integration-tests/candidate-install/fixtures.ts';
 
 // These are protocol doubles with an inert installed tree, NEVER actual Pi acceptance.
@@ -42,7 +42,7 @@ async function fixture(t: any, pins = { image: TEST_IMAGE, daemon: TEST_DAEMON }
   const outputs = [{ path: 'index.html', sha256: hash('fixture') }];
   await save(path.join(web, 'dist/build-manifest.json'), JSON.stringify({ schemaVersion: 1, source: { count: source.length, files: source, sha256: hash(JSON.stringify(source)) }, outputs: { count: 1, files: outputs, sha256: hash(JSON.stringify(outputs)) } }));
   for (const name of ['compatibility-probe.mjs', 'compatibility-provider.mjs', 'compatibility-inputs.ts', 'json.ts', 'pi_rpc_guard.mjs']) await save(path.join(sources, name), '// protocol fixture');
-  const state = { daemon: DAEMON, image: IMAGE, lose: false, wrongOwner: false, inheritedLabels: false, calls: [] as any[], container: undefined as any };
+  const state = { daemon: DAEMON, image: IMAGE, lose: false, wrongOwner: false, inheritedLabels: false, failInspectOnce: false, calls: [] as any[], container: undefined as any };
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c); const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : undefined;
     state.calls.push({ method: req.method, url: req.url, body });
@@ -56,7 +56,10 @@ async function fixture(t: any, pins = { image: TEST_IMAGE, daemon: TEST_DAEMON }
       if (state.lose) return req.socket.destroy(); return send({ Id: state.container.Id });
     }
     if (req.method === 'DELETE') { state.container = undefined; res.writeHead(204); return res.end(); }
-    if (req.url?.endsWith('/json')) { if (state.wrongOwner) state.container.Config.Labels = {}; return send(state.container); }
+    if (req.url?.endsWith('/json')) {
+      if (state.failInspectOnce) { state.failInspectOnce = false; return send({ message: 'first post-start inspection unavailable' }, 500); }
+      if (state.wrongOwner) state.container.Config.Labels = {}; return send(state.container);
+    }
     return send({}, 404);
   });
   await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
@@ -118,8 +121,8 @@ test('bounded attachment rejects oversized output and kills only its own local a
   const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   let killed = 0; child.kill = () => { killed++; child.stdout.end(); child.stderr.end(); queueMicrotask(() => child.emit('close', null)); };
   t.mock.method(cp, 'spawn', () => { queueMicrotask(() => child.stdout.write(Buffer.alloc(65537))); return child; });
-  await assert.rejects(f.verifier.verify(f.request), { code: 'output-limit' }); assert.equal(killed, 1);
-  assert.equal(f.state.container, undefined);
+  await assert.rejects(f.verifier.verify(f.request), { code: 'docker-outcome-unknown' }); assert.equal(killed, 1);
+  await retainedUnknown(f);
 });
 
 function output(binding: any) {
@@ -130,7 +133,10 @@ function output(binding: any) {
     { event: 'barrier-rejected', promptOk: false, mutationOk: false, wrongCancelOk: false },
     { event: 'exact-cancel', cancelled: true },
     { event: 'generation-resumed', disposition: 'started', aborted: false, text: 'COMPAT_RESPONSE' },
-    { event: 'session-restored', copySha256: binding.session?.sha256 ?? '2'.repeat(64), messagesSha256: '3'.repeat(64), beforeSession: binding.session?.sessionId ?? 'saved', sessionId: binding.session?.sessionId ?? 'saved', beforeLeaf: binding.session?.leafId ?? 'abc', leafId: binding.session?.leafId ?? 'abc' },
+    { event: 'session-restored', copySha256: binding.session?.sha256 ?? '2'.repeat(64), messagesSha256: '3'.repeat(64),
+      dialogueNormalization: 'ordered-user-assistant-text-v1', expectedDialogueSha256: binding.session?.dialogueSha256 ?? '4'.repeat(64),
+      sdkDialogueSha256: binding.session?.dialogueSha256 ?? '4'.repeat(64), cliDialogueSha256: binding.session?.dialogueSha256 ?? '4'.repeat(64), webDialogueSha256: binding.session?.dialogueSha256 ?? '4'.repeat(64),
+      beforeSession: binding.session?.sessionId ?? 'saved', sessionId: binding.session?.sessionId ?? 'saved', beforeLeaf: binding.session?.leafId ?? 'abc', leafId: binding.session?.leafId ?? 'abc' },
     { event: 'web-void-tainted', dispatchOk: true, prepareOk: false, settled: true },
   ] };
 }
@@ -138,6 +144,7 @@ function attachment(t: any, f: any, change?: () => Promise<void>, malformed = fa
   t.mock.method(cp, 'spawn', () => {
     const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
     queueMicrotask(async () => {
+      f.state.container.State = { Running: false, Status: 'exited', ExitCode: 0, StartedAt: '2026-10-26T00:00:00Z', FinishedAt: '2026-10-26T00:00:01Z' };
       if (change) await change();
       const binding = JSON.parse(Buffer.from(f.state.container.Config.Cmd[0], 'base64').toString());
       child.stdout.end(malformed ? '{}' : JSON.stringify(output(binding))); child.stderr.end(); child.emit('close', 0);
@@ -164,7 +171,7 @@ for (const mutation of ['receipt', 'tree', 'source', 'malformed']) test(`protoco
   for (const e of await readdir(f.options.root)) if (e.startsWith('v-')) assert.equal((await readdir(path.join(f.options.root, e))).includes('evidence.json'), false);
 });
 
-test('attachment timeout is bounded without replay', async t => {
+test('timeout before start acknowledgement retains exact identity and lock without delete/replay', async t => {
   const f = await fixture(t);
   const child: any = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); let killed = 0;
   child.kill = () => { killed++; child.emit('close', null); };
@@ -172,7 +179,33 @@ test('attachment timeout is bounded without replay', async t => {
   t.mock.method(cp, 'spawn', () => { t.mock.timers.enable({ apis: ['setTimeout'] }); queueMicrotask(started); return child; });
   const result = f.verifier.verify(f.request);
   await ready;
-  t.mock.timers.tick(90000); await assert.rejects(result, { code: 'probe-timeout' }); assert.equal(killed, 1);
+  t.mock.timers.tick(90000); await assert.rejects(result, { code: 'docker-outcome-unknown' }); assert.equal(killed, 1);
+  t.mock.timers.reset(); await retainedUnknown(f);
+});
+
+async function retainedUnknown(f: any) {
+  assert.equal(f.state.container?.Id, 'b'.repeat(64));
+  const files = await readdir(f.options.root); assert.ok(files.includes('.writer'));
+  const directory = path.join(f.options.root, files.find(n => n.startsWith('v-'))!);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'container.json'), 'utf8')), { id: 'b'.repeat(64) });
+  assert.equal((await readdir(directory)).includes('evidence.json'), false);
+  assert.equal(f.state.calls.some((c: any) => c.method === 'DELETE'), false);
+  await assert.rejects(f.verifier.verify(f.request), { code: 'reconciliation-required' });
+  assert.equal(f.state.calls.filter((c: any) => c.method === 'POST').length, 1);
+}
+
+for (const fault of ['output persistence', 'first inspection']) test(`${fault} failure after start retains unknown even when later ownership would succeed`, async t => {
+  const f = await fixture(t);
+  attachment(t, f, async () => {
+    if (fault === 'first inspection') f.state.failInspectOnce = true;
+    else {
+      const attempt = (await readdir(f.options.root)).find(n => n.startsWith('v-'))!;
+      await mkdir(path.join(f.options.root, attempt, 'output.json'));
+    }
+  });
+  await assert.rejects(f.verifier.verify(f.request), { code: 'docker-outcome-unknown' });
+  await retainedUnknown(f);
+  assert.equal(f.state.failInspectOnce, false);
 });
 
 test('saved session hash/format/ref are checked before create and changed copy after run cannot publish evidence', async t => {
@@ -221,4 +254,23 @@ test('completed attempt is never replayed or overwritten by an identical verific
   assert.deepEqual(await readdir(dir), files); assert.deepEqual(await readFile(path.join(dir, 'evidence.json')), content);
   assert.equal((await readdir(f.options.root)).includes('.writer'), false);
   assert.equal(f.state.calls.filter(c => c.method === 'POST').length, 1);
+});
+
+test('ownership and attach exit zero without a positive executed terminal state remain unknown', async t => {
+  const f = await fixture(t);
+  attachment(t, f, async () => { f.state.container.State = { Running: false, Status: 'created', ExitCode: 0, StartedAt: '0001-01-01T00:00:00Z', FinishedAt: '0001-01-01T00:00:00Z' }; });
+  await assert.rejects(f.verifier.verify(f.request), { code: 'docker-outcome-unknown' });
+  await retainedUnknown(f);
+});
+
+test('output cannot omit independent restore hashes or substitute an agreeing but incorrect supplied-session baseline', () => {
+  const binding = { release: { version: '1.4.0' }, node: 'v24.21.0', session: { sha256: '2'.repeat(64), sessionId: 'saved', leafId: 'abc', dialogueSha256: '4'.repeat(64) } };
+  const valid = output(binding); assert.equal(parseProbe(Buffer.from(JSON.stringify(valid)), binding).status, 'compatible');
+  for (const field of ['expectedDialogueSha256', 'sdkDialogueSha256', 'cliDialogueSha256', 'webDialogueSha256', 'dialogueNormalization']) {
+    const bad: any = structuredClone(valid); delete bad.observations[6][field];
+    assert.throws(() => parseProbe(Buffer.from(JSON.stringify(bad)), binding), /probe-invalid/);
+  }
+  const bad: any = structuredClone(valid);
+  for (const field of ['expectedDialogueSha256', 'sdkDialogueSha256', 'cliDialogueSha256', 'webDialogueSha256']) bad.observations[6][field] = '9'.repeat(64);
+  assert.throws(() => parseProbe(Buffer.from(JSON.stringify(bad)), binding), /probe-invalid/);
 });

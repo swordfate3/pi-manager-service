@@ -77,3 +77,31 @@ test('v3 text dialogue retains Pi system text and session name metadata without 
   assert.equal(identity.leafId, 'named'); assert.equal(identity.messages, 1);
   assert.throws(() => m.sessionIdentity(session(header, { ...system, message: { ...system.message, tools: [{ name: 'execute' }] } }, user)), /session-invalid/);
 });
+
+test('restore expectation comes from snapshot bytes with exact ordered role/text normalization', async () => {
+  const m: any = await api();
+  assert.equal(typeof m.snapshotDialogue, 'function'); assert.equal(typeof m.restoredDialogue, 'function');
+  const user = { ...message, message: { role: 'user', content: ' first\nsecond ', timestamp: 1 } };
+  const assistant = { ...message, id: 'answer', parentId: message.id, message: { role: 'assistant', content: [{ type: 'text', text: 'A' }, { type: 'text', text: '\nB' }], timestamp: 2 } };
+  const bytes = session(header, user, assistant);
+  const expected = [{ role: 'user', text: ' first\nsecond ' }, { role: 'assistant', text: 'A\nB' }];
+  assert.deepEqual(m.snapshotDialogue(bytes), expected);
+  const candidate = [user.message, { ...assistant.message, content: 'A\nB' }];
+  const result = m.restoredDialogue(bytes, { sdk: candidate, cli: candidate, web: candidate });
+  assert.equal(result.expectedDialogueSha256, m.digest(JSON.stringify(expected)));
+  assert.equal(result.sdkDialogueSha256, result.expectedDialogueSha256);
+  assert.equal(result.cliDialogueSha256, result.expectedDialogueSha256);
+  assert.equal(result.webDialogueSha256, result.expectedDialogueSha256);
+});
+
+for (const corruption of ['omit', 'change', 'reorder'] as const) test(`adversarial candidate consistently ${corruption}s a saved message across SDK/CLI/Web and is refused`, async () => {
+  const m: any = await api(); assert.equal(typeof m.restoredDialogue, 'function');
+  const assistant = { ...message, id: 'answer', parentId: message.id, message: { role: 'assistant', content: 'saved answer', timestamp: 2 } };
+  const bytes = session(header, message, assistant), original = [message.message, assistant.message];
+  const corrupted = corruption === 'omit' ? original.slice(1) : corruption === 'reorder' ? [...original].reverse() :
+    [message.message, { ...assistant.message, content: 'silently changed' }];
+  // The previous SDK-before/SDK-after comparison agrees even for all these corruptions.
+  for (const projections of [{ sdk: corrupted, cli: corrupted, web: corrupted }, { sdk: original, cli: corrupted, web: original }, { sdk: original, cli: original, web: corrupted }]) {
+    assert.throws(() => m.restoredDialogue(bytes, projections), /session-dialogue-changed/);
+  }
+});

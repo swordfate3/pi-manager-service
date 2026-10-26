@@ -52,8 +52,36 @@ export function sessionIdentity(bytes: Uint8Array) {
       seen.add(row.id); leaf = row.id;
     }
     if (!messages) throw Error();
-    return { sha256: digest(bytes), sessionId: head.id as string, leafId: leaf!, version: 3, messages };
+    return { sha256: digest(bytes), sessionId: head.id as string, leafId: leaf!, version: 3, messages,
+      dialogueSha256: digest(JSON.stringify(dialogue(rows.filter(r => r.type === 'message').map(r => r.message)))) };
   } catch { return refuse('session-invalid'); }
+}
+
+/** ordered-user-assistant-text-v1: preserve roles, order, whitespace and Unicode;
+ * concatenate text blocks without inserting separators; ignore only system messages
+ * and non-message session metadata. Never derive the expectation from candidate SDK code. */
+function dialogue(messages: unknown): { role: string; text: string }[] {
+  if (!Array.isArray(messages) || messages.length > 4096) refuse('session-dialogue-changed');
+  return messages.flatMap(m => {
+    if (!m || !['user', 'assistant', 'system'].includes(m.role)) refuse('session-dialogue-changed');
+    if (m.role === 'system') return [];
+    if (typeof m.content !== 'string' && (!Array.isArray(m.content) || m.content.some((b: any) => !b || b.type !== 'text' || typeof b.text !== 'string'))) refuse('session-dialogue-changed');
+    return [{ role: m.role, text: typeof m.content === 'string' ? m.content : m.content.map((b: any) => b.text).join('') }];
+  });
+}
+export function snapshotDialogue(bytes: Uint8Array) {
+  sessionIdentity(bytes);
+  const rows: any[] = new TextDecoder('utf-8', { fatal: true }).decode(bytes).trimEnd().split('\n').map(l => strictJson(Buffer.from(l)));
+  return dialogue(rows.slice(1).filter(r => r.type === 'message').map(r => r.message));
+}
+export function restoredDialogue(bytes: Uint8Array, actual: { sdk: unknown; cli: unknown; web: unknown }) {
+  const expected = JSON.stringify(snapshotDialogue(bytes)), expectedDialogueSha256 = digest(expected);
+  for (const value of [actual.sdk, actual.cli, actual.web]) {
+    if (JSON.stringify(dialogue(value)) !== expected) refuse('session-dialogue-changed');
+  }
+  return { dialogueNormalization: 'ordered-user-assistant-text-v1', expectedDialogueSha256,
+    sdkDialogueSha256: digest(JSON.stringify(dialogue(actual.sdk))), cliDialogueSha256: digest(JSON.stringify(dialogue(actual.cli))),
+    webDialogueSha256: digest(JSON.stringify(dialogue(actual.web))) };
 }
 
 /** Independent bounded inventory; never executes a package's own verifier. No ambient dependencies. */
@@ -158,7 +186,10 @@ export function parseProbe(bytes: Uint8Array, binding: any): any {
       cancel.cancelled !== true || resumed.disposition !== 'started' || resumed.aborted !== false || resumed.text !== 'COMPAT_RESPONSE' ||
       !hex(restore.copySha256) || !hex(restore.messagesSha256) || !restore.sessionId || !restore.leafId || restore.beforeLeaf !== restore.leafId ||
       restore.beforeSession !== restore.sessionId || taint.dispatchOk !== true || taint.prepareOk !== false || taint.settled !== true) throw Error();
+    if (restore.dialogueNormalization !== 'ordered-user-assistant-text-v1' || !hex(restore.expectedDialogueSha256) ||
+      [restore.sdkDialogueSha256, restore.cliDialogueSha256, restore.webDialogueSha256].some(h => h !== restore.expectedDialogueSha256)) throw Error();
     if (binding.session && (restore.copySha256 !== binding.session.sha256 || restore.sessionId !== binding.session.sessionId || restore.leafId !== binding.session.leafId)) throw Error();
+    if (binding.session && restore.expectedDialogueSha256 !== binding.session.dialogueSha256) throw Error();
     return r;
   } catch { return refuse('probe-invalid'); }
 }

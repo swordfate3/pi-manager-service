@@ -8,7 +8,7 @@ const { registerFauxProvider, getApiProvider } = await load('@earendil-works/pi-
 const { VERSION, CURRENT_SESSION_VERSION } = await load('@earendil-works/pi-coding-agent');
 export default function (pi) {
   const root = process.env.PI_COMPAT_TRACE;
-  if (!['/work/first', '/work/restored'].includes(root)) throw Error('Unexpected trace root');
+  if (!['/work/first', '/work/restored', '/work/history'].includes(root)) throw Error('Unexpected trace root');
   const record = (event, fields = {}) => {
     const f = root + '/trace.jsonl';
     if (existsSync(f) && statSync(f).size > 65536) throw Error('Trace bound');

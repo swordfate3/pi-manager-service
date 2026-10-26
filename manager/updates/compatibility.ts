@@ -92,7 +92,7 @@ export class CandidateCompatibility {
     try { lock = await open(path.join(o.root, '.writer'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
     catch { return refuse('reconciliation-required'); }
     const engine = new DockerEngine(o.installer.config.socketPath);
-    let id: string | undefined, uncertain = false, directory: string | undefined, spec: any;
+    let id: string | undefined, uncertain = false, executionUncertain = false, directory: string | undefined, spec: any;
     let evidence: any, failure: any;
     const checkDaemon = async () => {
       const info: any = await engine.call('GET', '/info'); if (info.ID !== selectedDaemon) refuse('daemon-mismatch');
@@ -163,15 +163,21 @@ export class CandidateCompatibility {
       id = created.Id;
       await writeNew(path.join(directory, 'container.json'), JSON.stringify({ id })); await syncDir(directory);
       await owned(); uncertain = false;
+      // Ownership proves only which resource this is, never whether start ran.
+      // Any interruption before persisted output + exact terminal-state agreement
+      // retains the resource and writer, even if a later ownership check succeeds.
+      executionUncertain = true;
       let output;
       try { output = await attachProbe(o.installer.config.socketPath, id!); }
       catch (e: any) { if (e.code === 'docker-outcome-unknown') uncertain = true; if (e.diagnostic) await writeNew(path.join(directory, 'output.json'), JSON.stringify({ ...e.diagnostic, stdout: e.diagnostic.stdout.toString(), stderr: e.diagnostic.stderr.toString() })); throw e; }
       await writeNew(path.join(directory, 'output.json'), JSON.stringify({ code: output.code, stdout: output.stdout.toString(), stderr: output.stderr.toString() }));
       const stopped = await owned();
-      if (output.code !== 0 && (stopped.State?.Running || stopped.State?.ExitCode !== output.code)) {
-        uncertain = true; refuse('docker-outcome-unknown');
-      }
-      if (stopped.State?.Running || stopped.State?.ExitCode !== 0 || output.code !== 0) refuse('behavior-incompatible');
+      const startedAt = Date.parse(stopped.State?.StartedAt), finishedAt = Date.parse(stopped.State?.FinishedAt);
+      if (stopped.State?.Running !== false || stopped.State?.Status !== 'exited' ||
+        !Number.isInteger(output.code) || output.code! < 0 || output.code! > 255 || stopped.State?.ExitCode !== output.code ||
+        !(startedAt > 0) || !(finishedAt >= startedAt)) refuse('docker-outcome-unknown');
+      executionUncertain = false;
+      if (output.code !== 0) refuse('behavior-incompatible');
       evidence = parseProbe(output.stdout, binding);
       // Both sides of execution are checked, including supplied session copy and packed Web/source identity.
       await o.installer.verify(request.candidateId, request.receiptHash); await this.#inputs(); await checkSession();
@@ -179,20 +185,20 @@ export class CandidateCompatibility {
       failure = e;
       if (directory) await writeNew(path.join(directory, 'failure.json'), JSON.stringify({ code: e.code ?? 'probe-failed' })).catch(() => { uncertain = true; });
     } finally {
-      if (id && !uncertain) {
+      if (id && !uncertain && !executionUncertain) {
         try { await owned(); await engine.call('DELETE', '/containers/' + id + '?force=true'); }
         catch { uncertain = true; }
       }
       engine.close();
       try {
-        if (!uncertain) {
+        if (!uncertain && !executionUncertain) {
           await this.#root(); const current = await lstat(path.join(o.root, '.writer')), original = await lock.stat();
           if (current.ino !== original.ino || current.dev !== original.dev) refuse('root-changed');
           await unlink(path.join(o.root, '.writer')); await syncDir(o.root);
         }
       } catch { uncertain = true; } finally { await lock.close(); }
     }
-    if (uncertain) return refuse('docker-outcome-unknown');
+    if (uncertain || executionUncertain) return refuse('docker-outcome-unknown');
     if (failure) throw failure;
     const result = { ...evidence, runnable: false, activation: 'not-attempted', updates: false, webDispatchEligibility: 'permanently-tainted-after-void-send', ownedContainerRemoved: true };
     await writeNew(path.join(directory!, 'evidence.json'), JSON.stringify(result)); await syncDir(directory!);

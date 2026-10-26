@@ -5,7 +5,7 @@ import { constants } from 'node:fs';
 import { copyFile, cp, mkdir, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { pathToFileURL } from 'node:url';
-import { candidateTreeHash, digest, fileBytes, inventory, selectedModule, sessionIdentity, webInventory } from './compatibility-inputs.ts';
+import { candidateTreeHash, digest, fileBytes, inventory, restoredDialogue, selectedModule, sessionIdentity, snapshotDialogue, webInventory } from './compatibility-inputs.ts';
 
 let active, stage = 'mount-verification';
 const observations = [];
@@ -86,6 +86,27 @@ async function launch(binding, name, sessionFile) {
     const id = 'web-' + ++seq; ws.send(JSON.stringify({ type: 'req', id, method, params }));
     return wait(() => { check(); return messages.find(m => m.type === 'res' && m.id === id); }, 'Web reply');
   };
+  const cliHistory = async () => {
+    const id = 'restore-messages'; write({ id, type: 'get_messages' });
+    const reply = await wait(() => { check(); return frames.find(f => f.type === 'response' && f.id === id); }, 'CLI restored messages');
+    assert.equal(reply.success, true); assert.ok(Array.isArray(reply.data?.messages));
+    return reply.data.messages;
+  };
+  const history = async sessionId => {
+    const entries = [], cursors = new Set(); let before;
+    for (let pages = 0; ; pages++) {
+      assert.ok(pages < 4096, 'bounded Web history pages');
+      const page = await web('get_messages', { sessionId, from: -8640000000000000, to: 8640000000000000, ...(before ? { before } : {}) });
+      assert.equal(page.ok, true); assert.ok(Array.isArray(page.result?.entries));
+      assert.equal(page.result.history?.truncatedEntries, 0, 'preview is not restore evidence');
+      assert.equal(page.result.history.returned, page.result.entries.length);
+      entries.unshift(...page.result.entries); assert.ok(entries.length <= 4096, 'bounded Web history entries');
+      before = page.result.history.nextBefore;
+      if (before === null) break;
+      assert.equal(typeof before, 'string'); assert.ok(before && !cursors.has(before)); cursors.add(before);
+    }
+    return entries.filter(e => e.type === 'message').map(e => e.message);
+  };
   const generation = async (id, text) => {
     const starts = frames.length; write({ id, type: 'prompt', message: text });
     await wait(() => { check(); return frames.slice(starts).some(f => f.type === 'agent_settled'); }, 'agent_settled');
@@ -95,7 +116,7 @@ async function launch(binding, name, sessionFile) {
     assert.ok(JSON.stringify(rpc).includes('COMPAT_RESPONSE'));
     return { disposition: ack.data.disposition, aborted: settled.aborted, text: 'COMPAT_RESPONSE' };
   };
-  return { root, frames, trace, snapshot, prepare, write, generation, web, bodySha256, stop };
+  return { root, frames, trace, snapshot, prepare, write, generation, web, history, cliHistory, bodySha256, stop };
 }
 
 try {
@@ -148,6 +169,8 @@ try {
   const sessionFile = '/work/restore.jsonl';
   assert.ok(savedState.session_file.startsWith(first.root + '/sessions/'));
   const bytes = await boundedRead(binding.session ? '/saved.jsonl' : savedState.session_file), saved = sessionIdentity(bytes);
+  // Freeze an independently parsed expectation BEFORE calling candidate restore code.
+  const expectedDialogue = snapshotDialogue(bytes);
   await writeFile(sessionFile, bytes, { mode: 0o600, flag: 'wx' });
   if (!binding.session) { assert.equal(saved.sessionId, savedState.session_id); assert.equal(saved.leafId, savedState.leaf_id); }
   // Only this disposable owned child is stopped. There is no live runtime stop capability.
@@ -157,23 +180,38 @@ try {
   assert.equal(restoredSession.getSessionId(), saved.sessionId); assert.equal(restoredSession.getLeafId(), saved.leafId);
   assert.equal(digest(await boundedRead(sessionFile)), saved.sha256, 'SDK must not silently migrate/rewrite input');
   const context = restoredSession.buildSessionContext(), messagesSha256 = digest(JSON.stringify(context.messages));
-  assert.ok(context.messages.length >= 1);
+  assert.equal(saved.dialogueSha256, digest(JSON.stringify(expectedDialogue)));
   const restored = await launch(binding, 'restored', sessionFile);
   const restoredState = await restored.snapshot();
   assert.equal(restoredState.session_id, saved.sessionId); assert.equal(restoredState.leaf_id, saved.leafId);
   assert.equal((await restored.trace()).filter(e => e.event === 'model').length, 0, 'saved prompts cannot replay');
   const after = sdk.SessionManager.open(sessionFile, '/work/restore-sessions', '/work/restored/workspace');
   assert.equal(digest(JSON.stringify(after.buildSessionContext().messages)), messagesSha256);
-  observations.push({ event: 'session-restored', copySha256: saved.sha256, messagesSha256, beforeSession: saved.sessionId, sessionId: restoredState.session_id, beforeLeaf: saved.leafId, leafId: restoredState.leaf_id });
+  const webHistory = await restored.history(saved.sessionId);
+  assert.equal(digest(await boundedRead(sessionFile)), saved.sha256, 'CLI restore must preserve snapshot bytes');
+  assert.equal((await restored.trace()).filter(e => e.event === 'model').length, 0, 'history reads cannot replay prompts');
   stage = 'web-void-taint';
   assert.equal((await restored.prepare(restoredState)).ok, true);
   assert.equal((await control(restored.root, { action: 'cancel', operation_id: 'b'.repeat(32) })).ok, true);
   const dispatched = await restored.web('prompt', { message: 'COMPAT_WEB' }); assert.equal(dispatched.ok, true);
   await wait(() => restored.frames.some(f => f.type === 'agent_settled'), 'Web settlement');
   const admission = await restored.prepare(await restored.snapshot()); assert.equal(admission.ok, false, 'void dispatch must remain permanently tainted');
-  observations.push({ event: 'web-void-tainted', dispatchOk: dispatched.ok, prepareOk: admission.ok, settled: true });
   assert.equal((await restored.trace()).filter(e => e.event === 'tool').length, 0);
   await restored.stop(); active = undefined;
+  // get_messages is intentionally outside the shipped guard's audited RPC
+  // allowlist. Isolate that diagnostic in a fresh child: it must not pre-taint
+  // the process used to prove default Web void-dispatch permanent taint.
+  stage = 'saved-cli-history';
+  const cliCopy = '/work/restore-cli.jsonl'; await writeFile(cliCopy, bytes, { mode: 0o600, flag: 'wx' });
+  const historyChild = await launch(binding, 'history', cliCopy), historyState = await historyChild.snapshot();
+  assert.equal(historyState.session_id, saved.sessionId); assert.equal(historyState.leaf_id, saved.leafId);
+  const dialogueEvidence = restoredDialogue(bytes, { sdk: context.messages, cli: await historyChild.cliHistory(), web: webHistory });
+  assert.equal(dialogueEvidence.expectedDialogueSha256, digest(JSON.stringify(expectedDialogue)));
+  assert.equal(digest(await boundedRead(cliCopy)), saved.sha256);
+  assert.equal((await historyChild.trace()).filter(e => e.event === 'model' || e.event === 'tool').length, 0);
+  observations.push({ event: 'session-restored', copySha256: saved.sha256, messagesSha256, ...dialogueEvidence, beforeSession: saved.sessionId, sessionId: restoredState.session_id, beforeLeaf: saved.leafId, leafId: restoredState.leaf_id });
+  observations.push({ event: 'web-void-tainted', dispatchOk: dispatched.ok, prepareOk: admission.ok, settled: true });
+  await historyChild.stop(); active = undefined;
   assert.equal(await candidateTreeHash('/candidate'), binding.treeSha256);
   process.stdout.write(JSON.stringify({ schema: 1, status: 'compatible', binding, observations }) + '\n');
 } catch (e) {

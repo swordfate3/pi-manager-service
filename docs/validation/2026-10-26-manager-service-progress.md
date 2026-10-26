@@ -86,3 +86,17 @@ node --test tests/manager-dist.test.mjs tests/manager-package.test.mjs
 `agent_end` 仅表示一次底层 agent run 结束；测试必须等到 `agent_settled` 才把自动工作标为完成，只有 `agent_end` 的夹具会超时而非误报成功。`agent_settled` 仍不等于跨输入/更新的互斥屏障，本轮没有实现更新激活。
 
 已测平台：Linux/WSL2 6.6.87.2 x86_64、Node 22.19.0、Pi 1.1.0。没有 Windows/macOS 验收。进程身份通过 Linux `/proc` 核对后使用自有 child handle 发信号，并非 pidfd 原子身份保证；不控制后代进程。私有运行/agent 目录仍保留审计内容，尚无产品级保留期限/总量策略。不可信同 UID Agent 的文件隔离、正式模型凭据发放、服务重启后实例对账、公共服务/API 和跨包 Web 登记均未完成。本任务独立审查结果随后追加，当前不把源码和测试通过称为整个管理服务完成。
+
+### 默认离线全套回归（首次审查期间）
+
+控制器使用同样的临时 HOME/新旧配置隔离运行 `npm test`，构建通过，最终退出码 0：
+
+| 测试组 | 通过 | 跳过 | 失败 |
+| --- | ---: | ---: | ---: |
+| 包、分发及隔离检查 | 21 | 0 | 0 |
+| TypeScript 单元测试 | 193 | 1 | 0 |
+| Gate 离线测试 | 312 | 8 | 0 |
+| Runtime 离线测试 | 45 | 4 | 0 |
+| 合计 | 571 | 13 | 0 |
+
+跳过项属于显式 opt-in：1 项实际浏览器交互、8 项本机 npm transport，以及 4 项实际 Pi runtime probe/driver。这里未启用它们，也未执行 Docker 或真实更新/回退验收。另行执行的 `integration-tests/native-lifecycle.test.ts` 是新原生库的实际 Pi 验收，不替代这些遗留 runtime 集成测试。

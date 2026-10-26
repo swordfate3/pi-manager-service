@@ -16,7 +16,7 @@ export async function startAdminService(value: unknown) {
   let attempts = 0; let windowEnds = Date.now() + 60_000;
   const server = await listen(async (req, res) => {
     boundary(req, config.origin);
-    if (req.method === "GET" && req.url === "/") { renderPage(res, true); return; }
+    if (req.method === "GET" && req.url === "/") { renderPage(res, true, config.chatOrigin); return; }
     if (req.method === "GET" && req.url === "/app.js") { renderScript(res); return; }
     for (const [id, s] of sessions) if (s.expires < Date.now()) sessions.delete(id);
     if (req.method === "POST" && req.url === "/api/manager/login") {

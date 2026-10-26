@@ -78,7 +78,8 @@ test("another principal cannot cancel a native create pending workspace resoluti
     gate.release();
     await settled;
   }
-  assert.deepEqual(await create, { status: "created", instanceId: "owned-name" });
+  const result = await create;
+  assert.equal(result.status, "created"); assert.equal(result.instanceId, "owned-name");
   const { pid } = await observation(f.workspace);
   assert.deepEqual(f.adapter.resources("alice"), [{ instanceId: "owned-name" }]);
   assert.deepEqual(f.adapter.resources("bob"), []);

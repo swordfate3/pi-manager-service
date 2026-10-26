@@ -28,6 +28,7 @@ test("explicit Docker Web profile mounts only installed code, runtime socket and
   assert.ok(definition.Env.includes("PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/pi-web/credential.json"));
   assert.ok(definition.Cmd.includes("/opt/pi-web/extensions/mirror-server.ts"));
   assert.ok(definition.Cmd.includes("--no-extensions"));
+  assert.ok(definition.Cmd.includes("--continue"), "owned Web restart must select the retained conversation");
   for (const destination of ["/opt/pi-web", "/run/pi-registry", "/run/pi-web/credential.json"]) {
     assert.equal(definition.HostConfig.Mounts.find((m: any) => m.Target === destination)?.ReadOnly, true);
   }

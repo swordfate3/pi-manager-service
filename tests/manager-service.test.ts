@@ -53,6 +53,7 @@ test("real HTTP: zero-Pi page and pending task persist without starting a child"
   const page = await f.call("/");
   assert.equal(page.status, 200);
   assert.match(page.text, /Pi Manager/);
+  assert.match(page.text, /href="http:\/\/127\.0\.0\.1:18190\/sessions\/"/);
   const response = await f.call("/api/manager/tasks", body);
   assert.equal(response.status, 202);
   assert.equal(response.body.state, "pending_approval");

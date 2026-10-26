@@ -16,7 +16,7 @@ export async function startService(value: unknown) {
     if (req.url === "/mcp") { await mcp(req, res); return; }
     boundary(req, config.origin);
     if (req.method === "GET" && req.url === "/") {
-      renderPage(res, false); return;
+      renderPage(res, false, config.chatOrigin); return;
     }
     if (req.method === "GET" && req.url === "/app.js") { renderScript(res); return; }
     const client = new ExecutorClient({ socketPath: config.socketPath, credential: bearer(req) });

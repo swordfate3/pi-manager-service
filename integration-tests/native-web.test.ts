@@ -61,9 +61,10 @@ test("real Pi loads a packed thin Web, registers, chats through Hub and revokes 
     startupTimeoutMs: 15_000, stopTimeoutMs: 3000 };
   const requester = "synthetic-native-web-agent-00000000001", administrator = "synthetic-native-web-admin-00000000001";
   const submitSocket = path.join(root, "submit", "rpc.sock"), adminSocket = path.join(root, "admin", "rpc.sock");
-  executor = await startExecutor({ stateRoot: path.join(root, "tasks"), submitSocket, adminSocket,
+  const executorConfiguration = { stateRoot: path.join(root, "tasks"), submitSocket, adminSocket,
     principals: [{ id: "agent", role: "submitter", tokenHash: digest(requester) }, { id: "operator", role: "admin", tokenHash: digest(administrator) }],
-    trustedLocalNative: true, native, workspaces: { one: { label: "Test project", root: "projects", path: "one" } } });
+    trustedLocalNative: true, native, workspaces: { one: { label: "Test project", root: "projects", path: "one" } } };
+  executor = await startExecutor(executorConfiguration);
   const reserve = await listen(async (_req, res) => { res.end(); }, 0);
   const managementPort = reserve.port; await reserve.close();
   const managementOrigin = `http://127.0.0.1:${managementPort}`;
@@ -105,4 +106,24 @@ test("real Pi loads a packed thin Web, registers, chats through Hub and revokes 
   assert.equal((await fetch(url)).status, 410);
   assert.deepEqual(await client.resources(), []);
   assert.equal((await fetch(managementOrigin)).status, 200);
+  ws.terminate();
+  await executor.close(); executor = await startExecutor(executorConfiguration);
+  const resumed = await client.submitTask({ key: "resume", action: "start", target: "web-native" });
+  await approve(resumed.id);
+  await waitFor(async () => {
+    const list = await (await fetch(`${hub!.url}api/sessions`)).json() as any;
+    session = list.sessions[0]; return !!session;
+  }, 10_000);
+  const resumedUrl = new URL(session!.path, hub.url);
+  ws = new WebSocket(new URL("ws", resumedUrl).href.replace(/^http/, "ws"), { origin: new URL(hub.url).origin });
+  const restored: any[] = [];
+  ws.on("message", value => restored.push(JSON.parse(value.toString())));
+  await new Promise<void>((resolve, reject) => { ws!.once("open", resolve); ws!.once("error", reject); });
+  await waitFor(async () => restored.some(m => m.event === "state_sync"));
+  assert.ok(JSON.stringify(restored).includes("synthetic Web acceptance"), "native resume must load the previous user turn");
+  assert.ok(JSON.stringify(restored).includes("NATIVE_PI_GENERATION_OK"), "native resume must load the previous assistant turn");
+  const finalStop = await client.submitTask({ key: "stop-restored", action: "stop", target: "web-native" });
+  await approve(finalStop.id);
+  assert.equal((await fetch(resumedUrl)).status, 410);
+  assert.deepEqual(await client.resources(), []);
 });

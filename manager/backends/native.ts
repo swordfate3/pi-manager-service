@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, realpath, stat, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, open, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { matchesProcessIdentity, readProcessIdentity } from "../process-identity.ts";
 import { ExecutionOutcomeUnknownError } from "../errors.ts";
@@ -36,6 +36,8 @@ export interface NativeIdentity {
   readonly workspace: string;
   readonly stateDir: string;
   readonly agentDir: string;
+  readonly auditFile?: string;
+  readonly generation?: number;
 }
 
 export interface NativeInspection extends NativeIdentity {
@@ -158,6 +160,15 @@ export class NativeBackend {
   }
 
   async create(request: NativeCreateRequest, options: { signal?: AbortSignal } = {}): Promise<NativeIdentity> {
+    return this.#begin(request, options);
+  }
+
+  /** Executor-private recovery of SAVED DATA. Never reconstructs a child handle or signals the old PID. */
+  async resume(request: NativeCreateRequest, previous: NativeIdentity, options: { signal?: AbortSignal } = {}): Promise<NativeIdentity> {
+    return this.#begin(request, options, structuredClone(previous));
+  }
+
+  async #begin(request: NativeCreateRequest, options: { signal?: AbortSignal }, previous?: NativeIdentity): Promise<NativeIdentity> {
     if (!object(request) || Object.keys(request).some((key) => !["instanceId", "workspace"].includes(key))) throw new Error("Invalid create request");
     instanceId(request.instanceId);
     if (this.#starting.has(request.instanceId) || this.#owned.has(request.instanceId)) throw new Error("Instance already owned or starting");
@@ -166,7 +177,7 @@ export class NativeBackend {
     const copy = { instanceId: request.instanceId, workspace: { ...request.workspace } };
     const controller = new AbortController();
     const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
-    const promise = this.#launch(copy, signal);
+    const promise = this.#launch(copy, signal, previous);
     this.#starting.set(copy.instanceId, { controller, promise });
     try { return await promise; }
     finally { this.#starting.delete(copy.instanceId); }
@@ -218,7 +229,35 @@ export class NativeBackend {
     }
   }
 
-  async #launch(request: NativeCreateRequest, signal: AbortSignal): Promise<NativeIdentity> {
+  async #recovery(previous: NativeIdentity, request: NativeCreateRequest, workspace: string, stateRoot: string, agentRoot: string) {
+    if (!object(previous) || previous.instanceId !== request.instanceId || previous.workspace !== workspace ||
+      !Number.isSafeInteger(previous.pid) || previous.pid <= 0 || typeof previous.processIdentity !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$/.test(previous.processIdentity) ||
+      !Number.isSafeInteger(previous.generation ?? 0) || (previous.generation ?? 0) < 0 || (previous.generation ?? 0) >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid private recovery identity");
+    for (const [directory, parent] of [[previous.stateDir, stateRoot], [previous.agentDir, agentRoot]]) {
+      if (typeof directory !== "string" || path.dirname(directory) !== parent || !path.basename(directory).startsWith(request.instanceId + "-")) throw new Error("Invalid private recovery directory");
+      await privateRoot(directory);
+    }
+    const auditFile = previous.auditFile ?? "identity.json";
+    if (auditFile !== "identity.json" && !/^identity-[a-f0-9-]{36}\.json$/.test(auditFile)) throw new Error("Invalid private recovery audit");
+    const handle = await open(path.join(previous.stateDir, auditFile), constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const s = await handle.stat();
+      if (!s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.() || (s.mode & 0o777) !== 0o600 || s.size > 8192) throw new Error("Unsafe private recovery audit");
+      const audit = JSON.parse(await handle.readFile("utf8"));
+      if (!object(audit) || audit.schemaVersion !== 1 || Object.keys(audit).length !== Object.keys(previous).length + 1 ||
+        Object.entries(previous).some(([k, v]) => audit[k] !== v)) throw new Error("Private recovery identity differs from audit");
+    } finally { await handle.close(); }
+    const observed = readProcessIdentity(previous.pid);
+    if (observed === previous.processIdentity) throw new Error("Previous native generation is still active");
+    if (observed === null) {
+      try { process.kill(previous.pid, 0); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return; throw new ExecutionOutcomeUnknownError(); }
+      throw new ExecutionOutcomeUnknownError();
+    }
+  }
+
+  async #launch(request: NativeCreateRequest, signal: AbortSignal, previous?: NativeIdentity): Promise<NativeIdentity> {
     signal.throwIfAborted();
     const rootName = request.workspace.root;
     const selection = request.workspace.path;
@@ -235,11 +274,14 @@ export class NativeBackend {
     } catch { throw new Error("Configured Pi executable is unavailable"); }
     const stateRoot = await privateRoot(this.#config.stateRoot);
     const agentRoot = await privateRoot(this.#config.agentRoot);
-    const stateDir = await mkdtemp(path.join(stateRoot, `${request.instanceId}-`));
-    const agentDir = await mkdtemp(path.join(agentRoot, `${request.instanceId}-`));
+    if (previous) await this.#recovery(previous, request, workspace, stateRoot, agentRoot);
+    const stateDir = previous?.stateDir ?? await mkdtemp(path.join(stateRoot, `${request.instanceId}-`));
+    const agentDir = previous?.agentDir ?? await mkdtemp(path.join(agentRoot, `${request.instanceId}-`));
     const subdir = (name: string) => path.join(stateDir, name);
-    for (const name of ["home", "config", "cache", "data", "state", "run", "tmp", "sessions"]) await mkdir(subdir(name), { mode: 0o700 });
-    const args = ["--mode", "rpc", "--no-session", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp", "--session-dir", subdir("sessions")];
+    for (const name of ["home", "config", "cache", "data", "state", "run", "tmp", "sessions"]) {
+      if (previous) await privateRoot(subdir(name)); else await mkdir(subdir(name), { mode: 0o700 });
+    }
+    const args = ["--mode", "rpc", this.#config.web ? "--continue" : "--no-session", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp", "--session-dir", subdir("sessions")];
     if (this.#config.provider) {
       const provider = this.#config.provider;
       args.push("--extension", await realpath(provider.extensionPath), "--provider", provider.name, "--model", provider.model);
@@ -249,7 +291,7 @@ export class NativeBackend {
     if (this.#config.web) {
       const web = this.#config.web;
       const config = readHubConfig(web.hubConfigFile);
-      const credentialFile = subdir("web-registration.json");
+      const credentialFile = subdir(previous ? `web-registration-${randomUUID()}.json` : "web-registration.json");
       const extension = await realpath(web.extensionPath);
       // Credential export is instance-scoped; the child never sees Hub state/config.
       const credential = issueSession(config, credentialFile, { label: request.instanceId });
@@ -272,7 +314,8 @@ export class NativeBackend {
       },
     });
     const processIdentity = child.pid ? readProcessIdentity(child.pid) : null;
-    const identity = Object.freeze({ instanceId: request.instanceId, pid: child.pid ?? 0, processIdentity: processIdentity ?? "", workspace, stateDir, agentDir });
+    const auditFile = previous ? `identity-${randomUUID()}.json` : "identity.json";
+    const identity = Object.freeze({ instanceId: request.instanceId, pid: child.pid ?? 0, processIdentity: processIdentity ?? "", workspace, stateDir, agentDir, auditFile, generation: (previous?.generation ?? -1) + 1 });
     const entry: OwnedChild = { child, identity, status: "starting", exited: false, exit: deferred<void>(), buffer: Buffer.alloc(0), stderr: Buffer.alloc(0), stderrTruncated: false, pending: new Map(), enrollment };
     this.#owned.set(request.instanceId, entry);
     child.on("error", () => { this.#fail(entry, new Error("Pi child spawn or process error")); if (!child.pid) this.#finish(entry); });
@@ -290,8 +333,8 @@ export class NativeBackend {
     signal.addEventListener("abort", abort, { once: true });
     try {
       if (!processIdentity) throw new Error("Child process identity unavailable");
-      // Audit only. No read/import/recovery path exists, even on a later backend instance.
-      await writeFile(subdir("identity.json"), JSON.stringify({ schemaVersion: 1, ...identity }) + "\n", { flag: "wx", mode: 0o600 });
+      // Private saved-data proof only; recovery launches a new child, never adopts/signals this PID.
+      await writeFile(subdir(auditFile), JSON.stringify({ schemaVersion: 1, ...identity }) + "\n", { flag: "wx", mode: 0o600 });
       const response = await this.#request(entry, "get_state", {}, this.#startupMs);
       if (!object(response.data) || typeof response.data.isStreaming !== "boolean" || typeof response.data.isCompacting !== "boolean") throw new Error("Invalid readiness state");
       if (entry.error) throw entry.error;

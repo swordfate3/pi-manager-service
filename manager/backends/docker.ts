@@ -120,7 +120,7 @@ export class DockerBackend {
     const protectedPaths = [stateRoot, socketPath, fileURLToPath(new URL("../..", import.meta.url)), ...webProtected, ...(input.protectedRoots ?? []).map(absolute)];
     const config = Object.freeze({ ...input, socketPath, stateRoot, workspaceRoots: Object.freeze(roots),
       protectedRoots: Object.freeze(protectedPaths), entrypoint: fixedArgs(input.entrypoint, ["/usr/local/bin/pi-entrypoint"]),
-      web, command: fixedArgs(input.command, web ? ["--mode", "rpc", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-tools", "--no-mcp", "--no-approve", "--session-dir", "/home/node/.pi/manager-sessions", "--extension", "/opt/pi-web/extensions/mirror-server.ts",
+      web, command: fixedArgs(input.command, web ? ["--mode", "rpc", "--continue", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-tools", "--no-mcp", "--no-approve", "--session-dir", "/home/node/.pi/manager-sessions", "--extension", "/opt/pi-web/extensions/mirror-server.ts",
         ...(web.provider ? ["--extension", "/opt/pi-provider/index.ts", "--provider", web.provider.name, "--model", web.provider.model] : [])] : ["--mode", "rpc", "--no-session", "--offline"]) });
     const owner = hash({ daemonId: config.daemonId, image: config.image, stateRoot, roots, protectedPaths, entrypoint: config.entrypoint, command: config.command, web });
     const journal = await TaskStore.open(stateRoot);

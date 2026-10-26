@@ -100,6 +100,13 @@ test("real new Docker Pi registers a packed Web, chats, stops and restores the s
   await backend.start("docker-web");
   assert.equal((await backend.inspect("docker-web"))?.containerId,owned.containerId);
   assert.equal((await engine.call("GET",`/volumes/${owned.homeVolume}`) as any).Name,owned.homeVolume);
-  await waitFor(async()=>{const value=await(await fetch(`${hub!.url}api/sessions`)).json() as any;return value.sessions.length===1;},20_000);
+  await waitFor(async()=>{const value=await(await fetch(`${hub!.url}api/sessions`)).json() as any;session=value.sessions[0];return value.sessions.length===1;},20_000);
+  const restoredPage=new URL(session.path,hub.url);
+  ws=new WebSocket(new URL("ws",restoredPage).href.replace(/^http/,"ws"),{origin:new URL(hub.url).origin});
+  const restored:any[]=[];ws.on("message",v=>restored.push(JSON.parse(v.toString())));
+  await new Promise<void>((resolve,reject)=>{ws!.once("open",resolve);ws!.once("error",reject);});
+  await waitFor(async()=>restored.some(m=>m.event==="state_sync"));
+  assert.ok(JSON.stringify(restored).includes("synthetic Docker Web acceptance"), "restored Pi must load the previous user turn");
+  assert.ok(JSON.stringify(restored).includes("NATIVE_PI_GENERATION_OK"), "restored Pi must load the previous assistant turn");
   await backend.stop("docker-web");
 });

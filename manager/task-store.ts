@@ -385,7 +385,7 @@ async function readProcessIdentity(pid: number): Promise<string | null> {
 }
 
 function isProcessIdentity(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9]+$/i.test(value);
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$/.test(value);
 }
 
 async function currentLockOwner(token: string): Promise<LockOwner> {

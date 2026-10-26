@@ -161,3 +161,43 @@ Result: `tsc --noEmit` exited 0 with no diagnostics.
 - The recovery marker is cooperative private filesystem infrastructure under the same Task 1 trust boundary; it is not isolation from malicious code running as the same UID.
 - Automatic recovery still requires an explicit option and a strictly valid durable marker originating before proven-stale lock removal. Malformed markers, malformed identities, ambiguous liveness, live owners, and abandoned acquisition gates fail closed.
 - The npm upgrade advisory is controller-owned informational output and was not treated as a product defect or changed in this round.
+
+## Review fix round 2
+
+### Finding and root cause
+
+The process-identity validator accepted uppercase boot-UUID hex because its regular expression was case-insensitive, and it accepted decimal start ticks with leading zeros. Ownership inspection compared accepted identities to the canonical `/proc` spelling as raw strings, so either alternate spelling for the same live PID compared unequal and was incorrectly classified as stale.
+
+### Focused RED evidence
+
+The existing malformed/ambiguous-lock test was extended to read the current process's real Linux boot UUID and `/proc/<pid>/stat` start ticks, then install two complete lock records for that live PID: one with an uppercase UUID and one with a zero-prefixed tick value. The test records both outcomes before asserting, so the first unsafe takeover cannot hide the second case.
+
+Exact command, run with narrow temporary-process permission:
+
+`node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`
+
+After correcting only an idempotent test-cleanup issue found on the first attempt, the intended RED run executed 16 named tests: 15 passed and the malformed/ambiguous-lock test failed because both identities were accepted (`actual [false, false]`, expected `[true, true]`). Exit 1; 0 cancelled/skipped/todo; duration 1796.206708 ms.
+
+### Bounded implementation change
+
+`isProcessIdentity()` now accepts only the exact generated representation: lowercase hexadecimal UUID characters and canonical decimal ticks matching `0` or a nonzero digit followed by decimal digits. No lock protocol, recovery flow, public interface, or other subsystem was changed.
+
+### Focused GREEN evidence
+
+Exact command:
+
+`node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`
+
+Final result: 16 named tests passed; 0 failed, cancelled, skipped, or todo; exit 0; duration 3600.762975 ms.
+
+Typecheck command:
+
+`npm run typecheck`
+
+Result: `tsc --noEmit` exited 0 with no diagnostics.
+
+### Review-fix files and limits
+
+- Modified only `manager/task-store.ts`, `tests/manager-task-store.test.ts`, and this Task 1 report.
+- No distribution artifacts, package files, contracts, public API/CLI, service lifecycle, Docker, dependencies, credentials, or production state were changed.
+- The test is Linux-specific in the same way as the Task 1 PID/start-identity implementation and uses only the current test process and temporary store state.

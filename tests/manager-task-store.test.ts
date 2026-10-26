@@ -122,6 +122,21 @@ async function writeStoredState(root: string, state: Record<string, any>): Promi
   await writeFile(path.join(root, "tasks.json"), `${JSON.stringify(state)}\n`, { mode: 0o600 });
 }
 
+async function processIdentity(pid: number): Promise<{ bootId: string; startTicks: string }> {
+  const [statContent, bootIdContent] = await Promise.all([
+    readFile(`/proc/${pid}/stat`, "utf8"),
+    readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+  ]);
+  const commandEnd = statContent.lastIndexOf(")");
+  assert.notEqual(commandEnd, -1);
+  const startTicks = statContent.slice(commandEnd + 2).trim().split(/\s+/)[19];
+  const bootId = bootIdContent.trim();
+  assert.match(bootId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.match(bootId, /[a-f]/, "boot UUID must contain a letter to exercise uppercase rejection");
+  assert.match(startTicks, /^(0|[1-9][0-9]*)$/);
+  return { bootId, startTicks };
+}
+
 function addFillerTask(state: Record<string, any>, index: number, padding: string): Record<string, any> {
   const id = `review-filler-${index}`;
   const key = `review-filler-key-${index}`;
@@ -526,6 +541,38 @@ test("malformed or identity-ambiguous locks fail closed without exposing raw con
   );
   await assert.rejects(TaskStore.open(root, { recoverStaleLock: true }), /locked|ambiguous|malformed/i);
   assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
+
+  const identity = await processIdentity(process.pid);
+  const noncanonicalIdentities = [
+    `${identity.bootId.toUpperCase()}:${identity.startTicks}`,
+    `${identity.bootId}:0${identity.startTicks}`,
+  ];
+  const rejected: boolean[] = [];
+  for (const processIdentity of noncanonicalIdentities) {
+    await rm(path.join(root, ".task-store.lock"), { recursive: true, force: true });
+    await mkdir(path.join(root, ".task-store.lock"), { mode: 0o700 });
+    await writeFile(
+      path.join(root, ".task-store.lock", "owner.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        pid: process.pid,
+        processIdentity,
+        token: randomUUID(),
+        createdAt: new Date().toISOString(),
+      }),
+      { mode: 0o600 },
+    );
+    try {
+      const unexpected = await TaskStore.open(root, { recoverStaleLock: true });
+      await unexpected.close();
+      rejected.push(false);
+    } catch (error) {
+      assert.match(String(error), /locked|ambiguous|malformed/i);
+      assert.equal((await stat(path.join(root, ".task-store.lock"))).isDirectory(), true);
+      rejected.push(true);
+    }
+  }
+  assert.deepEqual(rejected, [true, true]);
 });
 
 test("reopen rejects oversized results and results attached to nonterminal states", async (t) => {

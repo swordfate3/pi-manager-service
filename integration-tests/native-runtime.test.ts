@@ -85,7 +85,8 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   ].map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
   const successor = await backend.resumeForActivation({ instanceId: 'managed', workspace: { root: 'projects', path: 'one' } }, identity,
     { operationId: operation, snapshot: finalState });
-  assert.equal(successor.generation, identity.generation + 1);
+  assert.equal(identity.generation, 0);
+  assert.equal(successor.generation, 1);
   const restored = await backend.snapshotRuntime('managed');
   assert.equal(restored.session_id, finalState.session_id); assert.equal(restored.leaf_id, finalState.leaf_id);
   assert.notEqual(restored.run_id, finalState.run_id); assert.equal(restored.session_file, finalState.session_file);

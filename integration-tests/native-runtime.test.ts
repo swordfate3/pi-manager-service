@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { access, lstat, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { NativeBackend } from '../manager/backends/native.ts';
@@ -75,4 +75,32 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   assert.deepEqual(await backend.commitRuntime('managed', operation, captured), finalState);
   await assert.rejects(backend.generate('managed', 'cannot reopen after verified native commit'), /fenced/);
   await assert.rejects(backend.cancelRuntime('managed', operation));
+  await backend.stop('managed');
+  // A newer unrelated session must not win a --continue-style discovery.
+  await writeFile(path.join(identity.stateDir, 'sessions', 'newer-decoy.jsonl'), [
+    { type: 'session', version: 3, id: 'wrong-decoy', timestamp: '2099-01-01T00:00:00.000Z', cwd: workspace },
+    { type: 'thinking_level_change', id: 'decoy-thinking', parentId: null, timestamp: '2099-01-01T00:00:00.000Z', thinkingLevel: 'off' },
+    { type: 'message', id: 'decoy-leaf', parentId: 'decoy-thinking', timestamp: '2099-01-01T00:00:00.000Z',
+      message: { role: 'user', content: 'unrelated decoy must not be restored', timestamp: 1 } },
+  ].map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
+  const successor = await backend.resumeForActivation({ instanceId: 'managed', workspace: { root: 'projects', path: 'one' } }, identity,
+    { operationId: operation, snapshot: finalState });
+  assert.equal(successor.generation, identity.generation + 1);
+  const restored = await backend.snapshotRuntime('managed');
+  assert.equal(restored.session_id, finalState.session_id); assert.equal(restored.leaf_id, finalState.leaf_id);
+  assert.notEqual(restored.run_id, finalState.run_id); assert.equal(restored.session_file, finalState.session_file);
+  await assert.rejects(backend.generate('managed', 'before successor admission'), /fenced/);
+  const successorWs = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.0.0.1:${port}` });
+  t.after(() => successorWs.terminate());
+  const successorMessages: any[] = [];
+  successorWs.on('message', value => successorMessages.push(JSON.parse(value.toString())));
+  await once(successorWs, 'open');
+  await waitFor(async () => successorMessages.some(m => m.event === 'state_sync'));
+  successorWs.send(JSON.stringify({ type: 'req', id: 'successor-blocked', method: 'prompt', params: { message: 'not yet admitted' } }));
+  await waitFor(async () => successorMessages.some(m => m.type === 'res' && m.id === 'successor-blocked'));
+  assert.equal(successorMessages.find(m => m.type === 'res' && m.id === 'successor-blocked').ok, false);
+  await backend.prepareRuntime('managed', operation, restored);
+  assert.deepEqual(await backend.admitRuntime('managed', operation, restored), restored);
+  assert.equal((await backend.generate('managed', 'new generation after explicit admission')).settled, true);
+  assert.equal((await backend.snapshotRuntime('managed')).session_id, finalState.session_id);
 });

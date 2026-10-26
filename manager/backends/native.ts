@@ -74,6 +74,19 @@ export interface NativeRuntimeSnapshot {
   readonly provider: string | null; readonly model: string | null; readonly thinking: string;
 }
 
+interface SuccessorRequest { readonly operationId: string; readonly snapshot: NativeRuntimeSnapshot }
+
+function runtimeFields(value: unknown, runId: string, workspace: string): NativeRuntimeSnapshot {
+  const identifier = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 256 && !/\p{Cc}/u.test(v);
+  if (!object(value) || Object.keys(value).sort().join() !== 'busy,cwd,idle,leaf_id,model,pending,provider,run_id,runtime_id,session_file,session_id,thinking,version' ||
+    typeof value.run_id !== 'string' || !/^[a-f0-9]{32}$/.test(value.run_id) || value.run_id !== runId || value.cwd !== workspace ||
+    !identifier(value.runtime_id) || !identifier(value.session_id) || (value.leaf_id !== null && !identifier(value.leaf_id)) ||
+    typeof value.version !== 'string' || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value.version) || value.version.length > 64 ||
+    ['idle', 'pending', 'busy'].some(k => typeof value[k] !== 'boolean') ||
+    ['provider', 'model'].some(k => value[k] !== null && !identifier(value[k])) || !identifier(value.thinking)) throw Error('Invalid runtime snapshot');
+  return Object.freeze(structuredClone(value)) as unknown as NativeRuntimeSnapshot;
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;
@@ -103,7 +116,7 @@ interface OwnedChild {
   runtime?: {
     client: RuntimeClient; runId: string; barrier?: string; uncertain?: boolean; inFlight?: boolean;
     lease?: { snapshot: NativeRuntimeSnapshot; expiresAt: number; capture?: SessionCapture };
-    committed?: boolean;
+    committed?: boolean; pendingAdmission?: string;
   };
 }
 
@@ -193,7 +206,21 @@ export class NativeBackend {
     return this.#begin(request, options, structuredClone(previous));
   }
 
-  async #begin(request: NativeCreateRequest, options: { signal?: AbortSignal }, previous?: NativeIdentity): Promise<NativeIdentity> {
+  /** Private saved-data launch only. Candidate approval and compatibility remain coordinator obligations. */
+  async resumeForActivation(request: NativeCreateRequest, previous: NativeIdentity, value: SuccessorRequest): Promise<NativeIdentity> {
+    if (!this.#config.runtimeControl || !this.#config.web || !object(value) ||
+      Object.keys(value).sort().join() !== 'operationId,snapshot' || typeof value.operationId !== 'string' ||
+      !/^[a-f0-9]{32}$/.test(value.operationId)) throw Error('Invalid managed successor request');
+    const prior = structuredClone(previous), copy = structuredClone(value);
+    const snapshot = runtimeFields(copy.snapshot, copy.snapshot?.run_id, prior.workspace);
+    const cliValue = (x: unknown) => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,255}$/.test(x);
+    if (!snapshot.idle || snapshot.pending || snapshot.busy || typeof snapshot.session_file !== 'string' ||
+      path.dirname(snapshot.session_file) !== path.join(prior.stateDir, 'sessions') || path.resolve(snapshot.session_file) !== snapshot.session_file ||
+      !cliValue(snapshot.provider) || !cliValue(snapshot.model) || !/^[a-z][a-z0-9-]{0,31}$/.test(snapshot.thinking)) throw Error('Invalid managed successor snapshot');
+    return this.#begin(request, {}, prior, { operationId: copy.operationId, snapshot });
+  }
+
+  async #begin(request: NativeCreateRequest, options: { signal?: AbortSignal }, previous?: NativeIdentity, successor?: SuccessorRequest): Promise<NativeIdentity> {
     if (!object(request) || Object.keys(request).some((key) => !["instanceId", "workspace"].includes(key))) throw new Error("Invalid create request");
     instanceId(request.instanceId);
     if (this.#starting.has(request.instanceId) || this.#owned.has(request.instanceId)) throw new Error("Instance already owned or starting");
@@ -202,7 +229,7 @@ export class NativeBackend {
     const copy = { instanceId: request.instanceId, workspace: { ...request.workspace } };
     const controller = new AbortController();
     const signal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
-    const promise = this.#launch(copy, signal, previous);
+    const promise = this.#launch(copy, signal, previous, successor);
     this.#starting.set(copy.instanceId, { controller, promise });
     try { return await promise; }
     finally { this.#starting.delete(copy.instanceId); }
@@ -240,15 +267,9 @@ export class NativeBackend {
   }
 
   async #runtimeSnapshot(entry: OwnedChild, value: unknown): Promise<NativeRuntimeSnapshot> {
-    const identifier = (v: unknown) => typeof v === 'string' && v.length > 0 && v.length <= 256 && !/\p{Cc}/u.test(v);
-    if (!object(value) || Object.keys(value).sort().join() !== 'busy,cwd,idle,leaf_id,model,pending,provider,run_id,runtime_id,session_file,session_id,thinking,version' ||
-      value.run_id !== entry.runtime!.runId || value.cwd !== entry.identity.workspace ||
-      !identifier(value.runtime_id) || !identifier(value.session_id) || (value.leaf_id !== null && !identifier(value.leaf_id)) ||
-      typeof value.version !== 'string' || !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value.version) || value.version.length > 64 ||
-      ['idle', 'pending', 'busy'].some(k => typeof value[k] !== 'boolean') ||
-      ['provider', 'model'].some(k => value[k] !== null && !identifier(value[k])) || !identifier(value.thinking)) throw Error('Invalid runtime snapshot');
-    if (value.session_file !== null) {
-      const file = value.session_file, root = path.join(entry.identity.stateDir, 'sessions');
+    const snapshot = runtimeFields(value, entry.runtime!.runId, entry.identity.workspace);
+    if (snapshot.session_file !== null) {
+      const file = snapshot.session_file, root = path.join(entry.identity.stateDir, 'sessions');
       if (typeof file !== 'string' || !file.startsWith(root + path.sep) || path.resolve(file) !== file || file.length > 4096 || /\p{Cc}/u.test(file)) throw Error('Invalid runtime session');
       const s = await lstat(file), directory = await lstat(root);
       // Pi inherits the local umask (e.g. 0002 -> files 0664). Privacy and
@@ -258,7 +279,7 @@ export class NativeBackend {
         !s.isFile() || s.uid !== process.getuid?.() || s.nlink !== 1 || (s.mode & 0o7111) !== 0 || await realpath(file) !== file || await realpath(root) !== root) throw Error('Invalid runtime session');
     }
     if (this.#runtimeEntry(entry.identity.instanceId) !== entry) throw Error('Original runtime generation is no longer owned');
-    return Object.freeze(structuredClone(value)) as unknown as NativeRuntimeSnapshot;
+    return snapshot;
   }
 
   async snapshotRuntime(id: string): Promise<NativeRuntimeSnapshot> {
@@ -271,6 +292,7 @@ export class NativeBackend {
     const entry = this.#runtimeEntry(id), runtime = entry.runtime;
     if (typeof operation !== 'string' || !/^[a-f0-9]{32}$/.test(operation)) throw Error('Invalid runtime operation');
     if (runtime.barrier || runtime.uncertain || entry.generation || entry.pending.size) throw Error('Runtime barrier unavailable');
+    if (runtime.pendingAdmission && runtime.pendingAdmission !== operation) throw Error('Successor admission operation mismatch');
     const copy = structuredClone(expected);
     const expiresAt = performance.now() + 150_000;
     // Reserve BEFORE the first await: a simultaneous parent prompt cannot cross preparation.
@@ -359,11 +381,28 @@ export class NativeBackend {
     finally { runtime.inFlight = false; }
   }
 
+  /** Only a verified coordinator may call this after publishing the selected generation. */
+  async admitRuntime(id: string, operation: string, expected: NativeRuntimeSnapshot): Promise<NativeRuntimeSnapshot> {
+    const { entry, runtime, lease } = this.#runtimeLease(id, operation);
+    if (runtime.pendingAdmission !== operation || !sameRuntime(expected, lease.snapshot)) throw Error('Original successor admission required');
+    runtime.inFlight = true;
+    try {
+      const reply = await runtime.client.request({ action: 'admit', operation_id: operation, expected: lease.snapshot });
+      if (!object(reply) || Object.keys(reply).sort().join() !== 'admitted,operation_id,snapshot' ||
+        reply.admitted !== true || reply.operation_id !== operation) throw Error('Invalid successor acknowledgement');
+      const confirmed = await this.#runtimeSnapshot(entry, reply.snapshot);
+      if (!sameRuntime(confirmed, lease.snapshot) || performance.now() >= lease.expiresAt) throw Error('Successor acknowledgement changed or expired');
+      runtime.pendingAdmission = undefined; runtime.barrier = undefined; runtime.lease = undefined;
+      return confirmed;
+    } catch { runtime.uncertain = true; throw new ExecutionOutcomeUnknownError(); }
+    finally { runtime.inFlight = false; }
+  }
+
   async generate(id: string, message: string): Promise<NativeGeneration> {
     instanceId(id);
     const entry = this.#owned.get(id);
     if (!entry || entry.exited || entry.status !== "ready" || entry.error) throw new Error("Instance is not ready and owned");
-    if (entry.runtime?.barrier || entry.runtime?.uncertain) throw new Error('Runtime input is fenced by an update lease');
+    if (entry.runtime?.barrier || entry.runtime?.uncertain || entry.runtime?.pendingAdmission) throw new Error('Runtime input is fenced by an update lease');
     if (entry.generation) throw new Error("Instance is busy");
     if (typeof message !== "string" || !message.length || Buffer.byteLength(JSON.stringify(message)) + 256 > this.#frameBytes) throw new Error("Invalid or oversized prompt");
     const generation: Generation = { ...deferred<void>(), text: "", agentEndObserved: false, settled: false, aborted: false, lastMessageFailed: false };
@@ -412,7 +451,7 @@ export class NativeBackend {
     }
   }
 
-  async #launch(request: NativeCreateRequest, signal: AbortSignal, previous?: NativeIdentity): Promise<NativeIdentity> {
+  async #launch(request: NativeCreateRequest, signal: AbortSignal, previous?: NativeIdentity, successor?: SuccessorRequest): Promise<NativeIdentity> {
     signal.throwIfAborted();
     const rootName = request.workspace.root;
     const selection = request.workspace.path;
@@ -436,11 +475,16 @@ export class NativeBackend {
     for (const name of ["home", "config", "cache", "data", "state", "run", "tmp", "sessions"]) {
       if (previous) await privateRoot(subdir(name)); else await mkdir(subdir(name), { mode: 0o700 });
     }
-    const args = ["--mode", "rpc", this.#config.web ? "--continue" : "--no-session", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp", "--session-dir", subdir("sessions")];
+    if (successor) {
+      const file = successor.snapshot.session_file!, s = await lstat(file);
+      if (!s.isFile() || s.nlink !== 1 || s.uid !== process.getuid?.() || (s.mode & 0o7111) || await realpath(file) !== file) throw Error('Unsafe successor saved session');
+    }
+    const args = ["--mode", "rpc", ...(successor ? ['--session', successor.snapshot.session_file!] : [this.#config.web ? "--continue" : "--no-session"]), "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--no-tools", "--no-mcp", "--session-dir", subdir("sessions")];
     if (this.#config.provider) {
       const provider = this.#config.provider;
       args.push("--extension", await realpath(provider.extensionPath), "--provider", provider.name, "--model", provider.model);
     }
+    if (successor) args.push('--provider', successor.snapshot.provider!, '--model', successor.snapshot.model!, '--thinking', successor.snapshot.thinking);
     let enrollment: OwnedChild["enrollment"];
     let runtime: OwnedChild["runtime"], runtimeEnv: NodeJS.ProcessEnv = {}, preload: string | undefined;
     if (this.#config.runtimeControl) {
@@ -448,9 +492,10 @@ export class NativeBackend {
       const client = new RuntimeClient({ socketPath, token });
       preload = await realpath(fileURLToPath(new URL("../../runtime/pi_rpc_guard.mjs", import.meta.url)));
       await access(preload, constants.R_OK);
-      runtime = { client, runId };
+      runtime = { client, runId, pendingAdmission: successor?.operationId };
       runtimeEnv = { PI_RUNTIME_RUN_ID: runId, PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
         PI_RUNTIME_RPC_WEB_INPUT: "correlated-text-v1" };
+      if (successor) runtimeEnv.PI_RUNTIME_PENDING_ACTIVATION = successor.operationId;
     }
     let webEnv: NodeJS.ProcessEnv = {};
     if (this.#config.web) {
@@ -505,6 +550,13 @@ export class NativeBackend {
       if (entry.error) throw entry.error;
       signal.throwIfAborted();
       entry.status = "ready";
+      if (successor) {
+        const restored = await this.#runtimeSnapshot(entry, await runtime!.client.request({ action: 'snapshot' }));
+        for (const field of ['session_id', 'leaf_id', 'session_file', 'cwd', 'provider', 'model', 'thinking'] as const) {
+          if (restored[field] !== successor.snapshot[field]) throw Error('Restored successor differs from captured context');
+        }
+        if (!restored.idle || restored.pending || restored.busy) throw Error('Restored successor is not quiescent');
+      }
       return identity;
     } catch (error) {
       const cleanup = await this.#stop(entry);

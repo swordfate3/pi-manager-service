@@ -26,12 +26,13 @@ const server = net.createServer({ allowHalfOpen: true }, peer => {
       if (barrier !== request.operation_id || config.loseCancelReply) { peer.destroy(); return; }
       barrier = undefined;
     }
-    if (request.action === 'commit') {
-      writeFileSync('commit-observed', request.operation_id);
-      if (config.loseCommitReply) { peer.destroy(); return; }
+    if (request.action === 'commit' || request.action === 'admit') {
+      writeFileSync(request.action + '-observed', request.operation_id);
+      if (config.loseCommitReply || config.loseAdmitReply) { peer.destroy(); return; }
     }
     const result = request.action === 'cancel' ? { cancelled: true } : request.action === 'commit' ?
-      { committed: true, operation_id: request.operation_id, snapshot: snapshot() } : snapshot();
+      { committed: true, operation_id: request.operation_id, snapshot: snapshot() } : request.action === 'admit' ?
+      { admitted: true, operation_id: request.operation_id, snapshot: snapshot() } : snapshot();
     const reply = () => peer.end(JSON.stringify({ ok: true, result }) + '\n');
     if (request.action === 'prepare' && config.delayPrepare) setTimeout(reply, 100); else reply();
   });

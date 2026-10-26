@@ -198,6 +198,49 @@ test('post-dispatch native commit cannot complete against a replacement of the o
   } finally { release(); await pending.catch(() => {}); held.mock.restore(); }
 });
 
+test('native exact saved-data successor stays input-closed through cancel until original prepared admission', async t => {
+  const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'b'.repeat(32);
+  assert.equal(typeof backend.resumeForActivation, 'function', 'Native successor must restore an explicit saved file behind bootstrap input');
+  const previous = backend.list()[0], original = await backend.snapshotRuntime(id);
+  await assert.rejects(backend.resumeForActivation(f.request, previous, { operationId: operation, snapshot: original }));
+  await backend.stop(id);
+  const identity = await backend.resumeForActivation(f.request, previous, { operationId: operation, snapshot: original });
+  assert.equal(identity.generation, previous.generation + 1);
+  const state = await backend.snapshotRuntime(id);
+  assert.equal(state.session_file, original.session_file); assert.equal(state.session_id, original.session_id);
+  assert.notEqual(state.run_id, original.run_id);
+  await assert.rejects(backend.generate(id, 'no-startup-gap'), /fenced/i);
+  await assert.rejects(backend.prepareRuntime(id, 'c'.repeat(32), state));
+  await backend.prepareRuntime(id, operation, state);
+  await backend.cancelRuntime(id, operation);
+  await assert.rejects(backend.generate(id, 'cancel-is-not-admission'), /fenced/i);
+  await backend.prepareRuntime(id, operation, state);
+  assert.deepEqual(await backend.admitRuntime(id, operation, state), state);
+  await backend.generate(id, 'after-exact-admission');
+  assert.equal(await readFile(path.join(f.workspace, 'prompt-delivered'), 'utf8'), 'after-exact-admission');
+  await assert.rejects(backend.admitRuntime(id, operation, state));
+});
+
+test('native successor refuses caller-selected session escape and retains parent gate on lost admission acknowledgement', async t => {
+  const f = await runtimeFixture(t), backend = f.backend as any, id = f.request.instanceId, operation = 'a'.repeat(32);
+  assert.equal(typeof backend.resumeForActivation, 'function', 'Native successor API must exist');
+  const previous = backend.list()[0], original = await backend.snapshotRuntime(id);
+  await backend.stop(id);
+  for (const snapshot of [{ ...original, session_file: '/tmp/outside.jsonl' }, { ...original, cwd: f.parent }, { ...original, busy: true }]) {
+    await assert.rejects(backend.resumeForActivation(f.request, previous, { operationId: operation, snapshot }));
+    assert.equal(backend.list().length, 0);
+  }
+  await backend.resumeForActivation(f.request, previous, { operationId: operation, snapshot: original });
+  const state = await backend.snapshotRuntime(id);
+  await backend.prepareRuntime(id, operation, state);
+  await f.control({ loseAdmitReply: true });
+  await assert.rejects(backend.admitRuntime(id, operation, state), /unknown/i);
+  assert.equal(await readFile(path.join(f.workspace, 'admit-observed'), 'utf8'), operation);
+  await assert.rejects(backend.admitRuntime(id, operation, state));
+  await assert.rejects(backend.cancelRuntime(id, operation));
+  await assert.rejects(backend.generate(id, 'cannot-assume-admitted'), /fenced/i);
+});
+
 test('an old generation cannot finish prepare or cancel against a replacement with the same instance ID', async t => {
   for (const action of ['prepare', 'cancel'] as const) {
     const f = await runtimeFixture(t), id = f.request.instanceId;

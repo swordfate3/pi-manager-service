@@ -105,6 +105,7 @@ el('approve').onclick = async () => {
 el('refresh').onclick = () => refresh().catch(e => message(e.message));
 el('cancel').onclick = hideReview;
 el('logout').onclick = async () => {
+  catalogGeneration++;
   try { if (administrator) await api('logout',{}); } catch(e) { message(e.message); return; }
   credential = ''; lastSubmission = null; hideReview(); resetCatalog(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
 };

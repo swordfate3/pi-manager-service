@@ -224,3 +224,53 @@ test("shipped management script renders read-only catalog text and ignores stale
   assert.equal(elements.content.hidden, true); assert.match(elements["catalog-status"].textContent, /locked/i);
   assert.ok(fetches.filter(x => x.path.endsWith("/versions")).every(x => x.init.method === "POST"));
 });
+
+test("administrator logout invalidates a pending catalog response before the logout API settles", async () => {
+  const ids = ["message", "content", "login", "logout", "credential", "capabilities", "action", "submit", "workspace", "tasks", "task", "target",
+    "review", "review-data", "approve", "refresh", "cancel", "version-search", "version-query", "catalog-status", "versions", "versions-next"];
+  const elements = Object.fromEntries(ids.map(id => [id, new FakeElement(id)])) as Record<string, FakeElement>;
+  const main = new FakeElement("main"); main.dataset.admin = "true";
+  const versionPending = deferred<any>(), logoutPending = deferred<any>();
+  let versionCalls = 0, logoutCalls = 0;
+  const fetch = async (requestPath: string, init: any) => {
+    const route = requestPath.replace("/api/manager/", "");
+    let value: unknown;
+    if (route === "login") value = { authenticated: true, sessionToken: "administrator-session-token" };
+    else if (route === "capabilities") value = { native: false, docker: false, enrollment: false, updates: false, approval: true };
+    else if (route === "workspaces" || route === "tasks") value = [];
+    else if (route === "versions") {
+      versionCalls++;
+      if (versionCalls === 1) value = { status: "fresh", checkedAt: 1, versions: [] };
+      else return versionPending.promise;
+    } else if (route === "logout") {
+      logoutCalls++;
+      assert.equal(init.headers.Authorization, "Bearer administrator-session-token");
+      return logoutPending.promise;
+    } else throw new Error(`unexpected route ${route}`);
+    return { ok: true, json: async () => value };
+  };
+  const document = {
+    getElementById: (id: string) => elements[id],
+    querySelector: (selector: string) => selector === "main" ? main : null,
+    createElement: () => new FakeElement(),
+  };
+  vm.runInNewContext(browserScript, { document, fetch, crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000000" }, confirm: () => true, setTimeout, clearTimeout });
+
+  elements.credential.value = administrator;
+  await elements.login.onsubmit!({ preventDefault() {} });
+  assert.equal(versionCalls, 1); assert.deepEqual(elements.versions.children, []);
+
+  elements["version-query"].value = "2099";
+  const search = elements["version-search"].onsubmit!({ preventDefault() {} });
+  await waitFor(() => versionCalls === 2);
+  const logout = elements.logout.onclick!() as Promise<void>;
+  await waitFor(() => logoutCalls === 1);
+
+  versionPending.resolve({ ok: true, json: async () => ({ status: "fresh", checkedAt: 2, versions: [future] }) });
+  await search;
+  assert.deepEqual(elements.versions.children, [], "a pre-logout catalog response must not repaint private UI while logout is pending");
+
+  logoutPending.resolve({ ok: true, json: async () => ({ authenticated: false }) });
+  await logout;
+  assert.equal(elements.content.hidden, true); assert.match(elements["catalog-status"].textContent, /locked/i);
+});

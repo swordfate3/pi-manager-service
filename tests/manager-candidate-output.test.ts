@@ -1,16 +1,34 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { CandidateReceiver, admit, budget, TREE_BYTES } from '../manager/updates/candidate-storage.ts';
+import { CandidateReceiver, admit, budget, treeHash, TREE_BYTES } from '../manager/updates/candidate-storage.ts';
 
 async function temporary(t: any) {
   const dir = await mkdtemp(path.join(tmpdir(), 'candidate-output-'));
   t.after(() => rm(dir, { recursive: true, force: true })); return dir;
 }
 const line = (value: unknown) => Buffer.from(JSON.stringify(value));
+test('tree verification rejects root-only writable mode drift', async t => {
+  const root = await temporary(t);
+  await writeFile(path.join(root, 'file'), 'unchanged', { mode: 0o400 });
+  await chmod(root, 0o500);
+  try {
+    assert.match(await treeHash(root), /^[a-f0-9]{64}$/);
+    await chmod(root, 0o700);
+    await assert.rejects(treeHash(root), { code: 'content-invalid' });
+  } finally { await chmod(root, 0o700); }
+});
+test('tree verification rejects a symlink root even when its frozen contents are unchanged', async t => {
+  const parent = await temporary(t), root = path.join(parent, 'tree'), alias = path.join(parent, 'alias');
+  await mkdir(root, { mode: 0o500 }); await symlink('tree', alias);
+  try {
+    assert.match(await treeHash(root), /^[a-f0-9]{64}$/);
+    await assert.rejects(treeHash(alias), { code: 'content-invalid' });
+  } finally { await chmod(root, 0o700); }
+});
 test('bounded artifact reads reject FIFOs immediately rather than blocking during open', async t => {
   const root = await temporary(t), file = path.join(root, 'fifo');
   assert.equal(spawnSync('/usr/bin/mkfifo', [file]).status, 0);
@@ -32,6 +50,18 @@ test('receiver rejects traversal, missing parents, unsafe symlinks and oversized
   }
   const root = await temporary(t), receiver = new CandidateReceiver(root);
   await assert.rejects(receiver.accept(Buffer.alloc(1024 * 1024 + 1)), { code: 'output-invalid' });
+});
+test('receiver admits parent-before-child directories and rejects duplicates and file parents', async t => {
+  const root = await temporary(t), receiver = new CandidateReceiver(root);
+  try {
+    await receiver.accept(line({ entry: ['a', 'directory', 0o500] }));
+    await receiver.accept(line({ entry: ['a/b', 'directory', 0o500] }));
+    assert.deepEqual(await readdir(path.join(root, 'a')), ['b']);
+    await assert.rejects(receiver.accept(line({ entry: ['a/b', 'directory', 0o500] })), { code: 'output-invalid' });
+    await receiver.accept(line({ entry: ['a/empty', 'file', 0o400, 0, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'] }));
+    await receiver.accept(line({ end: true }));
+    await assert.rejects(receiver.accept(line({ entry: ['a/empty/child', 'directory', 0o500] })), { code: 'output-invalid' });
+  } finally { await receiver.close(); }
 });
 test('receiver refuses a changed file hash and incomplete output, retaining the partial for accounting', async t => {
   const root = await temporary(t), receiver = new CandidateReceiver(root);

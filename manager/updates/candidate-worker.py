@@ -137,6 +137,45 @@ def tree_evidence(root, max_bytes=MAX_BYTES, max_entries=MAX_ENTRIES, max_depth=
     visit(root); rows.sort(key=lambda row: row[0])
     return {'sha256': sha(canonical(rows).encode()), 'rows': rows, 'bytes': size, 'entries': count}
 
+def reconcile_bins(root, manifests, rows):
+    """Every installed production declaration must have its exact npm scope link.
+
+    Fail closed on shared-scope name collisions; do not infer npm's winning
+    package. Separate nested node_modules scopes may expose the same bin name.
+    Rows come from the complete actual filesystem walk, never from the lock.
+    """
+    root = Path(root); indexed = {row[0]: row for row in rows}; expected = {}
+    for key, manifest in sorted(manifests.items()):
+        bins = manifest.get('bin', {})
+        if isinstance(bins, str): bins = {manifest['name'].split('/')[-1]: bins}
+        if not isinstance(bins, dict): raise ValueError('bin declarations invalid')
+        # The final node_modules component owns the .bin scope, including
+        # scoped packages (not @scope/.bin) and nested installations.
+        scope = key.rsplit('node_modules/', 1)[0] + 'node_modules/.bin/'
+        for name, relative in bins.items():
+            if (not isinstance(name, str) or not re.fullmatch(r'[a-zA-Z0-9_.-]+', name) or name in ('.', '..')
+                    or not isinstance(relative, str)):
+                raise ValueError('bin declarations invalid')
+            target = key + '/' + relative.removeprefix('./')
+            if not safe_relative(target): raise ValueError('executable path invalid')
+            link = scope + name
+            if link in expected: raise ValueError('bin collision in installation scope: ' + link)
+            expected[link] = (name, target)
+    executables = []
+    for link, (name, target) in sorted(expected.items()):
+        entry = indexed.get(link); executable = indexed.get(target)
+        if entry is None: raise ValueError('bin link missing: ' + link)
+        if executable is None or executable[1] != 'file' or not executable[2] & 0o111:
+            raise ValueError('bin target not regular executable: ' + target)
+        relative = os.path.relpath(root / target, (root / link).parent)
+        if (entry[1] != 'link' or entry[2] != relative or not (root / link).is_symlink()
+                or os.readlink(root / link) != relative or (root / link).resolve(strict=True) != root / target):
+            raise ValueError('bin link target changed: ' + link)
+        executables.append({'name': name, 'relativePath': target, 'sha256': executable[4], 'binLink': link})
+    if any(row[1] == 'link' and row[0] not in expected for row in rows):
+        raise ValueError('undeclared bin link')
+    return executables
+
 def run_bounded(argv, *, cwd, env, timeout=120, max_output=4 * 1024 * 1024):
     proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, start_new_session=True)
@@ -206,7 +245,7 @@ def main(request):
             raise ValueError('npm dependency validation failed')
         for child in item.get('dependencies', {}).values(): no_problems(child)
     no_problems(parsed)
-    omitted = []
+    omitted = []; manifests = {}
     for key, item in packages.items():
         if key == '': continue
         manifest_path = tree / key / 'package.json'
@@ -220,20 +259,13 @@ def main(request):
         if installed.get('name') != key.rsplit('node_modules/', 1)[1] or installed.get('version') != item['version']:
             raise ValueError('installed package binding changed')
         declarations(installed)
+        manifests[key] = installed
     # No interpreter imports the installed tree. Freeze then hash all bytes/modes.
     initial = tree_evidence(tree)
     for row in reversed(initial['rows']):
         if row[1] != 'link': os.chmod(tree / row[0], 0o500 if row[1] == 'directory' or row[2] & 0o111 else 0o400)
     tree.chmod(0o500); evidence = tree_evidence(tree)
-    executables = []
-    bins = value.get('bin', {})
-    if isinstance(bins, str): bins = {release['packageName'].split('/')[-1]: bins}
-    for name, relative in sorted(bins.items()):
-        relative = relative.removeprefix('./'); target = 'node_modules/' + release['packageName'] + '/' + relative
-        if not safe_relative(target): raise ValueError('executable path invalid')
-        row = next((r for r in evidence['rows'] if r[0] == target and r[1] == 'file'), None)
-        if row is None: raise ValueError('executable not installed')
-        executables.append({'name': name, 'relativePath': target, 'sha256': row[4]})
+    executables = reconcile_bins(tree, manifests, evidence['rows'])
     for row in evidence['rows']:
         print(canonical({'entry': row}), flush=True)
         if row[1] == 'file':

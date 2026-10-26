@@ -31,6 +31,70 @@ class CandidateWorker(unittest.TestCase):
     def setUp(self):
         self.assertIsNotNone(WORKER, 'real bounded candidate worker must exist')
 
+    def bins(self, root, manifests):
+        self.assertTrue(callable(getattr(WORKER, 'reconcile_bins', None)), 'installed bin reconciliation required')
+        return WORKER.reconcile_bins(root, manifests, WORKER.tree_evidence(root)['rows'])
+
+    def package(self, root, key, name, bins):
+        directory = root / key; directory.mkdir(parents=True, exist_ok=True)
+        (directory / 'cli.js').write_text('never execute'); (directory / 'cli.js').chmod(0o500)
+        return {'name': name, 'bin': bins}
+
+    def test_missing_installed_bin_link_is_not_executable_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifest = self.package(root, 'node_modules/x', 'x', 'cli.js')
+            with self.assertRaisesRegex(ValueError, 'bin link missing'):
+                self.bins(root, {'node_modules/x': manifest})
+
+    def test_internal_but_misdirected_bin_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifest = self.package(root, 'node_modules/x', 'x', {'x': './cli.js'})
+            (root / 'node_modules/x/other.js').write_text('wrong target')
+            (root / 'node_modules/.bin').mkdir(); (root / 'node_modules/.bin/x').symlink_to('../x/other.js')
+            with self.assertRaisesRegex(ValueError, 'bin link target'):
+                self.bins(root, {'node_modules/x': manifest})
+
+    def test_recursive_scoped_and_nested_bin_scopes_are_reconciled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifests = {}
+            for key, name, bins, link, target in [
+                ('node_modules/top', 'top', 'cli.js', 'node_modules/.bin/top', '../top/cli.js'),
+                ('node_modules/@scope/tool', '@scope/tool', 'cli.js', 'node_modules/.bin/tool', '../@scope/tool/cli.js'),
+                ('node_modules/top/node_modules/@scope/tool', '@scope/tool', {'tool': 'cli.js'},
+                 'node_modules/top/node_modules/.bin/tool', '../@scope/tool/cli.js')]:
+                manifests[key] = self.package(root, key, name, bins)
+                (root / link).parent.mkdir(parents=True, exist_ok=True); (root / link).symlink_to(target)
+            result = self.bins(root, manifests)
+            self.assertEqual([(x['binLink'], x['relativePath'], x['sha256']) for x in result], [
+                ('node_modules/.bin/tool', 'node_modules/@scope/tool/cli.js', hashlib.sha256(b'never execute').hexdigest()),
+                ('node_modules/.bin/top', 'node_modules/top/cli.js', hashlib.sha256(b'never execute').hexdigest()),
+                ('node_modules/top/node_modules/.bin/tool', 'node_modules/top/node_modules/@scope/tool/cli.js', hashlib.sha256(b'never execute').hexdigest())])
+            (root / 'node_modules/top/node_modules/.bin/tool').unlink()
+            with self.assertRaisesRegex(ValueError, 'bin link missing'):
+                self.bins(root, manifests)
+
+    def test_bin_collisions_in_one_installation_scope_fail_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); manifests = {}
+            for name in ['a', 'b']:
+                manifests['node_modules/' + name] = self.package(root, 'node_modules/' + name, name, {'same': 'cli.js'})
+            (root / 'node_modules/.bin').mkdir(); (root / 'node_modules/.bin/same').symlink_to('../a/cli.js')
+            with self.assertRaisesRegex(ValueError, 'bin collision'):
+                self.bins(root, manifests)
+
+    def test_bin_target_must_be_regular_executable_and_declared_links_exact(self):
+        for kind in ['nonexecutable', 'directory', 'undeclared', 'invalid-name', 'escape']:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); manifest = self.package(root, 'node_modules/x', 'x', {'x': 'cli.js'})
+                (root / 'node_modules/.bin').mkdir(); (root / 'node_modules/.bin/x').symlink_to('../x/cli.js')
+                if kind == 'nonexecutable': (root / 'node_modules/x/cli.js').chmod(0o400)
+                elif kind == 'directory':
+                    (root / 'node_modules/x/cli.js').unlink(); (root / 'node_modules/x/cli.js').mkdir()
+                elif kind == 'undeclared': (root / 'node_modules/.bin/extra').symlink_to('../x/cli.js')
+                elif kind == 'invalid-name': manifest['bin'] = {'../escape': 'cli.js'}
+                else: manifest['bin'] = {'x': '../other.js'}
+                with self.assertRaises(ValueError): self.bins(root, {'node_modules/x': manifest})
+
     def test_entire_lock_is_validated_and_only_one_local_artifact_is_allowed(self):
         # Removing any recursive source/integrity/link check must fail this test.
         WORKER.validate_lock(lock(), RELEASE)

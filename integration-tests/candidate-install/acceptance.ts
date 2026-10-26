@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmod, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { prepared, IMAGE, DAEMON } from './fixtures.ts';
@@ -40,6 +40,17 @@ try {
     assert.equal(JSON.parse(await readFile(path.join(tree, 'node_modules/is-odd/package.json'), 'utf8')).version, '3.0.1');
     assert.equal(JSON.parse(await readFile(path.join(tree, 'node_modules/is-number/package.json'), 'utf8')).version, '6.0.0');
   }
+  assert.deepEqual(result.executables.map((e: any) => [e.name, e.relativePath, e.sha256, e.binLink]), [
+    ['pi', 'node_modules/@earendil-works/pi-coding-agent/cli.js',
+      '5d7c8be59b93a9554926fe530440a42c7d2ba09cd27db43f9b4121927a30ac6f', 'node_modules/.bin/pi']]);
+  assert.equal(await readlink(path.join(tree, 'node_modules/.bin/pi')), '../@earendil-works/pi-coding-agent/cli.js');
+  await installer.verify(result.candidateId, result.receiptSha256);
+  await chmod(tree, 0o700);
+  await assert.rejects(installer.verify(result.candidateId, result.receiptSha256), { code: 'content-invalid' });
+  await chmod(tree, 0o500);
+  await rename(tree, tree + '-original'); await symlink('tree-original', tree);
+  try { await assert.rejects(installer.verify(result.candidateId, result.receiptSha256), { code: 'content-invalid' }); }
+  finally { await unlink(tree); await rename(tree + '-original', tree); }
   await installer.verify(result.candidateId, result.receiptSha256);
   const receiptPath = path.join(parent, 'candidates', result.candidateId, 'receipt.json');
   const { writeFile } = await import('node:fs/promises');
@@ -60,7 +71,8 @@ try {
   await assert.rejects(installer.install(f.request), { code: 'candidate-exists' });
   const owned = JSON.parse(await readFile(path.join(parent, 'candidates', result.candidateId, 'container.json'), 'utf8'));
   console.log(JSON.stringify({ synthetic: result, recursiveDependenciesTested: !localOnly, ownedContainerRemoved: owned.id, receiptReleaseTamperRejected: true,
-    lockTamperRejected: true, installedFileTamperRejected: true, replayRejected: true }));
+    lockTamperRejected: true, installedFileTamperRejected: true, rootModeTamperRejected: true, symlinkRootRejected: true,
+    installedBinsReconciled: true, replayRejected: true }));
   succeeded = true;
 } finally {
   const after = snapshot();

@@ -87,7 +87,7 @@ export async function admit(root: string, limits: CandidateBudget) {
 /** Streaming receiver: limits precede every filesystem write, not a post-install scan. */
 export class CandidateReceiver {
   #file?: { handle: FileHandle; remaining: number; digest: ReturnType<typeof createHash>; row: any[] };
-  #rows: any[][] = []; #seen = new Set<string>(); #bytes = 0; #result: any;
+  #rows: any[][] = []; #seen = new Set<string>(); #directories = new Set<string>(); #bytes = 0; #result: any;
   readonly root: string;
   constructor(root: string) { this.root = root; }
   async accept(line: Buffer) {
@@ -109,9 +109,11 @@ export class CandidateReceiver {
     const row = item.entry;
     if (!Array.isArray(row) || typeof row[0] !== 'string' || !safe(row[0]) || this.#seen.has(row[0]) || this.#seen.size >= TREE_ENTRIES) throw new CandidateError('output-invalid');
     const [name, type, mode] = row, target = path.join(this.root, name), parent = path.posix.dirname(name);
-    if (parent !== '.' && !this.#rows.some(r => r[0] === parent && r[1] === 'directory')) throw new CandidateError('output-invalid');
+    if (parent !== '.' && !this.#directories.has(parent)) throw new CandidateError('output-invalid');
     this.#seen.add(name); this.#rows.push(row);
-    if (type === 'directory' && row.length === 3 && mode === 0o500) { await mkdir(target, { mode: 0o700 }); return; }
+    if (type === 'directory' && row.length === 3 && mode === 0o500) {
+      await mkdir(target, { mode: 0o700 }); this.#directories.add(name); return;
+    }
     if (type === 'link' && row.length === 3 && path.posix.basename(parent) === '.bin' && typeof mode === 'string' && /^[a-zA-Z0-9@_./-]+$/.test(mode) && mode.length <= 1024 && !mode.startsWith('/')) {
       const resolved = path.resolve(path.dirname(target), mode);
       if (!resolved.startsWith(this.root + '/')) throw new CandidateError('output-invalid');
@@ -135,6 +137,9 @@ export class CandidateReceiver {
   async close() { await this.#file?.handle.close(); this.#file = undefined; }
 }
 export async function treeHash(root: string): Promise<string> {
+  const s = await lstat(root);
+  if (!path.isAbsolute(root) || path.resolve(root) !== root || await realpath(root) !== root ||
+      !s.isDirectory() || s.uid !== process.getuid?.() || (s.mode & 0o7777) !== 0o500) throw new CandidateError('content-invalid');
   const rows: any[][] = []; let bytes = 0;
   async function visit(dir: string, prefix: string) {
     const stream = await opendir(dir, { bufferSize: 1 });

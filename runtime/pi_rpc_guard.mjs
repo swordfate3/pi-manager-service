@@ -1,6 +1,7 @@
 // Executor-owned optional preload for the audited JSONL RPC transport. This is
 // cooperative quiescence, NOT isolation against malicious code in this process.
 // It must be installed before Pi opens stdin; it never runs package code.
+import { randomUUID } from 'node:crypto';
 const key = Symbol.for('pi.runtime.stdin-guard.v1');
 if (Object.prototype.hasOwnProperty.call(globalThis, key)) throw Error('Runtime input guard already installed');
 const stdin = process.stdin, stdout = process.stdout;
@@ -11,6 +12,7 @@ const originalEmit = stdin.emit, originalWrite = stdout._write, originalWritev =
 const limit = 1024 * 1024;
 let input = Buffer.alloc(0), output = Buffer.alloc(0);
 let uncertain = false, generating = false, stopping = false, barrier = null;
+let rpcReady = false;
 const pending = new Map();
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const id = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
@@ -38,6 +40,7 @@ function outputFrame(frame) {
     if (!command || frame.command !== command || typeof frame.success !== 'boolean') { uncertain = true; return; }
     pending.delete(frame.id);
     if (!frame.success) { uncertain = true; return; }
+    if (command === 'get_state') rpcReady = true;
     if (command === 'prompt' && (!object(frame.data) || frame.data.disposition !== 'started')) {
       // "handled" may have launched extension-owned asynchronous work. No
       // observed settlement proof can establish its quiescence here.
@@ -103,6 +106,17 @@ const guardedWritev = typeof originalWritev === 'function' ? function (chunks, c
 } : originalWritev;
 const guard = Object.freeze({
   version: 1, transport: 'pi-rpc-v1:stdin-stdout-jsonl', intact, safe,
+  webInput: 'correlated-text-v1',
+  dispatchPrompt(message) {
+    // One fixed RPC action, generated correlation ID, no caller-selected frames.
+    // Refusal is synchronous and never enqueues/replays input after cancellation.
+    if (typeof message !== 'string' || message.length > 65536 || !message.trim() ||
+      Buffer.byteLength(message) > 65536 || message.includes('\0') || message.trimStart().startsWith('/') ||
+      !rpcReady || !safe() || barrier || stdin.listenerCount('data') === 0) return false;
+    const frame = Buffer.from(JSON.stringify({ id: `web_${randomUUID()}`, type: 'prompt', message }) + '\n');
+    try { guardedEmit.call(stdin, 'data', frame); return true; }
+    catch { uncertain = true; return false; }
+  },
   taint: () => { uncertain = true; },
   freeze(owner, operation) {
     if (!safe() || !owner || !/^[a-f0-9]{32}$/.test(operation) ||

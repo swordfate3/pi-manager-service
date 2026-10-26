@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { access, lstat, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
@@ -7,6 +8,7 @@ import { initializeHub } from '../hub/config.ts';
 import { listen } from '../manager/http.ts';
 import { packedWeb } from './fixtures/packed-web.ts';
 import { waitFor } from '../tests/helpers/native-harness.ts';
+import { WebSocket } from 'ws';
 
 // Must exercise the actual NativeBackend spawn path, shipped preload and packed Web,
 // not only the lower-level manually spawned RPC test fixture.
@@ -50,4 +52,19 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   assert.equal((await backend.generate('managed', 'second dialogue after private fence')).settled, true);
   const after = await backend.snapshotRuntime('managed');
   assert.equal(after.session_id, snapshot.session_id); assert.notEqual(after.leaf_id, snapshot.leaf_id);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin: `http://127.0.0.1:${port}` });
+  t.after(() => ws.terminate());
+  const messages: any[] = []; ws.on('message', value => messages.push(JSON.parse(value.toString())));
+  await once(ws, 'open');
+  await waitFor(async () => messages.some(m => m.event === 'state_sync'));
+  ws.send(JSON.stringify({ type: 'req', id: 'owned-web', method: 'prompt', params: { message: 'web dialogue after native input' } }));
+  await waitFor(async () => messages.some(m => m.type === 'res' && m.id === 'owned-web'));
+  assert.equal(messages.find(m => m.type === 'res' && m.id === 'owned-web').ok, true);
+  await waitFor(async () => {
+    const state = await backend!.snapshotRuntime('managed');
+    return state.idle && !state.busy && state.leaf_id !== after.leaf_id;
+  });
+  const webState = await backend.snapshotRuntime('managed');
+  assert.equal((await backend.prepareRuntime('managed', operation, webState)).session_id, after.session_id);
+  await backend.cancelRuntime('managed', operation);
 });

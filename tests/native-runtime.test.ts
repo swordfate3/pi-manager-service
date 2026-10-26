@@ -19,6 +19,7 @@ test("optional managed native runtime loads only the shipped guard and private p
   const identity = await backend.create(f.request);
   const seen = await observation(f.workspace);
   assert.equal(seen.runtimeTransport, "pi-rpc-v1:stdin-stdout-jsonl");
+  assert.equal(seen.env.PI_RUNTIME_RPC_WEB_INPUT, "correlated-text-v1");
   assert.match(seen.env.PI_RUNTIME_RUN_ID, /^[a-f0-9]{32}$/);
   assert.match(seen.env.PI_RUNTIME_CHILD_TOKEN, /^[a-f0-9]{64}$/);
   assert.ok(seen.env.PI_RUNTIME_EXTENSION_SOCKET.startsWith(path.join(identity.stateDir, "run") + path.sep));

@@ -129,3 +129,43 @@ test("RPC shutdown keeps input blocked even after an attempted owner release", a
   await f.write('{"id":"late","type":"get_state"}\n');
   assert.equal((await f.until(s => !s.safe)).delivered, 0);
 });
+
+test('correlated Web text reserves input before dispatch and regains admission only on exact settlement', async t => {
+  const f = await fixture(t);
+  assert.equal(await f.control('web-prompt', { text: 'synthetic' }), false, 'No dispatch before authoritative RPC readiness');
+  await f.write('{"id":"read-ready","type":"get_state"}\n');
+  await f.until(s => s.delivered === 1 && s.safe);
+  const accepted = await f.control('web-prompt', { text: 'synthetic' });
+  assert.equal(accepted, true, 'The actual guard must deliver its own correlated prompt');
+  assert.equal((await f.control('state')).delivered, 2);
+  assert.equal(await f.control('freeze', { operation }), false);
+  await f.control('agent_end');
+  assert.equal((await f.control('state')).safe, false);
+  await f.control('settle');
+  assert.equal((await f.control('state')).safe, true);
+  assert.equal(await f.control('freeze', { operation }), true);
+  assert.equal(await f.control('web-prompt', { text: 'must not replay' }), false);
+  assert.equal((await f.control('state')).delivered, 2);
+  assert.equal(await f.control('release', { operation }), true);
+  assert.equal((await f.control('state')).safe, true, 'Rejected Web input must not poison the held generation');
+  assert.equal(await f.control('web-prompt', { text: 'synthetic' }), true);
+  await f.control('settle');
+  assert.equal((await f.control('state')).safe, true);
+  assert.equal((await f.control('state')).delivered, 3, 'No deferred/replayed rejected prompt');
+});
+
+test('correlated Web dispatch refuses unsafe input and permanently refuses handled work', async t => {
+  const f = await fixture(t);
+  await f.write('{"id":"read-ready","type":"get_state"}\n');
+  await f.until(s => s.delivered === 1 && s.safe);
+  for (const text of ['', '/command', ' '.repeat(4) + '/command', '\u0000bad', 'x'.repeat(65537), {}]) {
+    assert.equal(await f.control('web-prompt', { text }), false);
+  }
+  assert.equal((await f.control('state')).delivered, 1);
+  assert.equal((await f.control('state')).safe, true);
+  assert.equal(await f.control('web-prompt', { text: 'handled' }), true);
+  await f.control('settle');
+  assert.equal((await f.control('state')).safe, false);
+  assert.equal(await f.control('web-prompt', { text: 'synthetic' }), false);
+  assert.equal((await f.control('state')).delivered, 2);
+});

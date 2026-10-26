@@ -11,7 +11,7 @@ import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
 import { packedWeb } from "./fixtures/packed-web.ts";
 
-async function rpcFenceFixture(t: any, preflight = false) {
+async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false) {
   const root = await mkdtemp(path.join(tmpdir(), "manager-rpc-fence-"));
   let child: ChildProcessWithoutNullStreams | undefined, ws: WebSocket | undefined;
   let errors = "";
@@ -41,6 +41,7 @@ async function rpcFenceFixture(t: any, preflight = false) {
       PI_CODING_AGENT_DIR: path.join(root, "agent"), PI_AGENT_DIR: path.join(root, "agent"),
       PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_RUNTIME_PROBE_STATE: probe,
       ...(preflight ? { PI_RUNTIME_PROBE_PREFLIGHT: "1" } : {}),
+      ...(correlatedWeb ? { PI_RUNTIME_RPC_WEB_INPUT: "correlated-text-v1" } : {}),
       PI_RUNTIME_RUN_ID: "c".repeat(32), PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
       PI_WEB_UI_HOST: "127.0.0.1", PI_WEB_UI_PORT: String(port), PI_WEB_UI_DISABLED: "false",
     },
@@ -120,6 +121,52 @@ test("real RPC Pi and packed Web freeze both input channels only after generatio
   assert.equal((await trace()).filter(frame => frame.event === "provider_call").length, 3);
   assert.equal(rpc.some(frame => frame.id === "blocked-terminal"), false);
   assert.equal(errors(), "");
+});
+
+test('opt-in correlated packed Web prompt holds preflight and restores update eligibility after real settlement', {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, true, true);
+  await f.write({ id: 'bootstrap', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
+  assert.equal((await f.webRequest('correlated', 'prompt', { message: 'PROBE_PREFLIGHT_input' })).ok, true);
+  await waitFor(async () => (await f.trace()).some(frame => frame.event === 'preflight_paused'));
+  const held = await f.snapshot();
+  assert.equal(held.idle, true, 'Authoritative input guard must cover SDK idle during preflight');
+  assert.equal((await f.prepare(held)).ok, false);
+  await writeFile(path.join(f.probe, 'release-input'), 'release');
+  await waitFor(async () => f.rpc.filter(frame => frame.type === 'agent_settled').length === 2);
+  const completed = await f.snapshot();
+  assert.equal(completed.busy, false, 'Ordinary Web chat must not permanently prevent managed updates');
+  assert.equal((await f.prepare(completed)).ok, true);
+  assert.equal((await f.webRequest('held-web', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
+  assert.equal((await f.control({ action: 'cancel', operation_id: f.operation })).ok, true);
+  assert.equal((await f.webRequest('next', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, true);
+  await waitFor(async () => f.rpc.filter(frame => frame.type === 'agent_settled').length === 3);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 3);
+  assert.equal((await f.prepare(await f.snapshot())).ok, true);
+  assert.equal((await f.control({ action: 'cancel', operation_id: f.operation })).ok, true);
+  assert.equal(f.errors(), '');
+});
+
+test('opt-in correlated Web handled preflight remains ineligible after unrelated settlement', {
+  skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
+}, async t => {
+  const f = await rpcFenceFixture(t, true, true);
+  await f.write({ id: 'bootstrap', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
+  assert.equal((await f.webRequest('oversized', 'prompt', { message: 'x'.repeat(65537) })).ok, false);
+  assert.equal((await f.snapshot()).busy, false, 'Refused dispatch must not taint or fall back to SDK');
+  assert.equal((await f.webRequest('handled', 'prompt', { message: 'PROBE_HANDLED' })).ok, true);
+  await waitFor(async () => (await f.trace()).some(frame => frame.event === 'handled_pending'));
+  assert.equal((await f.prepare(await f.snapshot())).ok, false);
+  await writeFile(path.join(f.probe, 'release-handled'), 'release');
+  await waitFor(async () => f.rpc.some(frame => frame.type === 'response' && frame.command === 'prompt' && frame.data?.disposition === 'handled'));
+  await f.write({ id: 'unrelated', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
+  await waitFor(async () => f.rpc.filter(frame => frame.type === 'agent_settled').length === 2);
+  assert.equal((await f.prepare(await f.snapshot())).ok, false, 'An unrelated generation cannot clear handled-work uncertainty');
+  assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 2);
+  assert.equal(f.errors(), '');
 });
 
 // These new tests run the installed archive and real guard. Restoring Web's

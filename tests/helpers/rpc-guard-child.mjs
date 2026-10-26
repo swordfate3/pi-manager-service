@@ -37,6 +37,7 @@ process.on('message', message => {
     // Pi captures the raw writer then redirects ordinary stdout to stderr.
     case 'takeover': process.stdout.write = function (chunk, callback) { return process.stderr.write(chunk, callback); }; value = true; break;
     case 'taint': g?.taint(); value = true; break;
+    case 'web-prompt': value = g?.dispatchPrompt?.(message.text) ?? false; break;
     case 'tamper': if (message.channel === 'stdin') process.stdin.emit = function () { return false; }; else process.stdout._write = function (_chunk, _encoding, callback) { callback(); }; value = true; break;
     case 'shutdown': g?.shutdown(owner); value = true; break;
     case 'exit': process.exit(0); break;

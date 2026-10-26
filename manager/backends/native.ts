@@ -382,7 +382,8 @@ export class NativeBackend {
       preload = await realpath(fileURLToPath(new URL("../../runtime/pi_rpc_guard.mjs", import.meta.url)));
       await access(preload, constants.R_OK);
       runtime = { client, runId };
-      runtimeEnv = { PI_RUNTIME_RUN_ID: runId, PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath };
+      runtimeEnv = { PI_RUNTIME_RUN_ID: runId, PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
+        PI_RUNTIME_RPC_WEB_INPUT: "correlated-text-v1" };
     }
     let webEnv: NodeJS.ProcessEnv = {};
     if (this.#config.web) {

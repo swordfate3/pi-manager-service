@@ -11,7 +11,7 @@ import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
 import { packedWeb } from "./fixtures/packed-web.ts";
 
-async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false) {
+async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false, observeAdmission = false) {
   const root = await mkdtemp(path.join(tmpdir(), "manager-rpc-fence-"));
   let child: ChildProcessWithoutNullStreams | undefined, ws: WebSocket | undefined;
   let errors = "";
@@ -42,6 +42,7 @@ async function rpcFenceFixture(t: any, preflight = false, correlatedWeb = false)
       PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", PI_TELEMETRY: "0", PI_RUNTIME_PROBE_STATE: probe,
       ...(preflight ? { PI_RUNTIME_PROBE_PREFLIGHT: "1" } : {}),
       ...(correlatedWeb ? { PI_RUNTIME_RPC_WEB_INPUT: "correlated-text-v1" } : {}),
+      ...(observeAdmission ? { PI_RUNTIME_PROBE_ADMISSION: '1' } : {}),
       PI_RUNTIME_RUN_ID: "c".repeat(32), PI_RUNTIME_CHILD_TOKEN: token, PI_RUNTIME_EXTENSION_SOCKET: socketPath,
       PI_WEB_UI_HOST: "127.0.0.1", PI_WEB_UI_PORT: String(port), PI_WEB_UI_DISABLED: "false",
     },
@@ -152,7 +153,7 @@ test('opt-in correlated packed Web prompt holds preflight and restores update el
 test('real Pi final commit preserves a shutdown latch across acknowledgement and cancellation attempts', {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 45_000,
 }, async t => {
-  const f = await rpcFenceFixture(t, false, true);
+  const f = await rpcFenceFixture(t, false, true, true);
   await f.write({ id: 'bootstrap', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
   await waitFor(async () => f.rpc.some(frame => frame.type === 'agent_settled'));
   const expected = await f.snapshot();
@@ -167,8 +168,10 @@ test('real Pi final commit preserves a shutdown latch across acknowledgement and
   assert.equal((await f.prepare(expected)).ok, false);
   assert.equal((await f.webRequest('committed-web', 'prompt', { message: 'PROBE_BOOTSTRAP_ONCE' })).ok, false);
   const delivered = (await f.trace()).filter(frame => frame.event === 'stdin').length;
+  const readBoundaries = (await f.trace()).filter(frame => frame.event === 'raw_stdin_boundary').length;
   await f.write({ id: 'committed-terminal', type: 'prompt', message: 'PROBE_BOOTSTRAP_ONCE' });
-  await waitFor(async () => (await f.snapshot()).busy === true);
+  await waitFor(async () => (await f.trace()).filter(frame => frame.event === 'raw_stdin_boundary').length > readBoundaries);
+  assert.equal((await f.trace()).filter(frame => frame.event === 'raw_stdin_boundary').at(-1).intact, true);
   assert.equal((await f.trace()).filter(frame => frame.event === 'stdin').length, delivered);
   assert.equal((await f.trace()).filter(frame => frame.event === 'provider_call').length, 1);
   assert.equal((await f.webRequest('read-only', 'get_state', {})).ok, true);

@@ -58,6 +58,8 @@ export default function (pi: ExtensionAPI) {
     return { intact: guard?.intact(), safe: guard?.safe() };
   };
   const observe = () => record("stdin", guardState());
+  let pipe: { onread: (...args: any[]) => any } | undefined;
+  let originalRead: ((...args: any[]) => any) | undefined;
   let timer: NodeJS.Timeout | undefined;
   pi.on("session_start", () => {
     // Attaching a data observer before Pi installs its JSONL reader would put
@@ -66,10 +68,24 @@ export default function (pi: ExtensionAPI) {
     timer = setInterval(() => {
       if (process.stdin.listenerCount("data") === 0) return;
       clearInterval(timer); timer = undefined;
+      if (process.env.PI_RUNTIME_PROBE_ADMISSION === '1') {
+        // Test-only upstream observation. The actual pipe read handler returns
+        // only after synchronously dispatching through the unchanged real
+        // stdin guard. A denied data event cannot notify ordinary listeners.
+        pipe = (process.stdin as any)._handle;
+        if (!pipe || typeof pipe.onread !== 'function') throw Error('Admission observation unavailable');
+        originalRead = pipe.onread;
+        pipe.onread = function (...args: any[]) {
+          const result = Reflect.apply(originalRead!, this, args);
+          record('raw_stdin_boundary', guardState());
+          return result;
+        };
+      }
       process.stdin.on("data", observe); record("rpc_ready", { version: VERSION, ...guardState() });
     }, 10);
   });
   pi.on("session_shutdown", () => {
+    if (pipe && originalRead) pipe.onread = originalRead;
     clearInterval(timer); process.stdin.off("data", observe); faux.unregister(); pi.unregisterProvider("rpc-fence-fixture");
   });
 }

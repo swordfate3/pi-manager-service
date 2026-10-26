@@ -35,6 +35,8 @@ node --import ./tests/register-ts.mjs --test \
 
 本轮未实施新的 HTTP 主管入口、管理网页创建闭环或 MCP 服务。不提供指向未实现接口的启动命令。
 
+实际权限域核对保存在 `docs/research/2026-10-26-manager-executor-authority.md`。账户或容器分离尚未选择和验收；当前没有新增账户、容器、提权规则或生产部署。Task 3 开放执行前必须解决这一点，不以同 UID 的开发模式冒充隔离完成。
+
 ## 验证记录
 
 新实现的精确提交、测试和审查结果在对应任务完成后追加；未完成项目保留在实施计划中，不用基线或旧拆包验收冒充。
@@ -56,3 +58,31 @@ node --import ./tests/register-ts.mjs --test \
 第二轮修复 `e406191` 将进程身份限定为精确规范形式（小写 UUID、无多余前导零的十进制启动时钟），实测活 PID 的大小写与前导零变体均被拒绝。定向复审确认重要问题全部关闭；对应分发重建为 `127f382`，类型/构建与 19/19 分发检查通过。任务存储最终直接执行 16/16 通过。
 
 还记录一项延后的测试可移植性小问题：大小写变体用例假设本机 boot UUID 含 a-f，极少见的纯数字 UUID 会使测试前置条件失败；这是测试前置条件而非产品接管缺陷，交给本分支最终审查处理。Task 1 已完成，Task 2 开始；整个服务仍未完成。
+
+### Task 2：原生 Pi 生命周期库
+
+实现提交 `ecf3135`。新增 `manager/backends/native.ts`、`manager/process-identity.ts` 及测试夹具。构造参数固定管理员选择的 executable、命名工作区根、私有 state/agent 根；`create` 仅接受实例 ID 和根内相对目录，随后可 `inspect`、`generate` 和 `stop`。只控制本后端新建且仍保留句柄的子进程；磁盘身份文件仅供审计，不用于重启接管或恢复 stdin。
+
+实际进程使用固定无 shell 参数和重新构造的环境，关闭资源自动发现、工具、MCP、真实会话持久化。原生库没有装入 Web 扩展或进行 Web 登记，没有连接个人模型服务；因此此项通过不等于管理网页创建→登记→聊天闭环已经完成。它也没有接入 TaskStore 进行审批或执行持久任务。
+
+控制器在实现后独立执行：
+
+```text
+node --import ./tests/register-ts.mjs --test tests/native-backend.test.ts integration-tests/native-lifecycle.test.ts
+# tests 29 (28 native + 1 real Pi)
+# pass 29; fail 0; cancelled 0; skipped 0
+
+npm run build
+# TypeScript、Vite、分发清单生成通过；无升级操作
+
+node --test tests/manager-dist.test.mjs tests/manager-package.test.mjs
+# tests 19; pass 19; fail 0; cancelled 0; skipped 0
+```
+
+所有会创建状态的执行均显式隔离 HOME、XDG、agent/session、新旧管理配置及 npm 配置。打包测试使用真实离线 tarball 解包校验，不把工作目录可运行当成安装包已包含源码的证明。
+
+原生测试覆盖重复创建/停止、目录穿越、越界符号链接、伪造审计 PID、可执行文件缺失、启动失败/超时/取消、EOF 正常退出、UTF-8/LF 分帧、独立且有界的 stderr、响应关联、生成超时、输出大小限制及自动重试。实际开发 Pi 1.1.0 测试在运行时加载确定性 provider，断言生成确实经过模型调用且没有加载项目毒化扩展或 AGENTS 内容；关闭 stdin 后退出码 0，不使用信号强制停止。
+
+`agent_end` 仅表示一次底层 agent run 结束；测试必须等到 `agent_settled` 才把自动工作标为完成，只有 `agent_end` 的夹具会超时而非误报成功。`agent_settled` 仍不等于跨输入/更新的互斥屏障，本轮没有实现更新激活。
+
+已测平台：Linux/WSL2 6.6.87.2 x86_64、Node 22.19.0、Pi 1.1.0。没有 Windows/macOS 验收。进程身份通过 Linux `/proc` 核对后使用自有 child handle 发信号，并非 pidfd 原子身份保证；不控制后代进程。私有运行/agent 目录仍保留审计内容，尚无产品级保留期限/总量策略。不可信同 UID Agent 的文件隔离、正式模型凭据发放、服务重启后实例对账、公共服务/API 和跨包 Web 登记均未完成。本任务独立审查结果随后追加，当前不把源码和测试通过称为整个管理服务完成。

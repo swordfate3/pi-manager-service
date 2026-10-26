@@ -2,7 +2,7 @@
 
 独立于 Pi 进程的管理服务项目。当前包已提取原 Hub 的多会话入口、登记、管理页面，以及 Gate/Pi runtime 的受控执行源码；它可以在零个 Pi 的情况下初始化并启动 Hub。
 
-**当前状态：完成阶段 2 的独立源码与分发提取，尚未完成统一 Manager 产品。** 现有 Hub CLI 可运行，但这不是新的进程主管；Gate/runtime 源码不会由 CLI 自动部署或启动。本包没有 MCP 服务、原生 Pi 后端、扩展管理任务或生产迁移逻辑，不应替代现有部署。
+**当前状态：完成阶段 2 的独立源码与分发提取，阶段 3 的私有基础模块正在验收，尚未完成统一 Manager 产品。** 现有 Hub CLI 可运行，但这不是新的进程主管；Gate/runtime 源码不会由 CLI 自动部署或启动。新增持久任务存储及原生 Pi 生命周期库；它们尚未接入管理网页、任务执行器或 CLI。本包没有 MCP 服务、扩展管理任务或生产迁移逻辑，不应替代现有部署。
 
 ## 构建与 CLI
 
@@ -44,11 +44,29 @@ npm run test:gate:socket
 - Gate/runtime 源码和校验工具随包分发，但 CLI 不会自动启动、部署或编排它们；遗留更新来源默认未配置。
 - 浏览器中的聊天仍由独立的 Pi Web 扩展负责。不安装 Manager，也能使用单会话 Web 扩展。
 
+## 开发中的管理基础模块
+
+`manager/task-store.ts` 保存具有请求者、幂等键、修订号和八种状态的任务，提供独占写入、原子持久化和显式崩溃恢复。执行结果不明的任务恢复为 `unknown`，不会自动重放。当前尚没有网页审批 API 或执行器把任务转成生命周期动作。
+
+`manager/backends/native.ts` 是只供受信本机调用的内部库。管理员固定 Pi 可执行路径和允许的工作区根，调用者只能选择根内相对目录。后端只控制自己新建并保留句柄的子进程，不扫描或接管既有 PID，也不从审计文件恢复控制权。默认关闭工具、MCP 和资源自动发现，子进程使用独立 agent 目录及重新构造的环境；这不是已经配置好个人模型和 Web 登记的普通 Pi 工作环境。
+
+原生后端的验收平台仅为 Linux/WSL2；没有据此宣称 Windows/macOS 可用。`agent_end` 不等于自动工作已结束，生成测试等待 `agent_settled`，但后者也不是更新激活的互斥屏障。本阶段不提供更新能力。目录白名单只限制启动位置，不限制同 UID 原生 Pi 的宿主文件访问；开放不可信 Agent 管理接口之前，必须先验证实际账户或容器权限隔离。
+
+私有模块的测试使用临时目录和自有进程。实际 Pi 生成验收另行执行，模型部分是确定性测试 provider，不连接真实模型服务：
+
+```bash
+node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts
+node --import ./tests/register-ts.mjs tests/native-backend.test.ts
+node --import ./tests/register-ts.mjs integration-tests/native-lifecycle.test.ts
+```
+
+精确通过项目、审查及尚未完成的服务/MCP 边界见[实施与验收记录](docs/validation/2026-10-26-manager-service-progress.md)。不要把这些库的测试命令当作产品启动命令。
+
 ## 后续设计目标（本阶段未实现）
 
 - 统一管理受管 Pi 的创建、停止、更新和回退。
 - 通过同一任务模型管理扩展安装与更新。
-- 提供独立的 MCP 调用入口、原生/Docker 后端和受限执行器，并完成跨平台隔离验收。
+- 提供独立的 MCP 调用入口，将原生后端接入受限执行器，加入 Docker 后端，并完成跨平台隔离验收。
 - 形成一个对用户统一、内部维持低权限入口与受限执行器边界的 Manager 产品。
 
 ## 文档
@@ -62,7 +80,7 @@ npm run test:gate:socket
 
 - Manager 自身尚无已发布、已审核的版本来源。默认版本状态不访问网络，也不会把旧 Web 仓库当作 Manager 发布渠道；调用者只能显式注入已审核来源。
 - `gate/gate/sources.py`、`gate/gate/registry.py` 和 `gate/gate/deploy.py` 保留原实现中的旧 Hub 仓库与入口约束，作为未接线的遗留集成。没有弱化来源检查，也不宣称 Manager 自更新可用。
-- Gate/runtime 的真实 Docker 验收没有在普通构建中运行；原生后端和跨平台启动仍属于后续阶段。
+- Gate/runtime 的真实 Docker 验收没有在普通构建中运行；原生后端当前仅为内部库，其服务接线、Web 登记与跨平台启动仍属于后续阶段。
 - 旧 Web/Hub 混合测试已完整保留但不进入默认离线测试；需要跨项目安装式夹具后才能重新执行，不能把保存文件视为通过。
 
 ## 本轮不做的事

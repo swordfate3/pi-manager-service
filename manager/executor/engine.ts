@@ -143,7 +143,7 @@ export class TaskEngine {
     } catch (error) {
       // If persistence is uncertain TaskStore poisons writes. Restart turns any remaining running task unknown.
       const unknown = error instanceof DockerOutcomeUnknownError || error instanceof ExecutionOutcomeUnknownError;
-      const stopping = !executionStarted && error === this.#shutdown.signal.reason;
+      const stopping = !executionStarted && this.#shutdown.signal.aborted && error === this.#shutdown.signal.reason;
       await this.#store.transition(task.id, task.state, unknown ? "unknown" : stopping ? "cancelled" : "failed", {
         expectedRevision: task.revision, result: { status: unknown ? "execution-outcome-unknown" : stopping ? "executor-stopping" : "execution-failed" },
       }).catch(() => {});

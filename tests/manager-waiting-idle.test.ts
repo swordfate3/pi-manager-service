@@ -12,7 +12,7 @@ import { TaskStore } from '../manager/task-store.ts';
 
 const submit = 'test-agent-000000000000000000000000000', admin = 'test-admin-000000000000000000000000000';
 function deferred() {
-  let resolve!: () => void, reject!: (error: Error) => void;
+  let resolve!: () => void, reject!: (error?: unknown) => void;
   const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   void promise.catch(() => {});
   return { promise, resolve, reject };
@@ -97,6 +97,67 @@ for (const unknown of [false, true]) {
     const done = await f.settled(); assert.equal(done.state, unknown ? 'unknown' : 'failed');
     assert.deepEqual(done.result, { status: unknown ? 'execution-outcome-unknown' : 'execution-failed' });
     await assert.rejects(access(f.effect), { code: 'ENOENT' });
+  });
+}
+
+test('undefined readiness rejection while unaborted is a durable failure, not executor shutdown', async t => {
+  const f = await fixture(t);
+  let observationSignal: AbortSignal | undefined;
+  f.adapter.waitForIdle = async (_task, signal) => {
+    observationSignal = signal; f.entered.resolve(); await f.released.promise;
+  };
+  await f.execute(); await f.entered.promise;
+  assert.ok(observationSignal); assert.equal(observationSignal.aborted, false);
+  assert.equal(observationSignal.reason, undefined);
+  f.released.reject(undefined);
+  const failed = await f.settled();
+  assert.equal(failed.state, 'failed');
+  assert.deepEqual(failed.result, { status: 'execution-failed' });
+  assert.equal(observationSignal.aborted, false, 'Classify before close can abort the signal');
+  await assert.rejects(access(f.effect), { code: 'ENOENT' });
+  await f.engine().close(); await f.reopen();
+  const reopened = await f.query();
+  assert.equal(reopened.state, 'failed'); assert.deepEqual(reopened.result, { status: 'execution-failed' });
+  await assert.rejects(access(f.effect), { code: 'ENOENT' });
+});
+
+test('readiness revalidation rejection persists failure without backend execution', async t => {
+  const f = await fixture(t); await f.execute(); await f.entered.promise;
+  f.adapter.validate = async () => { throw Error('private validation detail must not escape'); };
+  f.released.resolve();
+  const failed = await f.settled();
+  assert.equal(failed.state, 'failed'); assert.deepEqual(failed.result, { status: 'execution-failed' });
+  await assert.rejects(access(f.effect), { code: 'ENOENT' });
+  await f.engine().close(); await f.reopen();
+  assert.equal((await f.query()).state, 'failed');
+});
+
+for (const boundary of ['validation', 'running-persistence'] as const) {
+  test(`shutdown during ${boundary} cancels before backend execution and stays cancelled after reopen`, { timeout: 8000 }, async t => {
+    const f = await fixture(t), reached = deferred(), resume = deferred();
+    await f.execute(); await f.entered.promise;
+    if (boundary === 'validation') {
+      f.adapter.validate = async () => { reached.resolve(); await resume.promise; };
+    } else {
+      const original = TaskStore.prototype.transition;
+      t.mock.method(TaskStore.prototype, 'transition', async function (this: TaskStore, ...args: Parameters<TaskStore['transition']>) {
+        const persisted = await original.apply(this, args);
+        if (args[0] === f.task.id && args[1] === 'waiting_idle' && args[2] === 'running') {
+          reached.resolve(); await resume.promise;
+        }
+        return persisted;
+      });
+    }
+    try {
+      f.released.resolve(); await reached.promise;
+      assert.equal((await f.query()).state, boundary === 'validation' ? 'waiting_idle' : 'running');
+      const closing = f.engine().close();
+      resume.resolve(); await closing;
+      await f.reopen();
+      const cancelled = await f.query();
+      assert.equal(cancelled.state, 'cancelled'); assert.deepEqual(cancelled.result, { status: 'executor-stopping' });
+      await assert.rejects(access(f.effect), { code: 'ENOENT' });
+    } finally { resume.resolve(); }
   });
 }
 

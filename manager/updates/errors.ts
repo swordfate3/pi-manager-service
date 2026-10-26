@@ -12,7 +12,7 @@ export class CatalogError extends Error {
 
 export type StageErrorCode = "release-invalid" | "package-not-approved" | "engine-unsupported" | "node-incompatible" |
   "root-unsafe" | "writer-busy" | "stage-exists" | "download-failed" | "integrity-mismatch" |
-  "archive-invalid" | "resource-limit" | "manifest-mismatch" | "stage-io" | "invalid-installation";
+  "archive-invalid" | "resource-limit" | "manifest-mismatch" | "stage-io" | "invalid-installation" | "options-invalid";
 export class StageError extends Error {
   readonly code: StageErrorCode;
   constructor(code: StageErrorCode) { super(`Artifact staging refused: ${code}`); this.name = "StageError"; this.code = code; }

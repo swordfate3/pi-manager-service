@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import fsPromises, { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
@@ -33,15 +34,15 @@ function manifest(overrides: Record<string, unknown> = {}) {
 function entries(value = manifest()): Entry[] {
   return [{ name: "package/package.json", text: JSON.stringify(value) }, { name: "package/dist/cli.js", text: "throw new Error('NEVER RUN');" }];
 }
-async function resolved(data: Buffer, nodeEngine = ">=20.0.0", packageName = PI_PACKAGE): Promise<ResolvedRelease> {
+async function resolved(data: Buffer, nodeEngine = ">=20.0.0", packageName = PI_PACKAGE, exactVersion = version): Promise<ResolvedRelease> {
   const catalog = new ReleaseCatalog({ extensionPackages: packageName === PI_PACKAGE ? [] : [packageName], transport: async ({ url }) => ({
-    statusCode: 200, url, headers: {}, body: (async function* () { yield Buffer.from(JSON.stringify({ name: packageName, version,
-      engines: { node: nodeEngine }, dist: { tarball: `https://registry.npmjs.org/${packageName}/-/${packageName.split("/").at(-1)}-${version}.tgz`,
+    statusCode: 200, url, headers: {}, body: (async function* () { yield Buffer.from(JSON.stringify({ name: packageName, version: exactVersion,
+      engines: { node: nodeEngine }, dist: { tarball: `https://registry.npmjs.org/${packageName}/-/${packageName.split("/").at(-1)}-${exactVersion}.tgz`,
         integrity: `sha512-${createHash("sha512").update(data).digest("base64")}` } })); })(),
   }) });
-  return catalog.resolve(packageName, version);
+  return catalog.resolve(packageName, exactVersion);
 }
-async function setup(t: TestContext, data = archive(entries())) {
+async function setup(t: TestContext, data = archive(entries()), quota?: { maxRetainedBytes?: number; maxRetainedEntries?: number; maxCandidates?: number }) {
   const mod = await import("../manager/updates/stage.ts").catch(() => null);
   assert.ok(mod?.ArtifactStager, "ArtifactStager must implement real private artifact preparation");
   const parent = await mkdtemp(path.join(tmpdir(), "manager-update-test-"));
@@ -51,7 +52,7 @@ async function setup(t: TestContext, data = archive(entries())) {
   });
   const root = path.join(parent, "artifacts");
   const transport = async ({ url }: { url: string }) => ({ url, statusCode: 200, headers: {}, body: (async function* () { yield data; })() });
-  const stager = await mod.ArtifactStager.create({ root, transport, nodeVersion: "22.19.0" });
+  const stager = await mod.ArtifactStager.create({ root, transport, nodeVersion: "22.19.0", quota });
   return { mod, parent, root, transport, stager, release: await resolved(data), data };
 }
 
@@ -93,7 +94,7 @@ test("verifies binding and sha512 before extraction and never trusts mutated ide
   assert.deepEqual(await readdir(f.root), [".artifact-staging-v1"]);
 });
 
-test("exclusive per-installation writer spans separate handles; duplicate stages never overwrite", async t => {
+test("global admission spans installation IDs and separate handles; duplicate stages never overwrite", async t => {
   const f = await setup(t);
   let started!: () => void, finish!: () => void;
   const entered = new Promise<void>(r => { started = r; });
@@ -104,12 +105,187 @@ test("exclusive per-installation writer spans separate handles; duplicate stages
   const work = first.stage(request); await entered;
   try {
     await assert.rejects(second.stage(request), { code: "writer-busy" });
-    const unrelated = await second.stage({ ...request, installationId: "separate-install" });
-    assert.equal(unrelated.status, "prepared-unverified");
-  } finally { finish(); }
+    await assert.rejects(second.stage({ ...request, installationId: "separate-install" }), { code: "writer-busy" });
+    await assert.rejects(first.stage({ ...request, installationId: "same-handle-other-install" }), { code: "writer-busy" });
+  } finally { finish(); await work; }
   const result = await work;
+  assert.equal((await second.stage({ ...request, installationId: "separate-install" })).status, "prepared-unverified");
   await assert.rejects(second.stage(request), { code: "stage-exists" });
   assert.equal(await readFile(path.join(f.root, result.candidateKey, "artifact.tgz"), "hex"), f.data.toString("hex"));
+});
+
+test("retained candidate quota refuses sequential installations before transport and survives reopen", async t => {
+  const f = await setup(t, archive(entries()), { maxCandidates: 2 });
+  const request = { installationId: "first", release: f.release, expectedIdentity: f.release.identity };
+  await f.stager.stage(request);
+  await f.stager.stage({ ...request, installationId: "second" });
+  let downloads = 0;
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: async req => { downloads++; return f.transport(req); } });
+  await assert.rejects(reopened.stage({ ...request, installationId: "third" }), { code: "resource-limit" });
+  assert.equal(downloads, 0, "quota admission precedes download");
+  assert.equal((await readdir(f.root)).filter(name => !name.startsWith(".")).length, 2);
+});
+
+test("sequential releases of one installation share the retained candidate budget", async t => {
+  const f = await setup(t, archive(entries()), { maxCandidates: 1 });
+  const first = await f.stager.stage({ installationId: "main", release: f.release, expectedIdentity: f.release.identity });
+  const newer = archive(entries(manifest({ version: "2099.10.27" })));
+  const release = await resolved(newer, ">=20.0.0", PI_PACKAGE, "2099.10.27");
+  let downloads = 0;
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: async ({ url }) => {
+    downloads++;
+    return { url, statusCode: 200, headers: {}, body: (async function* () { yield newer; })() };
+  } });
+  await assert.rejects(reopened.stage({ installationId: "main", release, expectedIdentity: release.identity }), { code: "resource-limit" });
+  assert.equal(downloads, 0);
+  assert.deepEqual(JSON.parse(await readFile(path.join(f.root, first.candidateKey, "receipt.json"), "utf8")), first);
+});
+
+for (const [dimension, quota] of [["bytes", { maxRetainedBytes: 97 * 1024 * 1024 + 4096 }], ["inodes", { maxRetainedEntries: 20008 }]] as const) {
+test(`retained ${dimension} limit reserves a worst-case candidate before download`, async t => {
+  const data = archive([...entries(), { name: "package/padding", text: "x".repeat(8192) }]);
+    const f = await setup(t, data, quota);
+    const request = { installationId: "first", release: f.release, expectedIdentity: f.release.identity };
+    await f.stager.stage(request);
+    let downloads = 0;
+    const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: async req => { downloads++; return f.transport(req); } });
+    await assert.rejects(reopened.stage({ ...request, installationId: "second" }), { code: "resource-limit" });
+    assert.equal(downloads, 0);
+});
+}
+
+for (const [dimension, quota] of [["candidates", { maxCandidates: 1 }], ["bytes", { maxRetainedBytes: 97 * 1024 * 1024 + 512 * 1024 }]] as const) {
+test(`reopen accounts incomplete ${dimension} without overwriting them`, async t => {
+    const f = await setup(t, archive(entries()), quota);
+    const partial = path.join(f.root, "a".repeat(64), "b".repeat(64));
+    await mkdir(partial, { recursive: true, mode: 0o700 });
+    const file = await open(path.join(partial, "artifact.tgz"), "wx", 0o600);
+    await file.truncate(1024 * 1024); await file.close();
+    const before = await lstat(path.join(partial, "artifact.tgz"));
+    let downloads = 0;
+    const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: async req => { downloads++; return f.transport(req); } });
+    await assert.rejects(reopened.stage({ installationId: "new", release: f.release, expectedIdentity: f.release.identity }), { code: "resource-limit" });
+    assert.equal(downloads, 0);
+    assert.equal((await lstat(path.join(partial, "artifact.tgz"))).ino, before.ino);
+    assert.equal((await lstat(path.join(partial, "artifact.tgz"))).size, before.size);
+});
+}
+
+test("a crashed global admission lock blocks every installation after reopen and is never reclaimed", async t => {
+  const f = await setup(t);
+  const lock = path.join(f.root, ".artifact-writer.lock");
+  await writeFile(lock, "unknown crashed writer", { mode: 0o600 });
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: f.transport });
+  await assert.rejects(reopened.stage({ installationId: "other", release: f.release, expectedIdentity: f.release.identity }), { code: "writer-busy" });
+  assert.equal(await readFile(lock, "utf8"), "unknown crashed writer");
+});
+
+test("admission streams excessive retained directory contents and stops at the entry budget", async t => {
+  const f = await setup(t, archive(entries()), { maxRetainedEntries: 16 });
+  const partial = path.join(f.root, "a".repeat(64), "b".repeat(64));
+  await mkdir(partial, { recursive: true, mode: 0o700 });
+  for (let i = 0; i < 128; i++) await writeFile(path.join(partial, `f${i}`), "", { mode: 0o600 });
+  let reads = 0;
+  const original = fsPromises.opendir;
+  // Observe real streamed directory IO, not a replacement scanner or fake filesystem.
+  const spy = t.mock.method(fsPromises, "opendir", async (...args: Parameters<typeof original>) => {
+    const dir = await original(...args);
+    const read = dir.read.bind(dir);
+    dir.read = (async () => { reads++; return read(); }) as typeof dir.read;
+    return dir;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(f.stager.stage({ installationId: "new", release: f.release, expectedIdentity: f.release.identity }), { code: "resource-limit" });
+    assert.ok(reads > 0 && reads <= 24, `bounded streamed scan, observed ${reads} reads`);
+  } finally { spy.mock.restore(); syncBuiltinESMExports(); }
+});
+
+test("quota construction settings are copied, persisted and reject unknown or conflicting settings", async t => {
+  const f = await setup(t);
+  const quota = { maxCandidates: 1 };
+  const options = { root: path.join(f.parent, "limited"), quota, transport: f.transport };
+  const creating = f.mod.ArtifactStager.create(options);
+  quota.maxCandidates = 100;
+  const limited = await creating;
+  const request = { installationId: "first", release: f.release, expectedIdentity: f.release.identity };
+  await limited.stage(request);
+  await assert.rejects(limited.stage({ ...request, installationId: "second" }), { code: "resource-limit" });
+  await assert.rejects(f.mod.ArtifactStager.open({ ...options, quota: { maxCandidates: 100 } }), { code: "options-invalid" });
+});
+
+test("unknown and invalid quota settings fail closed before creating a root", async t => {
+  const f = await setup(t);
+  for (const bad of [{ maxCandidates: 0 }, { maxRetainedBytes: NaN }, { maxRetainedEntries: 1.5 }, { typo: 1 }, { maxCandidates: Number.MAX_SAFE_INTEGER }]) {
+    await assert.rejects(f.mod.ArtifactStager.create({ root: path.join(f.parent, "invalid"), quota: bad }), { code: "options-invalid" });
+  }
+  await assert.rejects(f.mod.ArtifactStager.create({ root: path.join(f.parent, "unknown"), unexpected: true } as never), { code: "options-invalid" });
+});
+
+test("public stage requests cannot supply quota settings", async t => {
+  const f = await setup(t);
+  await assert.rejects(f.stager.stage({ installationId: "first", release: f.release, expectedIdentity: f.release.identity,
+    quota: { maxCandidates: 100 } } as never), { code: "release-invalid" });
+});
+
+test("a real partial write remains charged after an IO failure and reopen", async t => {
+  const f = await setup(t, archive(entries()), { maxCandidates: 1 });
+  const original = fsPromises.open;
+  const spy = t.mock.method(fsPromises, "open", async (...args: Parameters<typeof original>) => {
+    if (String(args[0]).endsWith("/receipt.json")) throw Object.assign(new Error("injected IO failure"), { code: "ENOSPC" });
+    return original(...args);
+  });
+  syncBuiltinESMExports();
+  const request = { installationId: "partial", release: f.release, expectedIdentity: f.release.identity };
+  try { await assert.rejects(f.stager.stage(request), { code: "stage-io" }); }
+  finally { spy.mock.restore(); syncBuiltinESMExports(); }
+  const candidate = path.join(f.root, createHash("sha256").update("partial").digest("hex"), f.release.identity);
+  assert.deepEqual(await readFile(path.join(candidate, "artifact.tgz")), f.data);
+  assert.ok(!(await readdir(f.root)).some(name => name.endsWith(".lock")));
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: f.transport });
+  await assert.rejects(reopened.stage(request), { code: "stage-exists" });
+  await assert.rejects(reopened.stage({ ...request, installationId: "other" }), { code: "resource-limit" });
+});
+
+test("incomplete candidates within quota are counted without prohibiting unrelated preparation", async t => {
+  const f = await setup(t, archive(entries()), { maxCandidates: 2 });
+  const partial = path.join(f.root, "a".repeat(64), "b".repeat(64));
+  await mkdir(partial, { recursive: true, mode: 0o700 });
+  await writeFile(path.join(partial, "artifact.tgz"), "partial", { mode: 0o600 });
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: f.transport });
+  const request = { installationId: "new", release: f.release, expectedIdentity: f.release.identity };
+  assert.equal((await reopened.stage(request)).status, "prepared-unverified");
+  await assert.rejects(reopened.stage({ ...request, installationId: "another" }), { code: "resource-limit" });
+  assert.equal(await readFile(path.join(partial, "artifact.tgz"), "utf8"), "partial");
+});
+
+test("legacy roots receive default quota accounting without rewriting their marker or partial candidates", async t => {
+  const f = await setup(t);
+  const marker = path.join(f.root, ".artifact-staging-v1");
+  await chmod(marker, 0o600);
+  await writeFile(marker, "pi-manager private artifact staging v1\n");
+  await chmod(marker, 0o400);
+  for (let i = 0; i < 8; i++) await mkdir(path.join(f.root, "a".repeat(64), i.toString(16).padStart(64, "0")), { recursive: true, mode: 0o700 });
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: f.transport });
+  await assert.rejects(reopened.stage({ installationId: "new", release: f.release, expectedIdentity: f.release.identity }), { code: "resource-limit" });
+  assert.equal(await readFile(marker, "utf8"), "pi-manager private artifact staging v1\n");
+});
+
+test("retained symlinks and excessively deep partial trees fail closed before transport", async t => {
+  const f = await setup(t);
+  const partial = path.join(f.root, "a".repeat(64), "b".repeat(64));
+  await mkdir(partial, { recursive: true, mode: 0o700 });
+  const outside = path.join(f.parent, "outside"); await writeFile(outside, "untouched");
+  const link = path.join(partial, "link"); await symlink(outside, link);
+  let downloads = 0;
+  const reopened = await f.mod.ArtifactStager.open({ root: f.root, transport: async req => { downloads++; return f.transport(req); } });
+  const request = { installationId: "new", release: f.release, expectedIdentity: f.release.identity };
+  await assert.rejects(reopened.stage(request), { code: "root-unsafe" });
+  await rm(link); // Fixture-only reconciliation; the stager never removes it.
+  await mkdir(path.join(partial, ...Array.from({ length: 33 }, () => "d")), { recursive: true, mode: 0o700 });
+  await assert.rejects(reopened.stage(request), { code: "resource-limit" });
+  assert.equal(downloads, 0);
+  assert.equal(await readFile(outside, "utf8"), "untouched");
 });
 
 test("fail-closed engine grammar, incompatible Node, unknown packages and invalid installation IDs", async t => {

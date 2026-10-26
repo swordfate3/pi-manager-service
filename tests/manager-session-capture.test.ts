@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, truncate, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { registerHooks } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 
 async function fixture(t: any) {
@@ -141,4 +143,60 @@ test('concurrent writers admit exactly one operation without overwriting either 
   assert.equal(files.filter(n => n.endsWith('.jsonl')).length, 1);
   assert.equal(files.filter(n => n.endsWith('.receipt.json')).length, 1);
   assert.equal(files.includes('.writer'), false);
+});
+
+test('receipt-only duplicate operation refuses before creating any new evidence', async t => {
+  const f = await fixture(t), receipt = path.join(f.captures, `restore-${f.options.operationId}.receipt.json`);
+  await writeFile(receipt, 'prior unknown operation', { mode: 0o400 });
+  const before = await readdir(f.captures);
+  await assert.rejects(f.SessionCapture.create(f.options));
+  assert.deepEqual(await readdir(f.captures), before);
+  assert.equal(await readFile(receipt, 'utf8'), 'prior unknown operation');
+});
+
+// A scoped dependency seam schedules the exact filesystem race after the real
+// privateRoot validation. The module under test and all filesystem operations
+// remain real; no production test hooks or alternate capture implementation.
+async function interleavedCapture(t: any, f: Awaited<ReturnType<typeof fixture>>, behavior: string) {
+  const facade = path.join(f.root, 'capture-storage-seam.mjs');
+  const storage = new URL('../manager/updates/candidate-storage.ts', import.meta.url).href;
+  await writeFile(facade, `
+    import * as actual from ${JSON.stringify(storage)};
+    import {chmod,rename,mkdir,readFile,writeFile} from 'node:fs/promises';
+    export const writeNew=actual.writeNew;
+    export async function privateRoot(dir){
+      await actual.privateRoot(dir);
+      if(dir===${JSON.stringify(f.sessions)}){${behavior}}
+    }
+    export const syncDir=actual.syncDir;
+  `, { mode: 0o600 });
+  const entry = new URL('../manager/updates/session-capture.ts', import.meta.url);
+  entry.searchParams.set('race', randomUUID());
+  const hook = registerHooks({ resolve(specifier, context, next) {
+    if (context.parentURL === entry.href && specifier === './candidate-storage.ts') return next(new URL(`file://${facade}`).href, context);
+    return next(specifier, context);
+  } });
+  t.after(() => hook.deregister());
+  return (await import(entry.href)).SessionCapture;
+}
+
+test('root becoming nonprivate after validation cannot be adopted as the trusted baseline', async t => {
+  const f = await fixture(t);
+  const Capture = await interleavedCapture(t, f, 'await chmod(dir,0o750);');
+  await assert.rejects(Capture.create(f.options));
+  assert.deepEqual(await readdir(f.captures), []);
+});
+
+test('canonical private root replacement after validation cannot become the trusted baseline', async t => {
+  const f = await fixture(t);
+  const Capture = await interleavedCapture(t, f, "await rename(dir,dir+'.previous');await mkdir(dir,{mode:0o700});await writeFile(dir+'/dialogue.jsonl',await readFile(dir+'.previous/dialogue.jsonl'),{mode:0o600});");
+  await assert.rejects(Capture.create(f.options));
+  assert.deepEqual(await readdir(f.captures), []);
+});
+
+test('expiry during asynchronous filesystem validation cannot mint a fresh capture deadline', async t => {
+  const f = await fixture(t);
+  const Capture = await interleavedCapture(t, f, 'await new Promise(resolve=>setTimeout(resolve,150));');
+  await assert.rejects(Capture.create({ ...f.options, expiresAt: performance.now() + 75 }), { code: 'capture-expired' });
+  assert.deepEqual(await readdir(f.captures), []);
 });

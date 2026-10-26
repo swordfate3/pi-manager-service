@@ -13,6 +13,20 @@ const fail = (code: string): never => { throw Object.assign(new Error(`Session c
 const identity = (s: BigIntStats) => [s.dev, s.ino, s.mode, s.uid, s.gid, s.nlink, s.size, s.mtimeNs, s.ctimeNs].join(':');
 const absolute = (p: unknown): p is string => typeof p === 'string' && path.isAbsolute(p) && path.resolve(p) === p && p !== '/' && p.length <= 4096 && !/\p{Cc}/u.test(p);
 
+function rootIdentity(directory: string): string {
+  const root = lstatSync(directory, { bigint: true });
+  const uid = BigInt(process.getuid!()), system = lstatSync('/', { bigint: true }).uid;
+  if (!root.isDirectory() || root.uid !== uid || (root.mode & 0o7777n) !== 0o700n ||
+    realpathSync(directory) !== directory) fail('capture-root-changed');
+  for (let dir = path.dirname(directory);; dir = path.dirname(dir)) {
+    const s = lstatSync(dir, { bigint: true });
+    if (!s.isDirectory() || (s.uid !== uid && s.uid !== system) ||
+      ((s.mode & 0o022n) !== 0n && !(s.uid === system && (s.mode & 0o1000n) !== 0n))) fail('capture-root-changed');
+    if (dir === '/') break;
+  }
+  return `${root.dev}:${root.ino}:${root.mode}:${root.uid}`;
+}
+
 export interface CaptureOptions {
   readonly root: string;
   readonly sessionsRoot: string;
@@ -64,7 +78,7 @@ async function bytes(file: string, copy = false) {
   } finally { await f.close(); }
 }
 
-async function admission(root: string) {
+async function admission(root: string, operationId: string) {
   const reservations = new Set<string>();
   let size = 0, entries = 0;
   for await (const e of await opendir(root, { bufferSize: 1 })) {
@@ -72,7 +86,11 @@ async function admission(root: string) {
     const s = await lstat(path.join(root, e.name));
     if (!e.isFile() || s.uid !== process.getuid?.() || s.nlink !== 1 || (s.mode & 0o7111) || (s.mode & 0o022) ||
       !/^(?:\.writer|restore-[a-f0-9]{32}\.(?:jsonl|receipt\.json))$/.test(e.name)) fail('capture-root-unsafe');
-    if (e.name !== '.writer') reservations.add(e.name.slice(0, 40));
+    if (e.name !== '.writer') {
+      const prefix = e.name.slice(0, 40);
+      if (prefix === `restore-${operationId}`) fail('capture-operation-exists');
+      reservations.add(prefix);
+    }
     size += s.size;
     if (size + MAX_BYTES + MAX_RECEIPT > MAX_RETAINED || reservations.size >= 8) fail('capture-resource-limit');
   }
@@ -93,15 +111,14 @@ export class SessionCapture {
   static async create(value: CaptureOptions): Promise<SessionCapture> {
     // Snapshot and deadline are copied before the first await.
     const o = options(value);
+    const roots: [string, string] = [rootIdentity(o.root), rootIdentity(o.sessionsRoot)];
     await privateRoot(o.root); await privateRoot(o.sessionsRoot);
-    const roots = await Promise.all([o.root, o.sessionsRoot].map(async dir => {
-      const s = await lstat(dir, { bigint: true }); return `${s.dev}:${s.ino}:${s.mode}:${s.uid}`;
-    })) as [string, string];
+    if (rootIdentity(o.root) !== roots[0] || rootIdentity(o.sessionsRoot) !== roots[1]) fail('capture-root-changed');
     const lockPath = path.join(o.root, '.writer');
     const lock = await open(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     try {
       await lock.writeFile(JSON.stringify({ operationId: o.operationId })); await lock.sync(); await syncDir(o.root);
-      await admission(o.root);
+      await admission(o.root, o.operationId);
       const source = await bytes(o.snapshot.session_file!);
       const newline = source.data.indexOf(10);
       if (newline < 1 || newline > 65536) fail('capture-header-invalid');
@@ -136,8 +153,7 @@ export class SessionCapture {
     const o = this.#options;
     if (performance.now() >= o.expiresAt || canonical(snapshot) !== canonical(o.snapshot)) fail('capture-expired-or-changed');
     for (const [dir, expected] of [[o.root, this.#rootIdentity], [o.sessionsRoot, this.#sessionRootIdentity]]) {
-      const s = lstatSync(dir!, { bigint: true });
-      if (!s.isDirectory() || realpathSync(dir!) !== dir || `${s.dev}:${s.ino}:${s.mode}:${s.uid}` !== expected) fail('capture-root-changed');
+      if (rootIdentity(dir!) !== expected) fail('capture-root-changed');
     }
     if (identity(lstatSync(o.snapshot.session_file!, { bigint: true })) !== this.#sourceIdentity ||
       identity(lstatSync(path.join(o.root, this.#descriptor.reference), { bigint: true })) !== this.#copyIdentity ||

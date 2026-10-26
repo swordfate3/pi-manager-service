@@ -29,7 +29,7 @@
 
 **Interfaces:** `TaskStore.open(root)`、`submit({key, requester, target, action, payload})`、`get(id)`、`transition(id, expectedState, nextState)`、`close()`。任务包含 `id`、`requester`、目标身份、动作、精确请求、状态、时间、结果；状态集合固定为设计第 6 节列出的八个值。存储通过私有文件、原子替换和独占写入锁持久化，不使用不受控共享目录。
 
-- [ ] 首先写实际临时文件测试并观察 RED；同幂等键相同请求返回原任务，不同请求拒绝。
+- [x] 首先写实际临时文件测试并观察 RED；同幂等键相同请求返回原任务，不同请求拒绝。
 
 ```ts
 const first = await store.submit(request);
@@ -40,8 +40,8 @@ const reopened = await TaskStore.open(root);
 assert.equal((await reopened.get(first.id)).state, "pending_approval");
 ```
 
-- [ ] 实现并测试第二写入者拒绝、崩溃后可检测恢复、不明执行结果不自动重放、非法状态迁移拒绝；私有目录 0700、文件 0600。禁止记录凭据内容。
-- [ ] 运行 `node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`，通过后提交本任务文件和准确测试报告。
+- [x] 实现并测试第二写入者拒绝、崩溃后可检测恢复、不明执行结果不自动重放、非法状态迁移拒绝；私有目录 0700、文件 0600。禁止记录凭据内容。
+- [x] 运行 `node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts`，通过后提交本任务文件和准确测试报告。
 
 ## Task 2: 原生 Pi 受管生命周期
 

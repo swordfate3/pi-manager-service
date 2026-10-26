@@ -90,3 +90,31 @@ test("default HTTPS transport uses an isolated agent, explicit TLS trust and abb
   assert.deepEqual(captured[0].headers, { accept: "application/vnd.npm.install-v1+json", "accept-encoding": "identity" });
   assert.deepEqual(captured[1].headers, { accept: "application/octet-stream", "accept-encoding": "identity" });
 });
+
+test("exact release resolution requests full JSON rather than the packument-only representation", async t => {
+  // The real registry returns 406/empty for install-v1 on an exact version.
+  // A fixture that always returns metadata would hide this boundary failure.
+  const captured: { url: string; accept: unknown }[] = [];
+  t.mock.method(https, "request", (url: string, options: https.RequestOptions, callback: (res: unknown) => void) => {
+    const accept = (options.headers as Record<string, unknown>).accept;
+    captured.push({ url, accept });
+    const version = url.endsWith("/1.4.0");
+    const accepted = version ? accept === "application/json" : accept === "application/vnd.npm.install-v1+json";
+    const metadata = { name: PI_PACKAGE, version: "1.4.0", engines: { node: ">=22.19.0" }, dist: {
+      tarball: "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.4.0.tgz",
+      integrity: "sha512-" + Buffer.alloc(64, 7).toString("base64"),
+    } };
+    const req = new EventEmitter() as EventEmitter & { end(): void };
+    req.end = () => queueMicrotask(() => callback(Object.assign(
+      Readable.from(accepted ? [Buffer.from(JSON.stringify(version ? metadata : { name: PI_PACKAGE, versions: { "1.4.0": metadata } }))] : []),
+      { statusCode: accepted ? 200 : 406, headers: {} },
+    )));
+    return req;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const catalog = new ReleaseCatalog();
+  assert.equal((await catalog.resolve(PI_PACKAGE, "1.4.0")).version, "1.4.0");
+  assert.deepEqual((await catalog.list(PI_PACKAGE)).versions, ["1.4.0"]);
+  assert.equal(captured.length, 2);
+});

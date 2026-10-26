@@ -25,7 +25,8 @@ export class ReleaseCatalog {
   }
   #approved(name: string) { if (!this.#packages.has(name)) throw new CatalogError("package-not-approved"); }
   async #metadata(name: string, version?: string): Promise<unknown> {
-    try { return strictJson(await boundedDownload(`${REGISTRY}${encodeURIComponent(name)}${version ? "/" + version : ""}`, 8 * 1024 * 1024, 8000, this.#transport)); }
+    try { return strictJson(await boundedDownload(`${REGISTRY}${encodeURIComponent(name)}${version ? "/" + version : ""}`, 8 * 1024 * 1024, 8000, this.#transport,
+      version ? "full" : "abbreviated")); }
     catch (error) { throw new CatalogError(error instanceof TransportError && ["unavailable", "timeout"].includes(error.code) ? "registry-unavailable" : "metadata-invalid"); }
   }
   async #refresh(name: string, cache: Cache): Promise<void> {

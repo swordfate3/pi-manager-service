@@ -1,7 +1,10 @@
 import { Agent, request } from "node:https";
 import { checkServerIdentity, rootCertificates } from "node:tls";
 
-export interface OfficialRequest { readonly url: string; readonly signal: AbortSignal; readonly maxBytes: number; readonly timeoutMs: number }
+export interface OfficialRequest {
+  readonly url: string; readonly signal: AbortSignal; readonly maxBytes: number; readonly timeoutMs: number;
+  readonly accept: "application/octet-stream" | "application/json" | "application/vnd.npm.install-v1+json";
+}
 export interface OfficialResponse {
   readonly url: string;
   readonly statusCode: number;
@@ -15,12 +18,12 @@ export class TransportError extends Error {
   constructor(code: TransportError["code"]) { super("Official transport refused"); this.code = code; }
 }
 
-const directTransport: OfficialTransport = ({ url, signal }) => new Promise((resolve, reject) => {
+const directTransport: OfficialTransport = ({ url, signal, accept }) => new Promise((resolve, reject) => {
   // Own agent, no global fetch dispatcher/proxy, npmrc, cookies, auth or ambient TLS trust overrides.
   const agent = new Agent({ keepAlive: false, maxSockets: 1, proxyEnv: {} });
   const req = request(url, { agent, method: "GET", signal, rejectUnauthorized: true,
     ca: [...rootCertificates], checkServerIdentity, maxHeaderSize: 16 * 1024,
-    headers: { accept: url.endsWith(".tgz") ? "application/octet-stream" : "application/vnd.npm.install-v1+json", "accept-encoding": "identity" },
+    headers: { accept, "accept-encoding": "identity" },
   }, res => {
     res.once("close", () => agent.destroy());
     resolve({ url, statusCode: res.statusCode ?? 0, headers: res.headers, body: res });
@@ -29,7 +32,8 @@ const directTransport: OfficialTransport = ({ url, signal }) => new Promise((res
   req.end();
 });
 
-export async function boundedDownload(url: string, maxBytes: number, timeoutMs: number, transport: OfficialTransport = directTransport): Promise<Buffer> {
+export async function boundedDownload(url: string, maxBytes: number, timeoutMs: number, transport: OfficialTransport = directTransport,
+  metadataFormat: "abbreviated" | "full" = "abbreviated"): Promise<Buffer> {
   const parsed = new URL(url);
   if (parsed.origin !== "https://registry.npmjs.org" || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.href !== url)
     throw new TransportError("refused");
@@ -39,7 +43,8 @@ export async function boundedDownload(url: string, maxBytes: number, timeoutMs: 
     timer = setTimeout(() => { reject(new TransportError("timeout")); controller.abort(); }, timeoutMs);
   });
   const download = async () => {
-    const res = await transport(Object.freeze({ url, signal: controller.signal, maxBytes, timeoutMs }));
+    const accept = url.endsWith(".tgz") ? "application/octet-stream" : metadataFormat === "full" ? "application/json" : "application/vnd.npm.install-v1+json";
+    const res = await transport(Object.freeze({ url, signal: controller.signal, maxBytes, timeoutMs, accept }));
     if (res.statusCode !== 200 || res.url !== url) throw new TransportError("refused");
     const encoding = res.headers["content-encoding"];
     if (encoding !== undefined && encoding !== "identity") throw new TransportError("refused");

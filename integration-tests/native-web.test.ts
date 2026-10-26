@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +13,7 @@ import { initializeHub, readHubConfig, readGrant } from "../hub/config.ts";
 import { startHub } from "../hub/server.ts";
 import { listen } from "../manager/http.ts";
 import { waitFor } from "../tests/helpers/native-harness.ts";
+import { packedWeb } from "./fixtures/packed-web.ts";
 
 test("real Pi loads a packed thin Web, registers, chats through Hub and revokes on stop", {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT,
@@ -31,22 +30,7 @@ test("real Pi loads a packed thin Web, registers, chats through Hub and revokes 
     await hub?.close();
     await rm(root, { recursive: true, force: true });
   });
-  const run = promisify(execFile);
-  const { stdout } = await run("npm", ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", root], {
-    cwd: process.env.PI_MANAGER_TEST_WEB_ROOT, timeout: 15_000,
-    env: { PATH: process.env.PATH, HOME: root, NPM_CONFIG_USERCONFIG: path.join(root, "npmrc"), NPM_CONFIG_CACHE: path.join(root, "npm-cache") },
-  });
-  // npm also emits this package's integrity-check lifecycle notice before JSON.
-  const jsonStart = stdout.indexOf("["); assert.ok(jsonStart >= 0);
-  const [{ filename }] = JSON.parse(stdout.slice(jsonStart));
-  await run("tar", ["-xzf", path.join(root, filename), "-C", root]);
-  const installedWeb = path.join(root, "package");
-  await access(path.join(installedWeb, "dist", "index.html"));
-  // Only declared Web runtime/peer dependencies are supplied by the selected
-  // installed Pi SDK; the extension itself comes exclusively from the archive.
-  await mkdir(path.join(installedWeb, "node_modules", "@earendil-works"), { recursive: true });
-  await symlink(path.resolve("node_modules/ws"), path.join(installedWeb, "node_modules", "ws"));
-  for (const name of ["pi-coding-agent", "pi-ai"]) await symlink(path.resolve(`node_modules/@earendil-works/${name}`), path.join(installedWeb, "node_modules", "@earendil-works", name));
+  const installedWeb = await packedWeb(root, process.env.PI_MANAGER_TEST_WEB_ROOT!);
   const configFile = path.join(root, "hub.json");
   initializeHub(configFile, { port: 0 });
   const config = readHubConfig(configFile);
@@ -113,7 +97,11 @@ test("real Pi loads a packed thin Web, registers, chats through Hub and revokes 
   await waitFor(async () => {
     const list = await (await fetch(`${hub!.url}api/sessions`)).json() as any;
     session = list.sessions[0]; return !!session;
-  }, 10_000);
+  }, 10_000).catch(async error => {
+    const events = (await readFile(path.join(native.stateRoot, stateDirectory, "home", "acceptance.jsonl"), "utf8"))
+      .trim().split("\n").map(line => { const event = JSON.parse(line); return { event: event.event, version: event.version }; });
+    throw Error(`Resumed Web registration did not appear; provider lifecycle=${JSON.stringify(events)}; files=${JSON.stringify(await readdir(path.join(native.stateRoot, stateDirectory)))}`, { cause: error });
+  });
   const resumedUrl = new URL(session!.path, hub.url);
   ws = new WebSocket(new URL("ws", resumedUrl).href.replace(/^http/, "ws"), { origin: new URL(hub.url).origin });
   const restored: any[] = [];

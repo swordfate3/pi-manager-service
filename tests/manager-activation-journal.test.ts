@@ -40,6 +40,63 @@ test('durable plan freezes binding and only exact final readiness can publish th
   assert.deepEqual(await reopened.selection(), selected);
 });
 
+test('publication keeps the durable installation fence until every successor admission completes', async t => {
+  const f = await fixture(t), staged = await f.journal.stage(f.plan);
+  const tx = await f.journal.begin(staged.operationId, staged.planHash);
+  for (const stage of ['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready']) await tx.advance(stage, 'f'.repeat(64));
+  let release!: () => void, entered!: () => void;
+  const held = new Promise<void>(yes => { release = yes; });
+  const pending = new Promise<void>(yes => { entered = yes; });
+  assert.equal(typeof tx.publishAndAdmit, 'function', 'successor admission needs the same durable installation fence');
+  const publication = tx.publishAndAdmit(async (selected: any) => {
+    assert.equal(selected.revision, 1);
+    assert.deepEqual(await f.journal.selection(), selected, 'selection is durable BEFORE inputs are reopened');
+    entered(); await held;
+  });
+  await pending;
+  const fresh = await f.Journal.open({ root: f.state, installationId: 'test-installation' });
+  await assert.rejects(fresh.stage({ ...f.plan, operationId: '4'.repeat(32), expectedRevision: 1 }), /reconciliation|writer/i);
+  await assert.rejects(tx.publishAndAdmit(async () => {}), /unavailable/i);
+  assert.equal(existsSync(path.join(f.state, '.reconciliation')), true);
+  release(); assert.equal((await publication).revision, 1);
+  assert.equal(existsSync(path.join(f.state, '.reconciliation')), false);
+  await fresh.stage({ ...f.plan, operationId: '4'.repeat(32), expectedRevision: 1 });
+});
+
+test('lost successor admission after durable publication is unknown and never unlocks or replays', async t => {
+  const f = await fixture(t), staged = await f.journal.stage(f.plan);
+  const tx = await f.journal.begin(staged.operationId, staged.planHash);
+  for (const stage of ['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready']) await tx.advance(stage, 'f'.repeat(64));
+  let admissions = 0;
+  assert.equal(typeof tx.publishAndAdmit, 'function');
+  await assert.rejects(tx.publishAndAdmit(async () => { admissions++; throw Error('acknowledgement lost'); }), /unknown/i);
+  assert.equal(admissions, 1);
+  assert.equal((await f.journal.selection()).revision, 1);
+  assert.equal((await f.journal.inspect(f.plan.operationId)).stage, 'selected');
+  await assert.rejects(tx.publishAndAdmit(async () => { admissions++; }), /unavailable/i);
+  const fresh = await f.Journal.open({ root: f.state, installationId: 'test-installation' });
+  await assert.rejects(fresh.stage({ ...f.plan, operationId: '4'.repeat(32), expectedRevision: 1 }), /reconciliation|writer/i);
+  assert.equal(admissions, 1);
+});
+
+test('admission callback cannot replace durable selection or release a changed journal', async t => {
+  const f = await fixture(t), staged = await f.journal.stage(f.plan);
+  const tx = await f.journal.begin(staged.operationId, staged.planHash);
+  for (const stage of ['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready']) await tx.advance(stage, 'f'.repeat(64));
+  await assert.rejects(tx.publishAndAdmit(undefined as any), /invalid/i);
+  assert.equal((await f.journal.selection()).revision, 0, 'invalid callback refuses before any publication');
+  await assert.rejects(tx.publishAndAdmit(async (selected: any) => {
+    selected.revision = 100; // Callback receives only a detached value.
+    assert.equal((await f.journal.selection()).revision, 1);
+    const file = path.join(f.state, f.plan.operationId, '07-selected.json');
+    const record = JSON.parse(await readFile(file, 'utf8'));
+    record.evidenceHash = '0'.repeat(64);
+    await replace(file, JSON.stringify(record));
+  }), /unknown/i);
+  const fresh = await f.Journal.open({ root: f.state, installationId: 'test-installation' });
+  await assert.rejects(fresh.stage({ ...f.plan, operationId: '4'.repeat(32), expectedRevision: 1 }), /reconciliation|writer/i);
+});
+
 test('one installation transaction excludes concurrent writers and abort is only safe before commit intent', async t => {
   const f = await fixture(t), a = await f.journal.stage(f.plan);
   const b = await f.journal.stage({ ...f.plan, operationId: '4'.repeat(32) });

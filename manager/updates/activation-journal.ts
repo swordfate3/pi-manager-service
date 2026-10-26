@@ -26,6 +26,8 @@ export interface InstallationSelection {
 export interface ActivationTransaction {
   advance(stage: Exclude<Stage, 'reserved' | 'selected' | 'aborted' | 'unknown'>, evidenceHash: string): Promise<void>;
   publish(): Promise<InstallationSelection>;
+  /** Executor-private admission only; keep the durable fence through all input acknowledgements. */
+  publishAndAdmit(admit: (selection: InstallationSelection) => Promise<void>): Promise<InstallationSelection>;
   abort(evidenceHash: string): Promise<void>;
   unknown(evidenceHash: string): Promise<void>;
 }
@@ -262,6 +264,35 @@ export class ActivationJournal {
         history.push(hash(canonical(accepted)));
       } catch { active = false; await this.#retain(lock); fail('unknown-changed-or-invalid-durable-outcome'); }
     };
+    const publish = (admit?: (selection: InstallationSelection) => Promise<void>) => run(async () => {
+      if (current !== 'ready') fail('stage-not-ready');
+      try {
+        transactionFence();
+        const observed = await this.selection();
+        if (canonical(observed) !== canonical(original)) fail('selection-revision-changed');
+        await this.#plan(operation, expectedHash);
+        const accepted = await this.#history(operation);
+        if (accepted.stage !== 'ready' || canonical(accepted.digests) !== canonical(history)) fail('stage-content-changed');
+        const selected: InstallationSelection = { schema: 1, installationId: this.#installation, revision: original.revision + 1, operationId: operation, candidate: p.candidate };
+        const temp = path.join(this.#root, `.selection-${operation}.tmp`);
+        await writeNew(temp, JSON.stringify(selected)); transactionFence();
+        await rename(temp, path.join(this.#root, 'selection.json')); await syncDir(this.#root);
+        await event('selected', hash(canonical(selected)));
+        if (admit) {
+          // Publication precedes opening inputs, but a second cutover must not
+          // enter between these operations. Lost acknowledgements retain the
+          // same durable marker even though selection is already published.
+          await admit(structuredClone(selected));
+          transactionFence();
+          const after = await this.#history(operation);
+          if (canonical(await this.selection()) !== canonical(selected) || after.stage !== 'selected' ||
+            canonical(after.digests) !== canonical(history)) fail('admission-state-changed');
+          transactionFence();
+        }
+        active = false; await this.#unlock(lock);
+        return structuredClone(selected);
+      } catch { active = false; await this.#retain(lock); fail('unknown-selection-outcome'); }
+    });
     return Object.freeze({
       advance: (next, evidenceHash) => run(async () => {
         if (!['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready'].includes(next) ||
@@ -276,24 +307,11 @@ export class ActivationJournal {
         await event('unknown', evidenceHash); active = false; await lock.file.close();
         // Intentionally retain .writer and busy state for explicit reconciliation.
       }),
-      publish: () => run(async () => {
-        if (current !== 'ready') fail('stage-not-ready');
-        try {
-          transactionFence();
-          const observed = await this.selection();
-          if (canonical(observed) !== canonical(original)) fail('selection-revision-changed');
-          await this.#plan(operation, expectedHash);
-          const accepted = await this.#history(operation);
-          if (accepted.stage !== 'ready' || canonical(accepted.digests) !== canonical(history)) fail('stage-content-changed');
-          const selected: InstallationSelection = { schema: 1, installationId: this.#installation, revision: original.revision + 1, operationId: operation, candidate: p.candidate };
-          const temp = path.join(this.#root, `.selection-${operation}.tmp`);
-          await writeNew(temp, JSON.stringify(selected)); transactionFence();
-          await rename(temp, path.join(this.#root, 'selection.json')); await syncDir(this.#root);
-          await event('selected', hash(canonical(selected)));
-          active = false; await this.#unlock(lock);
-          return structuredClone(selected);
-        } catch { active = false; await this.#retain(lock); fail('unknown-selection-outcome'); }
-      }),
+      publish: () => publish(),
+      publishAndAdmit: admit => {
+        if (typeof admit !== 'function') return Promise.reject(Error('Activation journal refused: admission-invalid'));
+        return publish(admit);
+      },
     } satisfies ActivationTransaction);
   }
 }

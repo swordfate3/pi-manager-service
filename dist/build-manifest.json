@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": {
     "count": 75,
-    "sha256": "18de2e4aed2a25a009f29586f4f029d6f3f9f3365d475a456e56168ad6d0b89c",
+    "sha256": "115f5dbe2bc3243f855d9cbb0bb67a73e45a5e618d8eb857d05ed3dcc080421d",
     "files": [
       {
         "path": "bin/pi-web-hub.mjs",
@@ -214,7 +214,7 @@
       },
       {
         "path": "manager/task-store.ts",
-        "sha256": "8c1124e81ed52811162e3c91477aaaa9de630bdaf66b14d062bd7364f9e1b3c5"
+        "sha256": "6f11d5ea0ccc6be47a17e8a7c03b8817e73ab94eeda5dae034d753fe8226fba2"
       },
       {
         "path": "package.json",
@@ -308,11 +308,11 @@
   },
   "outputs": {
     "count": 1,
-    "sha256": "8a1a4e8a86d4c480346e0cc7c6fb8d8a7705464f2d250cf59b1134eab203f2ab",
+    "sha256": "0a3ece1fe25d0e599145f770caf0c64d4119d78885e145948c4aa55f5b5ffaf9",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "39c2fa5681be19407eebe2a54bdb80c46babef8357a46a3d6ea4c9e0683fc69e"
+        "sha256": "60aa7f8af6276f58b202fedf10aeebf07ed7a1691710bfe63a06c100b4e13017"
       }
     ]
   }

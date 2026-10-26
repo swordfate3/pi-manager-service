@@ -24,6 +24,7 @@ async function fixture() {
   for (const entry of [
     "bin",
     "hub",
+    "manager",
     "protocol",
     "gate/gate",
     "gate/gatectl",
@@ -67,12 +68,26 @@ async function packFixture(t) {
   const directory = mkdtempSync(path.join(tmpdir(), "pi-manager-packed-dist-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const cache = path.join(directory, "npm-cache");
+  const testHome = path.join(directory, "home");
+  mkdirSync(testHome);
   const packed = spawnSync(
     "npm",
     ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", directory],
     {
       cwd: source.directory,
-      env: { ...process.env, NPM_CONFIG_CACHE: cache },
+      env: {
+        PATH: process.env.PATH,
+        HOME: testHome,
+        XDG_CONFIG_HOME: path.join(directory, "config"),
+        XDG_DATA_HOME: path.join(directory, "data"),
+        XDG_CACHE_HOME: path.join(directory, "cache"),
+        PI_CODING_AGENT_DIR: path.join(directory, "agent"),
+        PI_MANAGER_CONFIG: path.join(directory, "manager.json"),
+        PI_WEB_UI_HUB_CONFIG: path.join(directory, "legacy.json"),
+        NPM_CONFIG_CACHE: cache,
+        NPM_CONFIG_USERCONFIG: path.join(directory, "npmrc"),
+        NPM_CONFIG_GLOBALCONFIG: path.join(directory, "global-npmrc"),
+      },
       encoding: "utf8",
       maxBuffer: 4 * 1024 * 1024,
     },
@@ -113,6 +128,19 @@ test("distribution verification rejects source drift after the bundle manifest i
   await f.module.verifyManifest(f.directory);
 
   const source = path.join(f.directory, "hub", "limits.ts");
+  writeFileSync(source, `${readFileSync(source, "utf8")}\n`);
+  await assert.rejects(f.module.verifyManifest(f.directory), /Source inventory differs/);
+});
+
+test("new manager service sources are fingerprinted and cannot drift unnoticed", async (t) => {
+  const f = await fixture();
+  t.after(() => rmSync(f.directory, { recursive: true, force: true }));
+
+  const inventory = await f.module.createSourceInventory(f.directory);
+  assert.equal(inventory.files.some((file) => file.path === "manager/task-store.ts"), true);
+  await f.module.writeManifest(f.directory);
+  await f.module.verifyManifest(f.directory);
+  const source = path.join(f.directory, "manager", "task-store.ts");
   writeFileSync(source, `${readFileSync(source, "utf8")}\n`);
   await assert.rejects(f.module.verifyManifest(f.directory), /Source inventory differs/);
 });
@@ -163,6 +191,12 @@ test("distribution verification refuses output symlinks", async (t) => {
 
 test("the actual packed artifact verifies itself and contains the complete runtime probe", async (t) => {
   const packed = await packFixture(t);
+
+  await t.test("includes the manager task store and contracts in the real archive", () => {
+    const files = listFiles(packed);
+    assert.ok(files.includes("manager/contracts.ts"));
+    assert.ok(files.includes("manager/task-store.ts"));
+  });
 
   await t.test("excludes generated Python caches from the archive inventory", () => {
     const files = listFiles(packed);

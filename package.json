@@ -38,6 +38,7 @@
   "files": [
     "bin/",
     "hub/",
+    "manager/",
     "protocol/",
     "gate/gate/*.py",
     "gate/gatectl",

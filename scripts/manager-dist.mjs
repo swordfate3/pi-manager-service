@@ -9,7 +9,7 @@ const MANIFEST = "build-manifest.json";
 // The manifest is intentionally reproducible from an installed tarball. It
 // binds shipped executable/source inputs, not checkout-only tests, lockfiles,
 // or TypeScript/Vite development configuration.
-const SOURCE_DIRECTORIES = ["bin", "hub", "protocol", "gate/gate"];
+const SOURCE_DIRECTORIES = ["bin", "hub", "manager", "protocol", "gate/gate"];
 const SOURCE_FILES = [
   "gate/gatectl",
   "package.json",

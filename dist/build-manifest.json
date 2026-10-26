@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "source": {
-    "count": 73,
-    "sha256": "f2de543148aae1627dfb104aa7e2f33ec24aa6b8e1fd65b90a2fc231632a4ceb",
+    "count": 75,
+    "sha256": "18de2e4aed2a25a009f29586f4f029d6f3f9f3365d475a456e56168ad6d0b89c",
     "files": [
       {
         "path": "bin/pi-web-hub.mjs",
@@ -209,8 +209,16 @@
         "sha256": "537b306082b44df576d7bc5e630a81ce5de15ae29572192963c060e517edcb40"
       },
       {
+        "path": "manager/contracts.ts",
+        "sha256": "063029200584c8b4ad564643c372d97d3f5a567cda33888ad5b9a0eac5b833a3"
+      },
+      {
+        "path": "manager/task-store.ts",
+        "sha256": "8c1124e81ed52811162e3c91477aaaa9de630bdaf66b14d062bd7364f9e1b3c5"
+      },
+      {
         "path": "package.json",
-        "sha256": "599e04c6235b6e7025a10b97d2afe072037f1783e7e50065b0fabab95499e731"
+        "sha256": "542aeb9505568c55867353ed4cc162c130e2c0a039c13b055f96174724de1f9a"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -294,17 +302,17 @@
       },
       {
         "path": "scripts/manager-dist.mjs",
-        "sha256": "3e611d36bc6561aa072cb631be4fc631e1f3df53e989ad10cbe858ecc392c562"
+        "sha256": "b08686d6e93d6029f8cc801768659df8f2148edf7204bd5085e1c524b115063d"
       }
     ]
   },
   "outputs": {
     "count": 1,
-    "sha256": "256ddd7123a90e636e86e879fd0cb7285cf5169c85a8f46135e3e96a3dfb69e0",
+    "sha256": "8a1a4e8a86d4c480346e0cc7c6fb8d8a7705464f2d250cf59b1134eab203f2ab",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "8ac83c6e6468317648bdd8bacc01008b925166e916f2dc27a2079d77508482e1"
+        "sha256": "39c2fa5681be19407eebe2a54bdb80c46babef8357a46a3d6ea4c9e0683fc69e"
       }
     ]
   }

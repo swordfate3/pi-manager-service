@@ -89,9 +89,15 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
     }
     await this.validate(task);
     this.#starting.get(task.target)?.abort();
-    const result = await this.#backend.stop(task.target);
-    if (result.status === "ownership-lost") throw new ExecutionOutcomeUnknownError();
-    return { status: result.status, instanceId: task.target };
+    try {
+      const result = await this.#backend.stop(task.target);
+      if (result.status === "ownership-lost") throw new ExecutionOutcomeUnknownError();
+      return { status: result.status, instanceId: task.target };
+    } catch (error) {
+      // A removed child handle is not proof that revocation/termination completed.
+      if (error instanceof ExecutionOutcomeUnknownError) this.#blocked.add(task.target);
+      throw error;
+    }
   }
   restore(records: readonly TaskRecord[]) {
     // Saved-data proofs only: never reconstruct child handles or adopt persisted PIDs.
@@ -99,6 +105,9 @@ export class NativeTaskAdapter implements TaskBackendAdapter {
     for (const task of records) {
       if (this.#owners.get(task.target) !== task.requester) continue;
       if (["create", "start", "stop"].includes(task.action) && ["unknown", "running"].includes(task.state)) this.#blocked.add(task.target);
+      // A failed new generation may already have touched saved data. Its authoritative
+      // failure tombstone must outlive this executor, even after a later approved stop.
+      if (task.action === "start" && task.state === "failed") this.#blocked.add(task.target);
       if (!["create", "start"].includes(task.action) || task.state !== "succeeded") continue;
       if (task.result === undefined) continue;
       const result = record(task.result); if (result.saved === undefined) continue;

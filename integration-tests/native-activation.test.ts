@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, readlink, realpath, symlink, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
@@ -16,7 +16,7 @@ import { packedWeb } from './fixtures/packed-web.ts';
 // later integration, so public updates stays false even if this test passes.
 test('native installation coordinates every official-candidate consumer and publishes before admission', {
   skip: !process.env.PI_MANAGER_TEST_WEB_ROOT || !process.env.PI_MANAGER_TEST_CANDIDATE_ROOT || !process.env.PI_MANAGER_TEST_RECEIPT_SHA256,
-  timeout: 180_000,
+  timeout: 300_000,
 }, async t => {
   const candidateRoot = process.env.PI_MANAGER_TEST_CANDIDATE_ROOT!;
   assert.equal(candidateRoot, '/tmp/manager-candidate-official-SPwX0o/candidates');
@@ -48,7 +48,10 @@ test('native installation coordinates every official-candidate consumer and publ
   await privateProfile(webRoot);
   const provider = path.join(root, 'provider.mjs'); await copyFile(path.resolve('integration-tests/fixtures/native-selected-provider.mjs'), provider);
   const projects = path.join(root, 'projects');
-  for (const name of ['one', 'two']) await mkdir(path.join(projects, name), { recursive: true, mode: 0o700 });
+  // Regression inventory: all these IDs were always valid; captures/proofs must
+  // not collide with staged Web or with each other.
+  const consumerIds = ['web', 'one', 'proof-one'];
+  for (const name of consumerIds) await mkdir(path.join(projects, name), { recursive: true, mode: 0o700 });
   const hubDir = path.join(root, 'hub'); await mkdir(hubDir, { mode: 0o700 });
   const hubConfigFile = path.join(hubDir, 'hub.json'); initializeHub(hubConfigFile, { port: 0 });
   const reserve = await listen(async (_req, res) => { res.end(); }, 0), port = reserve.port; await reserve.close();
@@ -67,7 +70,7 @@ test('native installation coordinates every official-candidate consumer and publ
     t.diagnostic(`private activation evidence retained: ${root}`);
   });
   const original = [];
-  for (const name of ['one', 'two']) {
+  for (const name of consumerIds) {
     const identity = await installation.create({ instanceId: name, workspace: { root: 'projects', path: name } });
     assert.equal((await installation.generate(name, `source ${name} 中文🙂`)).text, 'SELECTED_OK 中文🙂');
     const snapshot = await installation.snapshotRuntime(name);
@@ -79,7 +82,7 @@ test('native installation coordinates every official-candidate consumer and publ
     payload: { ...await installation.review(), candidateId, receiptHash, releaseIdentity: receipt.release.identity, version: '1.4.0' } };
   const result = await installation.activate(task);
   assert.equal(result.status, 'updated'); assert.equal(result.revision, 1);
-  const review = await installation.review(); assert.equal(review.expectedRevision, 1); assert.equal(review.consumers.length, 2);
+  const review = await installation.review(); assert.equal(review.expectedRevision, 1); assert.equal(review.consumers.length, consumerIds.length);
   for (const old of original) {
     const next = await installation.inspect(old.identity.instanceId), snapshot = await installation.snapshotRuntime(old.identity.instanceId);
     assert.ok(next); assert.notEqual(next.pid, old.identity.pid); assert.equal(next.generation, 1);
@@ -89,8 +92,28 @@ test('native installation coordinates every official-candidate consumer and publ
     assert.throws(() => process.kill(old.identity.pid, 0), { code: 'ESRCH' });
     assert.equal((await installation.generate(old.identity.instanceId, 'after full activation')).text, 'SELECTED_OK 中文🙂');
   }
+  // Authored actual regression, NOT FS-double acceptance: selected package
+  // copies belong to this new test root. Never mutate the shared candidate.
+  const selectedWeb = path.join(root, 'installation/operations', task.id.replaceAll('-', ''), 'web');
+  const selectedFile = path.join(selectedWeb, 'dist/index.html'), originalWebBytes = await readFile(selectedFile);
+  const later = { instanceId: 'later', workspace: { root: 'projects', path: 'one' } };
+  await chmod(selectedFile, 0o600); await writeFile(selectedFile, 'changed selected Web'); await chmod(selectedFile, 0o400);
+  try {
+    await assert.rejects(installation.create(later), /selected-web-changed/);
+    assert.equal(installation.list().length, consumerIds.length);
+    assert.equal(await installation.inspect('later'), null);
+  } finally { await chmod(selectedFile, 0o600); await writeFile(selectedFile, originalWebBytes); await chmod(selectedFile, 0o400); }
+  const peer = path.join(selectedWeb, 'node_modules/@earendil-works/pi-ai'), originalPeer = await readlink(peer);
+  await unlink(peer); await symlink(path.join(selectedWeb, 'dist'), peer);
+  try {
+    await assert.rejects(installation.create(later), /selected-web-changed/);
+    assert.equal(installation.list().length, consumerIds.length);
+    assert.equal(await installation.inspect('later'), null);
+  } finally { await unlink(peer); await symlink(originalPeer, peer); }
+  const added = await installation.create(later);
+  assert.equal(added.instanceId, 'later'); assert.equal((await installation.snapshotRuntime('later')).version, '1.4.0');
   await assert.rejects(installation.activate(task), /revision/i);
   await installer.verify(candidateId, receiptHash);
-  t.diagnostic(JSON.stringify({ scope: 'private-native-coordinator', affectedConsumers: 2, hostNode: process.version, abi: process.versions.modules,
+  t.diagnostic(JSON.stringify({ scope: 'private-native-coordinator', affectedConsumers: consumerIds.length, hostNode: process.version, abi: process.versions.modules,
     officialCandidate: candidateId, version: '1.4.0', publicUpdates: false }));
 });

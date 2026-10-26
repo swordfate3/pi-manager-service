@@ -23,7 +23,7 @@ test('owned native Pi and installed Web grant a private exact lease without losi
   const web = await packedWeb(root, process.env.PI_MANAGER_TEST_WEB_ROOT!);
   await mkdir(path.join(root, 'hub'), { mode: 0o700 });
   const hubConfigFile = path.join(root, 'hub', 'hub.json'); initializeHub(hubConfigFile, { port: 0 });
-  const reserve = await listen(async (_req, response) => response.end(), 0);
+  const reserve = await listen(async (_req, response) => { response.end(); }, 0);
   const port = reserve.port; await reserve.close();
   const workspace = path.join(root, 'projects', 'one'); await mkdir(workspace, { recursive: true });
   backend = new NativeBackend({ piExecutable: path.resolve('node_modules/.bin/pi'), workspaceRoots: { projects: path.dirname(workspace) },

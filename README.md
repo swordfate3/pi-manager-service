@@ -62,6 +62,8 @@ node --import ./tests/register-ts.mjs integration-tests/native-lifecycle.test.ts
 
 精确通过项目、审查及尚未完成的服务/MCP 边界见[实施与验收记录](docs/validation/2026-10-26-manager-service-progress.md)。不要把这些库的测试命令当作产品启动命令。
 
+另外提供了[临时容器权限隔离实验](integration-tests/manager-isolation/README.md)：它只使用新容器、新卷、假凭据和固定标记动作，验证公共入口、执行器和 Agent 的挂载/权限与独立审批边界。默认离线测试不调用 Docker，实验必须显式开启；[实际正反验收记录](docs/validation/2026-10-26-manager-container-isolation.md)单独列出结果。该实验不随运行包发布，不是新的生产执行器，也没有让管理网页或 MCP 获得创建 Pi 的能力。
+
 ## 后续设计目标（本阶段未实现）
 
 - 统一管理受管 Pi 的创建、停止、更新和回退。

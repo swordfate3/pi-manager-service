@@ -165,14 +165,27 @@ test("stop rejects pending generation and duplicate generation cannot cross-corr
   assertDead(identity.pid);
 });
 
-test("a transient provider error followed by a successful retry waits for session settlement", async (t) => {
+test("a successful retry excludes nonempty failed-attempt text and waits for session settlement", async (t) => {
   const { backend, request } = await harness(t, "retry");
   await backend.create(request);
   const result = await backend.generate(request.instanceId, "retry this");
   assert.equal(result.text, "答复🙂\u2028line\u2029end");
   assert.equal(result.settled, true);
+  assert.equal(result.aborted, false);
   assert.equal((await backend.inspect(request.instanceId))?.status, "ready");
 });
+
+for (const scenario of ["multi-turn", "multi-turn-retry"]) {
+  test(`${scenario} preserves accepted earlier text without including failed-attempt output`, async (t) => {
+    const { backend, request } = await harness(t, scenario);
+    await backend.create(request);
+    const result = await backend.generate(request.instanceId, "continue the accepted work");
+    assert.deepEqual(result, {
+      disposition: "started", text: "ACCEPTED_FIRST_TURN|答复🙂\u2028line\u2029end",
+      agentEndObserved: true, settled: true, aborted: false,
+    });
+  });
+}
 
 for (const scenario of ["final-error", "prompt-overflow", "output-overflow"]) {
   test(`${scenario} after readiness rejects generation and reaps the child`, async (t) => {

@@ -334,6 +334,8 @@ export class NativeBackend {
     if (record.type === "message_end" && object(record.message) && record.message.role === "assistant") {
       // Provider failures can be followed by automatic retries. Only settlement decides final failure.
       generation.lastMessageFailed = record.message.stopReason === "error";
+      // Failed attempts are not accepted output. Preserve earlier successful turns across retries.
+      if (generation.lastMessageFailed) return;
       if (Array.isArray(record.message.content)) {
         for (const part of record.message.content) {
           if (object(part) && part.type === "text" && typeof part.text === "string") {

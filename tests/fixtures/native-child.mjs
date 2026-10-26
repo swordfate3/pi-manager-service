@@ -36,10 +36,17 @@ process.stdin.on("data", (chunk) => {
       send({ ...response, data: { disposition: scenario === "handled" ? "handled" : "started" } });
       if (scenario === "handled") continue;
       send({ type: "agent_start" });
-      if (scenario === "retry") {
-        send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "temporary provider failure" } });
-        send({ type: "agent_end", messages: [], willRetry: true });
+      if (["multi-turn", "multi-turn-retry"].includes(scenario)) {
+        send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "ACCEPTED_FIRST_TURN|" }], stopReason: "stop" } });
+        send({ type: "agent_end", messages: [], willRetry: false });
         send({ type: "agent_start" });
+      }
+      if (["retry", "multi-turn-retry"].includes(scenario)) {
+        for (let attempt = 0; attempt < (scenario === "multi-turn-retry" ? 2 : 1); attempt++) {
+          send({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "FAILED_PARTIAL|" }], stopReason: "error", errorMessage: "temporary provider failure" } });
+          send({ type: "agent_end", messages: [], willRetry: true });
+          send({ type: "agent_start" });
+        }
       }
       if (scenario === "final-error") {
         send({ type: "message_end", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "terminal provider failure" } });

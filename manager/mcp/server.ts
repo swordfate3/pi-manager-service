@@ -6,7 +6,7 @@ import { absolute, origin as validatedOrigin } from "../config.ts";
 import { ExecutorClient } from "../executor/client.ts";
 import { bearer, header, jsonBody, reply } from "../http.ts";
 import { ManagerError, requireThat } from "../validation.ts";
-import type { TaskSubmission } from "../api.ts";
+import type { TaskSubmission, VersionQueryOptions } from "../api.ts";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
 const submission = z.object({ key: id, action: z.enum(["create", "stop", "start"]), target: id, workspace: id.optional() }).strict().superRefine((v, ctx) => {
@@ -14,6 +14,11 @@ const submission = z.object({ key: id, action: z.enum(["create", "stop", "start"
 });
 const getTask = z.object({ taskId: z.string().uuid() }).strict();
 const noArguments = z.object({}).strict();
+const versionQuery = z.object({
+  query: z.string().max(64).regex(/^[0-9.]*$/).optional(),
+  cursor: z.string().max(256).regex(/^[A-Za-z0-9_-]+$/).optional(),
+  limit: z.number().int().min(1).max(100).optional(),
+}).strict();
 
 function tools(client: ExecutorClient): McpServer {
   const server = new McpServer({ name: "pi-manager", version: "0.1.0" }, { instructions: "Submit and query persistent Pi Manager tasks. Submission does not authorize execution. Administrator approval is independent and cannot be performed through MCP." });
@@ -32,6 +37,9 @@ function tools(client: ExecutorClient): McpServer {
   server.registerTool("manager_list_tasks", { description: "List persistent tasks visible to this credential; no administrator approval tools are exposed.", inputSchema: noArguments,
     annotations: { readOnlyHint: true, openWorldHint: false } },
     () => run(() => client.listTasks()));
+  server.registerTool("manager_list_pi_versions", { description: "Search stable official Pi package versions. This catalog is read-only; update execution and compatibility approval are not enabled.", inputSchema: versionQuery,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true } },
+    args => run(() => client.versions(args as VersionQueryOptions)));
   return server;
 }
 

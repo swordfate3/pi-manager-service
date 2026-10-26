@@ -3,11 +3,14 @@ import type { TaskRecord, TaskRequest } from "../contracts.ts";
 import type { ExecutorConfig } from "../config.ts";
 import { canonical, digest, equalHash, identifier, keys, ManagerError, record, requireThat, revision, taskId, token } from "../validation.ts";
 import type { TaskBackendAdapter } from "./adapter.ts";
-import type { ApprovalBinding, TaskView } from "../api.ts";
+import type { ApprovalBinding, TaskView, VersionCatalogPage, VersionQueryOptions } from "../api.ts";
 import { DockerOutcomeUnknownError } from "../backends/docker-engine.ts";
 import { ExecutionOutcomeUnknownError } from "../errors.ts";
+import { CatalogError, PI_PACKAGE, ReleaseCatalog } from "../updates/catalog.ts";
 
 type Principal = ExecutorConfig["principals"][number];
+interface TaskEngineOptions { readonly catalog?: ReleaseCatalog }
+const MAX_VERSION_QUERIES = 16;
 function requestHash(t: TaskRequest) { return digest(canonical({ key: t.key, requester: t.requester, target: t.target, action: t.action, payload: t.payload })); }
 function view(t: TaskRecord): TaskView {
   const { result, ...rest } = t;
@@ -24,18 +27,21 @@ export class TaskEngine {
   readonly #adapterPolicy: string;
   readonly #approvals = new Map<string, ApprovalBinding>();
   readonly #running = new Set<Promise<void>>();
+  readonly #catalog: ReleaseCatalog;
+  readonly #catalogQueries = new Set<Promise<VersionCatalogPage>>();
   readonly #shutdown = new AbortController();
   #tail: Promise<unknown> = Promise.resolve();
   #closing = false;
   #closePromise?: Promise<void>;
-  private constructor(config: ExecutorConfig, store: TaskStore, adapter?: TaskBackendAdapter) {
+  private constructor(config: ExecutorConfig, store: TaskStore, adapter: TaskBackendAdapter | undefined, options: TaskEngineOptions) {
     this.#config = structuredClone(config); this.#store = store; this.#adapter = adapter;
+    this.#catalog = options.catalog ?? new ReleaseCatalog({ metadataDeadlineMs: 2500 });
     this.#adapterPolicy = canonical({ policy: adapter?.policy ?? null, actions: adapter?.actions ?? [] });
     this.#policyHash = digest(canonical({ workspaces: config.workspaces, principals: config.principals.map(p => ({ id: p.id, role: p.role })), adapter: this.#adapterPolicy }));
   }
-  static async open(config: ExecutorConfig, adapter?: TaskBackendAdapter) {
+  static async open(config: ExecutorConfig, adapter?: TaskBackendAdapter, options: TaskEngineOptions = {}) {
     const store = await TaskStore.open(config.stateRoot, { recoverStaleLock: config.recoverStaleLock });
-    const engine = new TaskEngine(config, store, adapter);
+    const engine = new TaskEngine(config, store, adapter, options);
     try {
       for (const task of await store.list()) {
         if (task.state === "running" || task.state === "waiting_idle") await store.transition(task.id, task.state, "unknown", { expectedRevision: task.revision });
@@ -56,9 +62,22 @@ export class TaskEngine {
     if (["review", "approve", "execute"].includes(m.op as string)) requireThat(admin, 403);
     // Freeze attacker-controlled data before queueing any asynchronous operation.
     const copy = structuredClone(m);
+    if (copy.op === "versions") return await this.#versions(copy);
     const pending = this.#tail.then(() => this.#handle(principal, admin, copy));
     this.#tail = pending.catch(() => {});
     try { return await pending; } catch (e) { if (e instanceof TaskStoreConflictError) throw new ManagerError(409); throw e; }
+  }
+  async #versions(message: Record<string, unknown>): Promise<VersionCatalogPage> {
+    keys(message, ["op", "options"]);
+    const options = record(message.options); keys(options, [], ["query", "cursor", "limit"]);
+    const copy = structuredClone(options) as VersionQueryOptions;
+    requireThat(this.#catalogQueries.size < MAX_VERSION_QUERIES, 503);
+    const operation = this.#catalog.list(PI_PACKAGE, copy).catch(error => {
+      if (error instanceof CatalogError && error.code === "invalid-query") throw new ManagerError(400);
+      throw new ManagerError(503);
+    });
+    this.#catalogQueries.add(operation);
+    try { return await operation; } finally { this.#catalogQueries.delete(operation); }
   }
   async #task(id: unknown, p: Principal, admin: boolean) {
     const task = await this.#store.get(taskId(id));
@@ -164,7 +183,7 @@ export class TaskEngine {
     this.#closing = true;
     this.#shutdown.abort();
     return this.#closePromise ??= (async () => {
-      await this.#tail; await Promise.all(this.#running);
+      await this.#tail; await Promise.all(this.#running); await Promise.allSettled([...this.#catalogQueries]);
       // Close store even when child ownership cannot be confirmed; report failure, never claim clean exit.
       try { await this.#adapter?.close(); } finally { this.#approvals.clear(); await this.#store.close(); }
     })();

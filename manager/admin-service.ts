@@ -4,7 +4,7 @@ import { AdminClient } from "./executor/admin-client.ts";
 import { bearer, boundary, jsonBody, listen, reply } from "./http.ts";
 import { keys, ManagerError, record, requireThat, taskId, token } from "./validation.ts";
 import { renderPage, renderScript } from "./ui.ts";
-import type { ApprovalBinding, TaskSubmission } from "./api.ts";
+import type { ApprovalBinding, TaskSubmission, VersionQueryOptions } from "./api.ts";
 
 /** Run privately, with only the separately provisioned admin socket accessible.
  * Credentials are typed into this origin, exchanged for short-lived memory-only bearer,
@@ -42,7 +42,8 @@ export async function startAdminService(value: unknown) {
       } else if (req.url === "/api/manager/execute") {
         const b = record(body); keys(b, ["taskId", "revision"]);
         reply(res, 200, await client.executeTask(b as { taskId: string; revision: number }));
-      } else if (req.url === "/api/manager/tasks") reply(res, 202, await client.submitTask(body as TaskSubmission));
+      } else if (req.url === "/api/manager/versions") reply(res, 200, await client.versions(body as VersionQueryOptions));
+      else if (req.url === "/api/manager/tasks") reply(res, 202, await client.submitTask(body as TaskSubmission));
       else throw new ManagerError(404);
       return;
     }

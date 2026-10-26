@@ -1,6 +1,6 @@
 import { request } from "node:http";
 import { ManagerError, requireThat, token } from "../validation.ts";
-import type { TaskClient, TaskSubmission, TaskView, WorkspaceChoice, Capabilities } from "../api.ts";
+import type { TaskClient, TaskSubmission, TaskView, WorkspaceChoice, Capabilities, VersionCatalogPage, VersionQueryOptions } from "../api.ts";
 
 /** No TaskStore, backend, admin credential, subprocess or policy dependency. */
 export class ExecutorClient implements TaskClient {
@@ -27,6 +27,7 @@ export class ExecutorClient implements TaskClient {
   submitTask(request: TaskSubmission): Promise<TaskView> { return this.call({ op: "submit", request }); }
   getTask(taskId: string): Promise<TaskView> { return this.call({ op: "get", taskId }); }
   listTasks(): Promise<TaskView[]> { return this.call({ op: "list" }); }
+  versions(options: VersionQueryOptions = {}): Promise<VersionCatalogPage> { return this.call({ op: "versions", options }); }
   workspaces(): Promise<WorkspaceChoice[]> { return this.call({ op: "workspaces" }); }
   capabilities(): Promise<Capabilities> { return this.call({ op: "capabilities" }); }
   resources(): Promise<{ instanceId: string }[]> { return this.call({ op: "resources" }); }

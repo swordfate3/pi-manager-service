@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { request } from "node:http";
+import https from "node:https";
+import { syncBuiltinESMExports } from "node:module";
+import { Readable } from "node:stream";
 import { access, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -15,6 +19,27 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 const origin = "http://127.0.0.1:18191";
 const adminOrigin = "http://127.0.0.1:18192";
 const body = { key: "request-1", action: "create", target: "sample", workspace: "project" };
+
+function mockOfficialVersions(t: any) {
+  const packageName = "@earendil-works/pi-coding-agent";
+  const version = "2099.10.27";
+  let calls = 0;
+  t.mock.method(https, "request", (url: string, options: https.RequestOptions, callback: (res: unknown) => void) => {
+    calls++;
+    assert.equal(url, `https://registry.npmjs.org/${encodeURIComponent(packageName)}`);
+    assert.equal((options.headers as Record<string, unknown>).accept, "application/vnd.npm.install-v1+json");
+    const metadata = { name: packageName, version, engines: { node: ">=22.19.0" }, dist: {
+      tarball: `https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-${version}.tgz`,
+      integrity: `sha512-${Buffer.alloc(64, 7).toString("base64")}`,
+    } };
+    const req = new EventEmitter() as EventEmitter & { end(): void };
+    req.end = () => queueMicrotask(() => callback(Object.assign(Readable.from([Buffer.from(JSON.stringify({ name: packageName, versions: { [version]: metadata } }))]), { statusCode: 200, headers: {} })));
+    return req;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  return { version, calls: () => calls };
+}
 
 async function fixture(t: any) {
   const cleanups: (() => Promise<void>)[] = [];
@@ -84,6 +109,27 @@ test("real HTTP: self approval, forged principal, Host/Origin, body and path con
   const choices = await f.call("/api/manager/workspaces");
   assert.deepEqual(choices.body, [{ id: "project", label: "Test project" }]);
   assert.ok(!choices.text.includes(f.parent));
+});
+
+test("real public and administrator HTTP query the same read-only official version catalog", async t => {
+  const official = mockOfficialVersions(t);
+  const f = await fixture(t);
+  assert.equal((await f.call("/api/manager/versions", {}, { Authorization: "" })).status, 401);
+  assert.equal((await f.call("/api/manager/versions", {}, { Authorization: `Bearer ${admin}` })).status, 403);
+  assert.equal(official.calls(), 0);
+  const publicPage = await f.call("/api/manager/versions", { query: "2099", limit: 1 });
+  assert.equal(publicPage.status, 200); assert.deepEqual(publicPage.body.versions, [official.version]);
+  assert.equal((await f.call("/api/manager/versions", { query: "2099", registry: "https://evil.invalid" })).status, 400);
+  assert.equal(official.calls(), 1); assert.deepEqual((await f.call("/api/manager/tasks")).body, []);
+
+  const { startAdminService } = await import("../manager/admin-service.ts");
+  const adminService = await startAdminService({ socketPath: f.config.adminSocket, origin: adminOrigin, chatOrigin: origin, port: 0 });
+  t.after(() => adminService.close());
+  const headers = { Host: new URL(adminOrigin).host, Origin: adminOrigin, Authorization: "" };
+  const call = (route: string, data?: unknown, extra = {}) => http(adminService.port, route, data, { ...headers, ...extra });
+  const login = await call("/api/manager/login", { credential: admin });
+  const adminPage = await call("/api/manager/versions", { query: "2099", limit: 1 }, { Authorization: `Bearer ${login.body.sessionToken}` });
+  assert.equal(adminPage.status, 200); assert.deepEqual(adminPage.body.versions, [official.version]); assert.equal(official.calls(), 1);
 });
 
 export { fixture, http, agent, admin, origin, adminOrigin, body };

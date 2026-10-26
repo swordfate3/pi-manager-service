@@ -11,6 +11,9 @@ export function renderPage(res: ServerResponse, admin: boolean, chatOrigin: stri
 <section><h2>${admin ? "Private administrator entry" : "Task requester entry"}</h2><p>${admin ? "Enter your separately provisioned administrator credential. Agent credentials cannot approve. You cannot approve your own request." : "Enter a requester credential. Approval happens separately in the private administrator entry."}</p>
 <form id="login"><label>Credential<input id="credential" type="password" autocomplete="off" required></label><button>Unlock</button></form><button id="logout" hidden>Lock</button></section>
 <p id="message" role="status" aria-live="polite"></p><section id="content" hidden><h2>Create or stop a managed Pi</h2><p id="capabilities"></p>
+<h2>Official Pi release catalog</h2><p>This catalog is read-only. Update execution is not enabled, and a listed release does not imply candidate compatibility or approval.</p>
+<form id="version-search"><label>Numeric version prefix<input id="version-query" inputmode="decimal" pattern="[0-9.]*" maxlength="64" autocomplete="off"></label><button>Search official versions</button></form>
+<p id="catalog-status" role="status">Catalog locked.</p><ul id="versions"></ul><button id="versions-next" type="button" hidden>Next page</button>
 <form id="task"><label>Action<select id="action"><option value="create">Create managed Pi</option><option value="stop">Stop owned Pi</option><option value="start" hidden>Restore owned Pi</option></select></label><label>Target ID<input id="target" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" required></label><label>Allowed directory<select id="workspace"></select></label><button id="submit">Submit for independent approval</button></form>
 <button id="refresh">Refresh tasks</button><h2>Tasks</h2><p>After a lost response, refresh to reconcile before any new action. Restarted queued tasks require fresh review and approval; unknown tasks are never replayed.</p><ul id="tasks"></ul></section>
 <section id="review" hidden><h2>Exact task review</h2><pre id="review-data"></pre><button id="approve">Approve and execute this revision</button><button id="cancel">Close review</button></section></main><script src="/app.js" defer></script></html>`);
@@ -19,7 +22,7 @@ export function renderPage(res: ServerResponse, admin: boolean, chatOrigin: stri
 export const browserScript = `"use strict";
 const el = id => document.getElementById(id);
 const administrator = document.querySelector('main').dataset.admin === 'true';
-let credential = '', reviewed = null, busy = false, lastSubmission = null;
+let credential = '', reviewed = null, busy = false, lastSubmission = null, catalogGeneration = 0, catalogQuery = '', catalogCursor = null;
 const message = text => { el('message').textContent = text; };
 async function api(route, data) {
   const headers = {};
@@ -29,6 +32,32 @@ async function api(route, data) {
   const value = await response.json(); if (!response.ok) throw Error(value.error || 'Request failed'); return value;
 }
 function hideReview() { reviewed = null; el('review').hidden = true; el('review-data').textContent = ''; }
+function resetCatalog() {
+  catalogGeneration++; catalogQuery = ''; catalogCursor = null; el('version-query').value = '';
+  el('versions').replaceChildren(); el('versions-next').hidden = true; el('catalog-status').textContent = 'Catalog locked.';
+}
+async function loadVersions(append) {
+  const generation = ++catalogGeneration;
+  const options = {query:catalogQuery,limit:50}; if (append && catalogCursor) options.cursor = catalogCursor;
+  el('catalog-status').textContent = 'Checking the read-only official Pi release catalog...';
+  try {
+    const page = await api('versions', options);
+    if (generation !== catalogGeneration || !credential) return;
+    if (!['fresh','stale','unavailable'].includes(page.status) || !Array.isArray(page.versions) ||
+        !page.versions.every(version => typeof version === 'string' && /^[0-9]+\\.[0-9]+\\.[0-9]+$/.test(version))) throw Error('Catalog response invalid');
+    if (!append) el('versions').replaceChildren();
+    for (const version of page.versions) { const item = document.createElement('li'); item.textContent = version; el('versions').append(item); }
+    catalogCursor = typeof page.nextCursor === 'string' ? page.nextCursor : null; el('versions-next').hidden = !catalogCursor;
+    const readOnly = ' Read-only; update execution is not enabled and compatibility is not implied.';
+    el('catalog-status').textContent = page.status === 'fresh' ? 'Official Pi release catalog is fresh.' + readOnly :
+      page.status === 'stale' ? 'Official registry unavailable; showing stale cached versions.' + readOnly :
+      'Official Pi release catalog unavailable. No official versions are available.' + readOnly;
+  } catch(e) {
+    if (generation !== catalogGeneration || !credential) return;
+    if (!append) el('versions').replaceChildren(); catalogCursor = null; el('versions-next').hidden = true;
+    el('catalog-status').textContent = 'Official Pi release catalog unavailable. Read-only update execution remains disabled.';
+  }
+}
 async function refresh() {
   const tasks = await api('tasks'); el('tasks').replaceChildren();
   for (const task of tasks) {
@@ -47,13 +76,15 @@ el('login').onsubmit = async e => {
   try {
     if (administrator) credential = (await api('login', {credential:input})).sessionToken; else credential = input;
     const capabilities = await api('capabilities'); const choices = await api('workspaces');
-    el('capabilities').textContent = (capabilities.native ? 'Native: trusted-local development.' : capabilities.docker ? 'Docker: fixed container profile.' : 'Lifecycle execution is not configured.') + (capabilities.enrollment ? ' Explicit Web enrollment configured.' : ' Web enrollment is not configured.') + ' Updates unavailable.';
+    el('capabilities').textContent = (capabilities.native ? 'Native: trusted-local development.' : capabilities.docker ? 'Docker: fixed container profile.' : 'Lifecycle execution is not configured.') + (capabilities.enrollment ? ' Explicit Web enrollment configured.' : ' Web enrollment is not configured.') + ' Updates unavailable. Official release discovery is read-only.';
     el('action').querySelector('[value="start"]').hidden = !(capabilities.docker || capabilities.native && capabilities.enrollment);
     el('submit').disabled = !(capabilities.native || capabilities.docker); el('workspace').replaceChildren();
     for (const w of choices) { const option = document.createElement('option'); option.value = w.id; option.textContent = w.label; el('workspace').append(option); }
-    el('content').hidden = false; el('login').hidden = true; el('logout').hidden = false; message('Unlocked. No task has been approved.'); await refresh();
-  } catch(e) { credential = ''; message(e.message); }
+    el('content').hidden = false; el('login').hidden = true; el('logout').hidden = false; message('Unlocked. No task has been approved.'); await refresh(); await loadVersions(false);
+  } catch(e) { credential = ''; resetCatalog(); message(e.message); }
 };
+el('version-search').onsubmit = async e => { e.preventDefault(); catalogQuery = el('version-query').value; catalogCursor = null; await loadVersions(false); };
+el('versions-next').onclick = () => { if (catalogCursor) return loadVersions(true); };
 el('task').onsubmit = async e => {
   e.preventDefault(); if (busy) return; busy = true; el('submit').disabled = true;
   const request = {action:el('action').value,target:el('target').value}; if (request.action === 'create') request.workspace = el('workspace').value;
@@ -75,8 +106,9 @@ el('refresh').onclick = () => refresh().catch(e => message(e.message));
 el('cancel').onclick = hideReview;
 el('logout').onclick = async () => {
   try { if (administrator) await api('logout',{}); } catch(e) { message(e.message); return; }
-  credential = ''; lastSubmission = null; hideReview(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
+  credential = ''; lastSubmission = null; hideReview(); resetCatalog(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
 };
+resetCatalog();
 `;
 
 export function renderScript(res: ServerResponse) {

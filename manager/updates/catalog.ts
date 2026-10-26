@@ -19,13 +19,17 @@ export class ReleaseCatalog {
   readonly #packages: ReadonlySet<string>;
   readonly #transport?: OfficialTransport;
   readonly #now: () => number;
+  readonly #metadataDeadlineMs: number;
   readonly #cache = new Map<string, Cache>();
-  constructor(options: { readonly extensionPackages?: readonly string[]; readonly transport?: OfficialTransport; readonly now?: () => number } = {}) {
+  constructor(options: { readonly extensionPackages?: readonly string[]; readonly transport?: OfficialTransport; readonly now?: () => number; readonly metadataDeadlineMs?: number } = {}) {
+    const metadataDeadlineMs = options.metadataDeadlineMs === undefined ? 8000 : options.metadataDeadlineMs;
+    if (!Number.isSafeInteger(metadataDeadlineMs) || metadataDeadlineMs < 1 || metadataDeadlineMs > 8000) throw new CatalogError("invalid-query");
     this.#packages = approvedPackages(options.extensionPackages); this.#transport = options.transport; this.#now = options.now ?? Date.now;
+    this.#metadataDeadlineMs = metadataDeadlineMs;
   }
   #approved(name: string) { if (!this.#packages.has(name)) throw new CatalogError("package-not-approved"); }
   async #metadata(name: string, version?: string): Promise<unknown> {
-    try { return strictJson(await boundedDownload(`${REGISTRY}${encodeURIComponent(name)}${version ? "/" + version : ""}`, 8 * 1024 * 1024, 8000, this.#transport,
+    try { return strictJson(await boundedDownload(`${REGISTRY}${encodeURIComponent(name)}${version ? "/" + version : ""}`, 8 * 1024 * 1024, this.#metadataDeadlineMs, this.#transport,
       version ? "full" : "abbreviated")); }
     catch (error) { throw new CatalogError(error instanceof TransportError && ["unavailable", "timeout"].includes(error.code) ? "registry-unavailable" : "metadata-invalid"); }
   }

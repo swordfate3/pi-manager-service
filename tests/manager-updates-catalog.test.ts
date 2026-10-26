@@ -67,6 +67,22 @@ test("coalesces concurrent discovery and exposes stale/unavailable with bounded 
   await assert.rejects(empty.resolve(PACKAGE, version), { code: "registry-unavailable", message: "Official registry unavailable" });
 });
 
+test("construction-only metadata deadlines are strictly bounded while existing callers keep eight seconds", async () => {
+  const { ReleaseCatalog } = await api();
+  const observed: number[] = [];
+  const transport = async (request: { url: string; timeoutMs: number }) => {
+    observed.push(request.timeoutMs);
+    return response(request.url, { name: PACKAGE, versions: { [version]: release() } });
+  };
+  assert.equal((await new ReleaseCatalog({ transport }).list(PACKAGE)).status, "fresh");
+  assert.equal((await new ReleaseCatalog({ transport, metadataDeadlineMs: 2500 }).list(PACKAGE)).status, "fresh");
+  assert.deepEqual(observed, [8000, 2500]);
+  for (const metadataDeadlineMs of [0, -1, 1.5, 8001, "2500", null]) {
+    assert.throws(() => new ReleaseCatalog({ transport, metadataDeadlineMs } as any), { code: "invalid-query" });
+  }
+  assert.deepEqual(observed, [8000, 2500]);
+});
+
 test("allowlist is fixed at construction; unknown packages and nonexact versions never fetch", async () => {
   const { ReleaseCatalog } = await api();
   const approved = ["@trusted/extension"];

@@ -217,6 +217,78 @@ test('successful release allows a fresh opener while a resurrected durable barri
   await assert.rejects(recovered.stage({ ...f.plan, operationId: '6'.repeat(32) }), /reconciliation/i);
 });
 
+test('a contender paused before exclusive admission cannot strand a writer during another instance release', { timeout: 10_000 }, async t => {
+  const f = await fixture(t), contender = await f.Journal.open({ root: f.state, installationId: 'test-installation' });
+  const writer = path.join(f.state, '.writer'), marker = path.join(f.state, '.reconciliation');
+  let admitReached!: () => void, resumeAdmission!: () => void, releaseReached!: () => void, finishRelease!: () => void;
+  const atAdmission = new Promise<void>(resolve => { admitReached = resolve; });
+  const allowAdmission = new Promise<void>(resolve => { resumeAdmission = resolve; });
+  const atRelease = new Promise<void>(resolve => { releaseReached = resolve; });
+  const allowRelease = new Promise<void>(resolve => { finishRelease = resolve; });
+  let firstAdmission = true, releasing = false;
+  const open = fs.open, unlink = fs.unlink;
+  const heldOpen = t.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+    // Pause the contender before its first exclusive lock acquisition. On the
+    // old source this is AFTER noBarrier, immediately before creating .writer.
+    if (firstAdmission && [writer, marker].includes(String(args[0]))) {
+      firstAdmission = false; admitReached(); await allowAdmission;
+    }
+    return open(...args);
+  });
+  const heldRelease = t.mock.method(fs, 'unlink', async (...args: Parameters<typeof fs.unlink>) => {
+    await unlink(...args);
+    if (!releasing && String(args[0]) === writer) {
+      releasing = true; releaseReached(); await allowRelease;
+    }
+  });
+  syncBuiltinESMExports();
+  const loser = contender.stage({ ...f.plan, operationId: '4'.repeat(32) }); void loser.catch(() => {});
+  let owner: Promise<any> | undefined;
+  try {
+    await atAdmission;
+    owner = Promise.resolve(f.journal.stage(f.plan)); void owner.catch(() => {});
+    await atRelease;
+    const ownerMarker = await readFile(marker);
+    assert.equal(existsSync(writer), false);
+    resumeAdmission();
+    await assert.rejects(loser, /writer|reconciliation/i);
+    assert.deepEqual(await readFile(marker), ownerMarker, 'Contender must not alter the releasing owner marker');
+    finishRelease(); await owner;
+    assert.equal(existsSync(path.join(f.state, '4'.repeat(32))), false, 'Refused contender cannot stage an operation');
+    assert.equal(existsSync(marker), false);
+    assert.equal(existsSync(writer), false, 'Healthy contention must not strand a new writer requiring reconciliation');
+    const fresh = await f.Journal.open({ root: f.state, installationId: 'test-installation' });
+    const next = await fresh.stage({ ...f.plan, operationId: '5'.repeat(32) });
+    const tx = await fresh.begin(next.operationId, next.planHash); await tx.abort('6'.repeat(64));
+    assert.equal((await fresh.inspect(next.operationId)).stage, 'aborted');
+    assert.equal((await fresh.selection()).revision, 0);
+  } finally {
+    resumeAdmission(); finishRelease(); await Promise.allSettled([loser, ...(owner ? [owner] : [])]);
+    heldOpen.mock.restore(); heldRelease.mock.restore(); syncBuiltinESMExports();
+  }
+});
+
+for (const target of ['.reconciliation', '.writer']) test(`partial acquisition ${target} sync failure retains evidence and blocks fresh mutation`, async t => {
+  const f = await fixture(t), file = path.join(f.state, target);
+  const failures = failSync(t, candidate => candidate === file);
+  await assert.rejects(f.journal.stage(f.plan), /injected/i);
+  assert.equal(failures(), 1);
+  assert.match(JSON.parse(await readFile(file, 'utf8')).token, /^[a-f0-9]{64}$/);
+  assert.equal(existsSync(path.join(f.state, f.plan.operationId)), false);
+  await blocked(f, 'f'.repeat(64));
+});
+
+test('an unknown preexisting writer is never deleted or adopted by marker-first admission', async t => {
+  const f = await fixture(t), writer = path.join(f.state, '.writer');
+  const evidence = Buffer.from('unknown exact writer evidence\n');
+  await writeFile(writer, evidence, { mode: 0o600, flag: 'wx' });
+  await assert.rejects(f.journal.stage(f.plan), /writer|reconciliation/i);
+  assert.deepEqual(await readFile(writer), evidence);
+  assert.equal(existsSync(path.join(f.state, f.plan.operationId)), false);
+  await blocked(f, 'f'.repeat(64));
+  assert.deepEqual(await readFile(writer), evidence);
+});
+
 for (const changed of ['selection', 'plan']) test(`ready publish ${changed} validation failure permanently poisons retry even after exact bytes restored`, async t => {
   const f = await fixture(t), staged = await f.journal.stage(f.plan), tx = await f.journal.begin(staged.operationId, staged.planHash);
   for (const stage of ['prepared', 'commit_intent', 'committed', 'stopped', 'started', 'ready']) await tx.advance(stage, 'f'.repeat(64));

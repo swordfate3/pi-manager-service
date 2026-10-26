@@ -121,29 +121,31 @@ export class ActivationJournal {
   async #lock(): Promise<Lock> {
     if (this.#busy) fail('writer-reconciliation-required');
     this.#busy = true;
-    let file: FileHandle | undefined;
+    let file: FileHandle | undefined, barrier: FileHandle | undefined;
     try {
       this.#fence();
-      this.#noBarrier();
+      // Exclusive marker creation is admission, not an observation followed by
+      // writer creation. A releasing owner keeps this gate until its LAST unlink,
+      // so a contender cannot create a writer in that owner's release window.
+      barrier = await open(path.join(this.#root, '.reconciliation'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+      const b = await barrier.stat(), token = JSON.stringify({ token: randomBytes(32).toString('hex') });
+      await barrier.writeFile(token); await barrier.sync(); await barrier.chmod(0o400); await barrier.close();
       file = await open(path.join(this.#root, '.writer'), constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
       const s = await file.stat();
-      this.#noBarrier();
-      const token = JSON.stringify({ token: randomBytes(32).toString('hex') });
       await file.writeFile(token); await file.sync();
-      await writeNew(path.join(this.#root, '.reconciliation'), token);
       await syncDir(this.#root); this.#fence();
-      const barrier = await lstat(path.join(this.#root, '.reconciliation'));
-      return { file, dev: s.dev, ino: s.ino, barrierDev: barrier.dev, barrierIno: barrier.ino };
+      const lock = { file, dev: s.dev, ino: s.ino, barrierDev: b.dev, barrierIno: b.ino };
+      this.#barrier(lock);
+      return lock;
     } catch (e) {
-      await file?.close().catch(() => {}); this.#busy = file !== undefined;
+      // Only close handles acquired here. A failed exclusive gate creates
+      // nothing; any partial acquisition retains its marker/writer for explicit
+      // reconciliation, including a preexisting unknown writer. Never delete it.
+      await file?.close().catch(() => {}); await barrier?.close().catch(() => {});
+      this.#busy = file !== undefined || barrier !== undefined;
       if ((e as NodeJS.ErrnoException).code === 'EEXIST') fail('writer-reconciliation-required');
       throw e;
     }
-  }
-  #noBarrier() {
-    try { lstatSync(path.join(this.#root, '.reconciliation')); }
-    catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return; throw e; }
-    fail('writer-reconciliation-required');
   }
   #barrier(lock: Lock) {
     const s = lstatSync(path.join(this.#root, '.reconciliation'));

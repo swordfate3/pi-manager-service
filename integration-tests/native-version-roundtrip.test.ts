@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { WebSocket } from 'ws';
@@ -13,6 +13,7 @@ import { initializeHub } from '../hub/config.ts';
 import { listen } from '../manager/http.ts';
 import { waitFor } from '../tests/helpers/native-harness.ts';
 import { packedWeb } from './fixtures/packed-web.ts';
+import { NativeStopEvidence } from './fixtures/native-stop-evidence.ts';
 
 // Private seam acceptance, NOT a public updater or independent administrator
 // approval. No Docker calls: the existing verified candidate is read-only input.
@@ -38,15 +39,8 @@ test('actual host-native Pi preserves exact dialogue through 1.1 -> official 1.4
   const candidateCli = path.join(candidatePeers, '@earendil-works/pi-coding-agent/dist/bundle/cli.js');
   const root = await mkdtemp('/tmp/nvr-');
   const backends: NativeBackend[] = [];
-  t.after(async () => {
-    let cleanupFailure: unknown;
-    for (const backend of backends) for (const identity of backend.list()) {
-      try { assert.equal((await backend.stop(identity.instanceId)).status, 'stopped'); }
-      catch (error) { cleanupFailure ??= error; }
-    }
-    if (cleanupFailure) throw Error(`Owned test cleanup uncertain; evidence retained at ${root}`, { cause: cleanupFailure });
-    await rm(root, { recursive: true, force: true });
-  });
+  const cleanup = new NativeStopEvidence(root, backends);
+  t.after(() => cleanup.cleanup());
   const workspace = path.join(root, 'projects', 'one'); await mkdir(workspace, { recursive: true });
   const hub = path.join(root, 'hub'); await mkdir(hub, { mode: 0o700 });
   const hubConfigFile = path.join(hub, 'hub.json'); initializeHub(hubConfigFile, { port: 0 });
@@ -99,7 +93,7 @@ test('actual host-native Pi preserves exact dialogue through 1.1 -> official 1.4
     // Do not stop before exact full-state acknowledgement. This test manually
     // exercises the private seam; the product still needs its durable coordinator.
     await from.commitRuntime('managed', operation, capture);
-    assert.equal((await from.stop('managed')).status, 'stopped');
+    await cleanup.stop(from, 'managed');
     const successor = await to.resumeForActivation(request, previous, { operationId: operation, snapshot: before });
     const restored = await to.snapshotRuntime('managed');
     assert.equal(restored.version, version); assert.equal(restored.session_id, before.session_id);

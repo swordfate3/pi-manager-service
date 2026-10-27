@@ -10,7 +10,8 @@ import { boundedFile } from '../../manager/updates/candidate-storage.ts';
 import { strictJson } from '../../manager/updates/json.ts';
 import { IMAGE, DAEMON } from './fixtures.ts';
 
-const original = '/tmp/manager-official-artifacts-PJ4prd/artifacts/85b42e1702877c851eb7412fe958c8fb447c3207b4798fadab42ea8539046ce1/cc8118c0789be893ddd2190eb8558f26b68b22770f42b53f32310032ab5f3bc0';
+const original = process.argv[2] ?? '/tmp/manager-official-artifacts-PJ4prd/artifacts/85b42e1702877c851eb7412fe958c8fb447c3207b4798fadab42ea8539046ce1/cc8118c0789be893ddd2190eb8558f26b68b22770f42b53f32310032ab5f3bc0';
+assert.ok(path.isAbsolute(original) && path.resolve(original) === original, 'Explicit test artifact must use canonical absolute coordinates');
 const sourceReceipt: any = strictJson(await boundedFile(path.join(original, 'receipt.json'), 1024 ** 2));
 const release = validateRelease(sourceReceipt.release);
 assert.equal(release.identity, 'cc8118c0789be893ddd2190eb8558f26b68b22770f42b53f32310032ab5f3bc0');

@@ -144,3 +144,169 @@ under the repository's ignored `.superpowers` directory and must be added by its
 exact path with `git add -f`; do not add that directory wholesale. Use an
 explicit-path `git commit --only` so unrelated controller index changes cannot
 enter this task's commit.
+
+## Aggregate resource fix round 1 — 2026-10-26
+
+Implemented `task-4-release-quota-brief.md` in the existing
+`codex/manager-service` worktree; no subagents. This section supersedes the
+earlier report's statements that aggregate admission/storage quotas remain
+unimplemented. It does not supersede the artifact-only/activation limitations.
+
+### Implementation and options
+
+- Added `manager/updates/quota.ts`; changed only `manager/updates/stage.ts`,
+  `manager/updates/errors.ts`, `manager/updates/README.md`, and
+  `tests/manager-updates-stage.test.ts`, plus this appended report.
+- One filesystem-exclusive `.artifact-writer.lock` now serializes admission,
+  download, decompression and writing for **all installations sharing a root**,
+  across handles/processes. Competitors fail immediately with `writer-busy`;
+  there is no unbounded waiter queue. Existing per-installation locks remain
+  respected. Unknown/stale locks are not reclaimed, including after reopen.
+- Before download/decompression/candidate writes, reserve 97 MiB of logical
+  retained file bytes (32 MiB artifact + 64 MiB tree + 1 MiB receipt), 20,004
+  additional filesystem entries and one candidate. The existing root, marker,
+  retained files/directories and two acquired locks are already charged.
+  The root lock is synced before substantial work and released only after
+  preparation or failure handling. Receipt bytes are explicitly bounded.
+- Admission reconstructs actual usage, not receipt counts or an in-memory
+  ledger. Every incomplete candidate counts; partial/sparse file lengths,
+  installation directories, locks, and implicit directories count too. An IO
+  failure leaves the partial tree untouched and charged on the next admission.
+- Scanning uses `opendir(..., {bufferSize: 1})` with explicit streamed reads,
+  stops on the first exceeded quota, and caps depth at 34 below the root.
+  It reads no retained file contents and never materializes directory listings.
+  At most 35 directory handles are open. Symlinks, hardlinks, special files,
+  unsafe ownership/permissions and unknown top-level layout fail closed.
+- `StagerOptions.quota?: Partial<StagingQuota>` is administrator-only:
+  `maxRetainedBytes` defaults to 512 MiB (ceiling 16 GiB),
+  `maxRetainedEntries` defaults to 100,000 (ceiling 200,000),
+  `maxCandidates` defaults to 8 (ceiling 128). All values are positive safe
+  integers. Too-small valid budgets refuse staging rather than weakening the
+  worst-case reservation. There is deliberately no concurrency-increase option.
+- Construction inputs are copied before the first await; options, allowlist and
+  quota snapshots are frozen. Unknown settings/invalid values fail with the new
+  public-safe `options-invalid` category. The effective quota is persisted in
+  the read-only root marker. `open` without quota adopts it; explicit quota plus
+  defaults must match it exactly. Legacy v1 markers use the defaults without
+  rewriting anything. There is no live quota-mutation API.
+- Public `StageRequest` still has only `installationId`, `release`, and
+  `expectedIdentity`; quota/unknown fields fail with `release-invalid`.
+  The immutable `prepared-unverified` receipt schema/content, artifact integrity,
+  source/engine/archive checks, exclusive writes and nonexecution protections
+  are preserved. No dependency installation or activation was enabled.
+
+### RED / GREEN evidence
+
+Node: `v22.19.0`. Commands ran from
+`/home/fate/gitproject/codex_project_v2/pi-manager-service`.
+
+RED command (before production edits):
+
+```sh
+node --import ./tests/register-ts.mjs --test --experimental-test-isolation=none tests/manager-updates-stage.test.ts
+```
+
+Exact final RED summary, exit **1**:
+
+```text
+1..22
+# tests 22
+# suites 0
+# pass 11
+# fail 11
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1172.994164
+```
+
+The eleven failures were expected `Missing expected rejection.` assertions for
+cross-installation admission, retained candidate/byte/inode quotas, partial
+candidate/byte accounting, stale global lock, bounded retained-state scan,
+copied quota settings, invalid settings, and public-request quota injection.
+An earlier exploratory RED run had 18 tests / 7 failures and an asynchronous
+cleanup warning; the test fixture was corrected to await its blocked writer,
+and the parameterized cases were split before the clean RED run above.
+
+The same command after implementation passed **22/22**, exit **0**:
+
+```text
+1..22
+# tests 22
+# suites 0
+# pass 22
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1348.869936
+```
+
+Added supplemental checks for two exact versions of one installation, injected
+receipt-write `ENOSPC` after real artifact/tree writes, partial candidates within
+quota, legacy-root accounting, and retained symlink/depth refusal. The directory
+overflow test observes real directory reads and requires at most 24 reads for
+a 16-entry budget despite 128 retained files. These supplemental checks passed;
+they are not represented as additional preimplementation RED runs.
+
+Full scoped verification command:
+
+```sh
+node --import ./tests/register-ts.mjs --test --experimental-test-isolation=none tests/manager-updates-catalog.test.ts tests/manager-updates-stage.test.ts tests/manager-updates-transport.test.ts
+npm run typecheck
+git diff --check
+```
+
+Exact scoped test summary, exit **0**:
+
+```text
+1..38
+# tests 38
+# suites 0
+# pass 38
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1727.441333
+```
+
+Typecheck exact output, exit **0**:
+
+```text
+> @swordfate/pi-manager@0.1.0 typecheck
+> tsc --noEmit
+```
+
+`git diff --check`: no output, exit **0**. No build, `npm test` build wrapper,
+distribution generation, Docker/production operations, external registry call,
+candidate execution or dependency install was run. Review was inline only;
+the independent review requested in the brief remains outstanding.
+
+### Limitations and commit boundary
+
+- Guarantees cover one shared private root using the new writer implementation.
+  Administrators must not split a common resource budget over arbitrary roots
+  or leave older writers concurrently using the same root.
+- Byte quotas count logical file lengths, not filesystem allocation blocks,
+  metadata, or free space. Filesystem entries and active artifact operations are
+  independently bounded. This is not hostile same-UID/root isolation or a
+  whole-process/container memory quota.
+- Worst-case reservation intentionally rejects small artifacts near exhaustion;
+  quotas do not depend on attacker-supplied size claims. No pruning, recovery or
+  stale-lock cleanup is automatic. A crash can block all staging until explicit
+  administrator reconciliation. Power-loss behavior was not fault-injected;
+  tests cover retained crash fixtures and real partial-write failure.
+- The user's latest instruction narrows the commit to updates/test files.
+  Commit only the five explicit paths listed above, **excluding this report**;
+  this appended report stays in the working tree for the controller. Do not
+  stage controller Docker/session/integration tests, dist files, package files,
+  or other reports. Preserve the current worktree and branch; no push/merge.
+
+Committed as `27155ad7b6e363d11973f9e41811453f4e4b747d`
+(`fix(manager): bound aggregate release artifact staging`). Verified the commit
+contains exactly the five updates/test paths above and no controller/dist/report
+paths. Final precommit rerun again passed 38/38 (0 failed/skipped,
+`# duration_ms 1913.346201`), typecheck exited 0, and diff check exited 0.
+Postcommit status shows no remaining edits to the committed five paths; this
+report and unrelated controller work remain uncommitted as intended.

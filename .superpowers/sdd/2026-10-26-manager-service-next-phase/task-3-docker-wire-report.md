@@ -64,3 +64,9 @@ Tests required permission to listen on temporary Unix sockets because the defaul
 - Clean reopen and persisted stranded-task recovery are exercised. A real crash with a stale backend journal writer lock is not a tested recovery path here; backend journal recovery remains fail-closed under its existing contract, without adding an automatic stale-lock override.
 - Workspace/path safety checks are not a claim that malicious host-side filesystem replacement races or host-level authority separation have been comprehensively hardened.
 - The narrow commit includes this report; its exact hash is supplied in the handoff response. All unrelated worktree changes are preserved and unstaged by this slice.
+
+## Controller fix round 1 — b6b6464..65e3de8
+
+The private backend journal now binds exact create task ID and requester before start. `DockerTaskAdapter.restore` recovers failed create ownership only when both match the private journal binding; ordinary pre-mutation/duplicate-target failures cannot acquire ownership. This authority is an executor-private second argument, never a browser field.
+
+The extended failed-start recovery test in `tests/manager-docker.test.ts` went RED (empty resources) then GREEN. It checks the original requester can list/start/stop the exact container after reopen, another principal cannot, and create occurred once. Combined Docker suites: 24 passed, zero failures. Global typecheck passed before 65e3de8. Scoped independent re-review is pending.

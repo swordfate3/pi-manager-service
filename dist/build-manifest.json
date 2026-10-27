@@ -1,12 +1,16 @@
 {
   "schemaVersion": 1,
   "source": {
-    "count": 100,
-    "sha256": "4615ef9c763d2ee301297e8b822355af42badb8d615b14d82523fcbaad2fe1bd",
+    "count": 131,
+    "sha256": "bf59bc31d50e08d3c804ce058169a1a338d710d7c8177c6e789f37cb6aa0c566",
     "files": [
       {
         "path": "bin/pi-manager-admin.mjs",
         "sha256": "cf0bc91fa55ad21b612e0f27d8f4cacc5928d0c59d3b98f990980cc99b14047d"
+      },
+      {
+        "path": "bin/pi-manager-chat.mjs",
+        "sha256": "5deca369bb8cdb38bef6d35025a95ab6e2fa79785365711159c04128176da15c"
       },
       {
         "path": "bin/pi-manager-executor.mjs",
@@ -226,11 +230,11 @@
       },
       {
         "path": "manager/admin-service.ts",
-        "sha256": "9c77a63f25299e9582c3215b10cf622aa4be76ae0cd0b5884e9057d5f46dddc7"
+        "sha256": "bade4f8a955b5c6484da9b39b1747b656c472766d862d2c6fa51f44a512e2710"
       },
       {
         "path": "manager/api.ts",
-        "sha256": "dd0a92a70daac4f77288d66e3c111fda6dd3058db3e298032a60c8e59234626e"
+        "sha256": "f7158ff6722fdbb6ed039a0206cfbad51b47851f2cec72dc239f5b6d64f66ec6"
       },
       {
         "path": "manager/backends/docker-engine.ts",
@@ -238,23 +242,35 @@
       },
       {
         "path": "manager/backends/docker.ts",
-        "sha256": "dfb0dfeae34988a4dd260272626048bc107c4f70195cff18c16eafe84d376a8e"
+        "sha256": "4b046825bfddba4032efd61de002c5a76ac829686f806319dd28ab2e4839d6d8"
       },
       {
         "path": "manager/backends/native.ts",
-        "sha256": "768b1e08313475269ef73e8f4bfff42bafb7b072822ed0e4243790f03524ff3b"
+        "sha256": "95e7599db327e0e39cd4cfbc805d9495cd2a3e3f1bae628155e3c0f381ad90a7"
+      },
+      {
+        "path": "manager/backends/runtime-client.ts",
+        "sha256": "38f38b62ada757669246b6a29a6601fcadc6ec1ca10264ccb2ed4584599ec53b"
+      },
+      {
+        "path": "manager/chat-service.ts",
+        "sha256": "581829dc3c51516b2ab502f948f7eef6cbb9164f7b578706576ed0948cf2a7c3"
       },
       {
         "path": "manager/config.ts",
-        "sha256": "be4b418c81d614c05a356365769fb39fe020b77861d283d075bba7ca68d31849"
+        "sha256": "b42096d9c0b562efada37182b0c8a0d1dce4cb39f484fa40f183e26918addadd"
       },
       {
         "path": "manager/contracts.ts",
         "sha256": "063029200584c8b4ad564643c372d97d3f5a567cda33888ad5b9a0eac5b833a3"
       },
       {
+        "path": "manager/errors.ts",
+        "sha256": "6858d013d9e4521eb102c4fd923a47cfceef1334d802a2e29616d6710e39a003"
+      },
+      {
         "path": "manager/executor/adapter.ts",
-        "sha256": "7297b7c3a4b19fee6f1a92ce702a5ebc9f9e2005b6d18f831d8be28222bf26a1"
+        "sha256": "ccab48b76e6a06a7a4595a4b5a5e19b5c738e53ef2966bedef53ca1fb53e6b73"
       },
       {
         "path": "manager/executor/admin-client.ts",
@@ -262,19 +278,23 @@
       },
       {
         "path": "manager/executor/client.ts",
-        "sha256": "d16b09fab0de0b03935b57b6e8c0710a67d619c4513a792eb8c1ad7ac6294fde"
+        "sha256": "534589c6ce80f68ad2d617aaf5382932bad175713bb36c9f7f6079f9d52b043a"
+      },
+      {
+        "path": "manager/executor/docker-adapter.ts",
+        "sha256": "6357b673a53af600dff1290fc3ba2db97d3e63788d76c4c0b246d76feef62d54"
       },
       {
         "path": "manager/executor/engine.ts",
-        "sha256": "cc626ea634d683d2296381049ba579b1f4f95245ecc7d567f7651e3a49d97a0e"
+        "sha256": "5883ef090deac7ca2f0523931739bdb2a31e09bd6dac114f6f87501f42f8ae20"
       },
       {
         "path": "manager/executor/main.ts",
-        "sha256": "dc298269481dd2c699d7fc34c58d96d75906ec7998e97cf59d4183d93f37d04f"
+        "sha256": "4190d3d31f80115ea4be995ea2fe4e0226fcfbc6224e4ed877bf7b5d7ed107ac"
       },
       {
         "path": "manager/executor/native-adapter.ts",
-        "sha256": "a1e06dbd2c4f221a161a97a8a49a88da7497d76594d2cea7de61a91776ac229a"
+        "sha256": "a074946c7f49ff6198ef474be6a37366c7762b7839cbd03df5f21cc69c9fd65e"
       },
       {
         "path": "manager/http.ts",
@@ -282,11 +302,15 @@
       },
       {
         "path": "manager/initialize.ts",
-        "sha256": "f9f24926aec32fc28cb7578bf48ac1684d879e5d9a84219f21b6429e027f8bcc"
+        "sha256": "18e4ffc234af3c46065bc622a370b1701c0ecb2133f0b6ae1de525fa56a6a9e2"
       },
       {
         "path": "manager/main.ts",
-        "sha256": "1d7930991578357712be8c9c0626c7bf2700be019e5ef20a71923df4af6fef91"
+        "sha256": "732d8f6eb3cdf577c91af7f7d53c3ed9efd1a4b78b5cb0b2830e263d530d160d"
+      },
+      {
+        "path": "manager/mcp/server.ts",
+        "sha256": "b8a0d69c26646c45ec757ba974cd67b4d9c42691550c10f34bfcfd17b52f7caf"
       },
       {
         "path": "manager/process-entry.ts",
@@ -298,19 +322,115 @@
       },
       {
         "path": "manager/service.ts",
-        "sha256": "1c63fb2df050be18e21979ebe3c0aef010ac697de94f4f65e5dd2d82da58421d"
+        "sha256": "e4f820ef85e2450d991f0a2befa59822fb5a9ff0df149b3ef6564482c694a437"
       },
       {
         "path": "manager/supervisor.ts",
-        "sha256": "e0c829f694ef5448bf8c19ccd405e2b2bbc32ab83da164305631e0217066a2d1"
+        "sha256": "09ea4824d7b9ef2023e99e209985dfa72d3a93aa5f0ca5b577b59556342d8ec1"
       },
       {
         "path": "manager/task-store.ts",
-        "sha256": "7f274729bc007c2a6a9fedd31429fb23bd9f09b591aec27425461f80f56bf007"
+        "sha256": "8b501e121d5fc6e17eb59056725b4568397fe8ae6d7c8faacbab0d2b45fa96f0"
       },
       {
         "path": "manager/ui.ts",
-        "sha256": "444c38382434d61b595291b76f2ebd32bfc358df79cf61ac37ab8b526a86c19b"
+        "sha256": "9593aadbfd11190f3bab3895593c6d5ee136301d03ebd635291751f75dfe1de4"
+      },
+      {
+        "path": "manager/updates/README.md",
+        "sha256": "1dbc2a59a364c74bd635e849bde8deaf25d17f4af865037036f915f581359750"
+      },
+      {
+        "path": "manager/updates/activation-journal.ts",
+        "sha256": "2fb4389bf93f1220fa62fc8cecbca4da6f4909a678767d7faac6d53d4d3e61a0"
+      },
+      {
+        "path": "manager/updates/archive.ts",
+        "sha256": "7868de59351cdf7a1aedb3c7252bc21db51f003008d924d77e0bdc4d5e11f598"
+      },
+      {
+        "path": "manager/updates/candidate-storage.ts",
+        "sha256": "2830db02b28a5069c9dcee8cdf60c82f8134fbdee9a3abfe297a8138529d76ab"
+      },
+      {
+        "path": "manager/updates/candidate-worker.py",
+        "sha256": "e8d8c10521e7a9c468fae801b0d3f49b9679b7ce55a10afd78eb558a9611cf47"
+      },
+      {
+        "path": "manager/updates/candidate.ts",
+        "sha256": "83e686c14575db37df19e47b32d7384c2faacbfc097345a83bb019272eeadf99"
+      },
+      {
+        "path": "manager/updates/catalog.ts",
+        "sha256": "6e25af23e12b35d043e71651f4fd31f498868e9fe3a91df96e2fc083f6c9dcd8"
+      },
+      {
+        "path": "manager/updates/compatibility-inputs.ts",
+        "sha256": "4e7716473313c23901ec690432e94dadca3bf84ad53f3001576971541ae98e8d"
+      },
+      {
+        "path": "manager/updates/compatibility-probe.mjs",
+        "sha256": "2b6ff3faeafd461587da54086cd2da52a4ee609ed7d8bc4e2e34a663d3989ba8"
+      },
+      {
+        "path": "manager/updates/compatibility-provider.mjs",
+        "sha256": "28a6f902ba16b343ec851859dcbc0eba46ff3522585928e0a2b5806149f058a6"
+      },
+      {
+        "path": "manager/updates/compatibility.ts",
+        "sha256": "0947467b52b6bfc97397f051218d5b0d8fca7b6091f51863346753374fba2ad1"
+      },
+      {
+        "path": "manager/updates/engine.ts",
+        "sha256": "895098e904a9d84264d98db42e397ba2983c63852e3ffe826e6260a404fad9eb"
+      },
+      {
+        "path": "manager/updates/errors.ts",
+        "sha256": "db0cd00f8474b901a642c8208a1c03d89f32c6a2cf9bf30301927d61e9741963"
+      },
+      {
+        "path": "manager/updates/json.ts",
+        "sha256": "5d7c3606d6707ec03c4682d9053f56becf45ab1040c70c2c802d8bc89e876225"
+      },
+      {
+        "path": "manager/updates/native-activation.ts",
+        "sha256": "68405ce3bc390209cddb2638b7cefe06a973512167c4d095608949bbe535ec4c"
+      },
+      {
+        "path": "manager/updates/native-compatibility-provider.mjs",
+        "sha256": "00735a41a98627d1434f3c5e203e424b9f92d424812980eb466dedbf332b8712"
+      },
+      {
+        "path": "manager/updates/native-compatibility-runtime.mjs",
+        "sha256": "ee7a6c58f77ba639990aa37c6c3a2ae542a7c4722de437d83d7fce8580e2dc0e"
+      },
+      {
+        "path": "manager/updates/native-compatibility-sdk.mjs",
+        "sha256": "75fcf0423eee40dc6c3f91cea75925f8977bdc22629e609dbecc2c3c5550c964"
+      },
+      {
+        "path": "manager/updates/native-compatibility.ts",
+        "sha256": "fff90992e1ffea09c1388145508700f6ba6e18d5ad6a7f4a2d5fbbf3c8c61709"
+      },
+      {
+        "path": "manager/updates/quota.ts",
+        "sha256": "646162301f499383c62dacfe24f05079a652316e2e64a015cad0e4ba49d15752"
+      },
+      {
+        "path": "manager/updates/release.ts",
+        "sha256": "65d9b63290b60a77c0bd8984d3e96ea0caa774f3e92230e1adcbebb3aff533ea"
+      },
+      {
+        "path": "manager/updates/session-capture.ts",
+        "sha256": "ecc77799c4e659e610d269c805d1db1b2728c1ea62069b6b4f3ee1ecf362db1c"
+      },
+      {
+        "path": "manager/updates/stage.ts",
+        "sha256": "4314db3f9cc18075c5aa974d1aaea1ffe34a5c2e87e3dcef80a440ad6f4bc456"
+      },
+      {
+        "path": "manager/updates/transport.ts",
+        "sha256": "9903410efa4eced9eb46721388c079f471ee3fed32090418c57b6cce7211919e"
       },
       {
         "path": "manager/validation.ts",
@@ -318,7 +438,7 @@
       },
       {
         "path": "package.json",
-        "sha256": "10645920d1324102ca7f0cdf94116af1e8d8a85459033d42323cf23dd02f0d6e"
+        "sha256": "03ac72d0b2cacd61d5ee6c1f823b4b4149972e0f4a7e2428a19d5b402afdbefc"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -373,6 +493,10 @@
         "sha256": "89f6cbc54e838e6b521bb5beabeae73d1719a846d3b01fd76e44ef823d1ef045"
       },
       {
+        "path": "runtime/pi_rpc_guard.mjs",
+        "sha256": "8239c708ac740aa7c667b0b71babdcf5421189ff60438c8a288793c23aed77bb"
+      },
+      {
         "path": "runtime/pi_stdin_guard.mjs",
         "sha256": "f966e83a5f0e7c9e446488e7ede6d0bd0ec2477878bdfaa14a00667eaa92c223"
       },
@@ -402,33 +526,37 @@
       },
       {
         "path": "scripts/manager-dist.mjs",
-        "sha256": "7877b381bee77a7ad04dda45ef0a43a136d4072dcab4e427b77e09f4273aba61"
+        "sha256": "3badb31db1619284b3d5af6f053eecd770c8266351c0d04f6b56294cb5fba71b"
       }
     ]
   },
   "outputs": {
-    "count": 5,
-    "sha256": "ca108c724e0ffb34e90a504f2a88e74a5763325087af35ca1129661e52548e0d",
+    "count": 6,
+    "sha256": "ef22def0508a3b919c00dd5e5404508e4d8466e4b33229b93c0d99b8b0e94890",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "b5060a2840a3eb9118f87ac9c0e220b84564bd3ad57176251e707f970e27da94"
+        "sha256": "03e1212e132f85ec8acdbec4c7ca2cf14eb03dca9d196b30d9f3e4a5bce44163"
       },
       {
         "path": "manager/pi-manager-admin.mjs",
-        "sha256": "37a05983be60489bb75c4c91f737705b2dee8e9ae48731eb9bd19fce55e40a7e"
+        "sha256": "d2a79b95492ba998ef2a7f86e8c72a628d35edc11a61fadb6670441123ac1866"
+      },
+      {
+        "path": "manager/pi-manager-chat.mjs",
+        "sha256": "4aa76bbc7d0478eca113b2262ad233878800e0a8aea6d3f9ea43a4c3ea20716e"
       },
       {
         "path": "manager/pi-manager-executor.mjs",
-        "sha256": "fddd470c0ed74dc2f6c8a3d24f9b4121b76567c7c69b164c375f19869d33cc48"
+        "sha256": "374cf09080c63a1a590dfab505185650f1c1aab4362c0d4e5916bf17026fcb9d"
       },
       {
         "path": "manager/pi-manager-public.mjs",
-        "sha256": "4f73c9ad64214d38f4d42da0f029ca90d6186ec0128ca74e4b8543985cb5e816"
+        "sha256": "a5402def0e1b787f204f5ab5de436ff0604929bf28e6f8bdbe10f0db30a46aee"
       },
       {
         "path": "manager/pi-manager-service.mjs",
-        "sha256": "72c929c5b265ddcf27df05041cea670739554f9d25a6ac75d9024a0fae15b892"
+        "sha256": "2fec4dbd42980fcc9aa327cf2fe1a31ff8785d80f54689fa623fa5034463972b"
       }
     ]
   }

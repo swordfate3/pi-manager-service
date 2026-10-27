@@ -3,8 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { lstat, mkdir, open, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 //#region manager/validation.ts
 var ManagerError = class extends Error {
 	status;
@@ -80,7 +80,11 @@ function executorConfig(value) {
 		"trustedLocalNative",
 		"native",
 		"workspaces"
-	], ["recoverStaleLock", "socketMode"]);
+	], [
+		"docker",
+		"recoverStaleLock",
+		"socketMode"
+	]);
 	absolute(c.stateRoot);
 	absolute(c.submitSocket);
 	absolute(c.adminSocket);
@@ -106,6 +110,80 @@ function executorConfig(value) {
 	}
 	const workspaces = record(c.workspaces);
 	requireThat(Object.keys(workspaces).length <= 100);
+	requireThat(c.native === null || c.docker == null);
+	if (c.docker != null) {
+		const d = record(c.docker);
+		keys(d, [
+			"socketPath",
+			"daemonId",
+			"image",
+			"pathCoordinates",
+			"stateRoot",
+			"workspaceRoots"
+		], [
+			"protectedRoots",
+			"timeoutMs",
+			"entrypoint",
+			"command",
+			"web"
+		]);
+		const dockerPath = (v) => {
+			const p = absolute(v);
+			requireThat(p !== path.parse(p).root);
+			return p;
+		};
+		const overlaps = (a, b) => {
+			const contains = (root, value) => {
+				const r = path.relative(root, value);
+				return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r);
+			};
+			return contains(a, b) || contains(b, a);
+		};
+		dockerPath(d.socketPath);
+		dockerPath(d.stateRoot);
+		requireThat(d.pathCoordinates === "host" && typeof d.daemonId === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(d.daemonId));
+		requireThat(typeof d.image === "string" && /^sha256:[a-f0-9]{64}$/.test(d.image));
+		requireThat(d.timeoutMs === void 0 || Number.isSafeInteger(d.timeoutMs) && d.timeoutMs >= 1 && d.timeoutMs <= 12e4);
+		for (const args of [d.entrypoint, d.command]) if (args !== void 0) requireThat(Array.isArray(args) && args.length > 0 && args.length <= 64 && args.every((a) => typeof a === "string" && a.length > 0 && a.length <= 8192 && !a.includes("\0")));
+		requireThat(d.protectedRoots === void 0 || Array.isArray(d.protectedRoots) && d.protectedRoots.length <= 61);
+		const protectedPaths = [
+			c.stateRoot,
+			path.dirname(c.submitSocket),
+			path.dirname(c.adminSocket),
+			d.stateRoot,
+			d.socketPath,
+			fileURLToPath(new URL("..", import.meta.url)),
+			...(d.protectedRoots ?? []).map(dockerPath)
+		];
+		if (d.web !== void 0) {
+			const w = record(d.web);
+			keys(w, [
+				"packageRoot",
+				"hubConfigFile",
+				"port"
+			], ["provider"]);
+			protectedPaths.push(dockerPath(w.packageRoot), dockerPath(w.hubConfigFile));
+			requireThat(Number.isInteger(w.port) && w.port >= 1 && w.port <= 65535 && d.command === void 0 && d.entrypoint === void 0);
+			if (w.provider !== void 0) {
+				const p = record(w.provider);
+				keys(p, [
+					"packageRoot",
+					"name",
+					"model"
+				]);
+				protectedPaths.push(dockerPath(p.packageRoot));
+				requireThat([p.name, p.model].every((v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(v)));
+			}
+		}
+		requireThat(!overlaps(c.stateRoot, d.stateRoot));
+		const roots = record(d.workspaceRoots);
+		requireThat(Object.keys(roots).length > 0 && Object.keys(roots).length <= 32);
+		for (const [name, value] of Object.entries(roots)) {
+			identifier(name);
+			const root = dockerPath(value);
+			requireThat(!protectedPaths.some((p) => overlaps(root, p)));
+		}
+	}
 	if (c.native !== null) {
 		requireThat(c.trustedLocalNative === true, 403);
 		const n = record(c.native);
@@ -116,6 +194,8 @@ function executorConfig(value) {
 			"agentRoot"
 		], [
 			"provider",
+			"web",
+			"runtimeControl",
 			"startupTimeoutMs",
 			"rpcTimeoutMs",
 			"generationTimeoutMs",
@@ -123,6 +203,8 @@ function executorConfig(value) {
 			"maxFrameBytes",
 			"maxStderrBytes"
 		]);
+		requireThat(n.runtimeControl === void 0 || typeof n.runtimeControl === "boolean");
+		requireThat(!n.runtimeControl || n.web !== void 0);
 		absolute(n.piExecutable);
 		absolute(n.stateRoot);
 		absolute(n.agentRoot);
@@ -139,6 +221,17 @@ function executorConfig(value) {
 			]);
 			absolute(p.extensionPath);
 		}
+		if (n.web !== void 0) {
+			const web = record(n.web);
+			keys(web, [
+				"extensionPath",
+				"hubConfigFile",
+				"port"
+			]);
+			absolute(web.extensionPath);
+			absolute(web.hubConfigFile);
+			requireThat(Number.isInteger(web.port) && web.port >= 1 && web.port <= 65535);
+		}
 	}
 	for (const [id, value] of Object.entries(workspaces)) {
 		identifier(id);
@@ -151,7 +244,8 @@ function executorConfig(value) {
 		identifier(w.root);
 		requireThat(typeof w.label === "string" && w.label.length > 0 && w.label.length <= 100 && !/[\x00-\x1f]/.test(w.label));
 		requireThat(typeof w.path === "string" && w.path.length <= 512 && !path.isAbsolute(w.path) && !w.path.includes("\\") && !w.path.includes("\0") && !w.path.split("/").includes(".."));
-		requireThat(c.native !== null && Object.hasOwn(c.native.workspaceRoots, w.root));
+		const backend = c.docker ?? c.native;
+		requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, w.root));
 	}
 	return c;
 }
@@ -236,13 +330,19 @@ async function initialize(options) {
 		"executor.json": executor,
 		"public.json": publicConfig,
 		"admin.json": adminConfig,
+		"chat.json": {
+			port: Number(new URL(chatOrigin).port || (chatOrigin.startsWith("https:") ? 443 : 80)),
+			stateDir: path.join(directory, "chat-state"),
+			runtimeDir: path.join(directory, "chat-runtime")
+		},
 		"requester-credential.json": { credential: requester },
 		"administrator-credential.json": { credential: admin },
 		"supervisor.json": {
 			trustedLocalDevelopment: true,
 			executorConfig: path.join(directory, "executor.json"),
 			publicConfig: path.join(directory, "public.json"),
-			adminConfig: path.join(directory, "admin.json")
+			adminConfig: path.join(directory, "admin.json"),
+			chatConfig: path.join(directory, "chat.json")
 		}
 	};
 	for (const [name, data] of Object.entries(documents)) await writeFile(path.join(directory, name), JSON.stringify(data, null, 2) + "\n", {
@@ -259,13 +359,14 @@ async function supervise(value, entryUrl) {
 		"executorConfig",
 		"publicConfig",
 		"adminConfig"
-	]);
+	], ["chatConfig"]);
 	requireThat(config.trustedLocalDevelopment === true, 403);
 	for (const name of [
 		"executorConfig",
 		"publicConfig",
 		"adminConfig"
 	]) absolute(config[name]);
+	if (config.chatConfig !== void 0) absolute(config.chatConfig);
 	const publicConfig = serviceConfig(await readPrivateJson(config.publicConfig));
 	const adminConfig = serviceConfig(await readPrivateJson(config.adminConfig));
 	requireThat(publicConfig.origin !== adminConfig.origin && publicConfig.chatOrigin === adminConfig.chatOrigin);
@@ -350,12 +451,14 @@ async function supervise(value, entryUrl) {
 		});
 	}
 	try {
+		const chat = config.chatConfig ? await launch("chat", config.chatConfig) : void 0;
 		await launch("executor", config.executorConfig);
 		const pub = await launch("public", config.publicConfig);
 		const admin = await launch("admin", config.adminConfig);
 		return {
 			publicPort: pub.port,
 			adminPort: admin.port,
+			...chat ? { chatPort: chat.port } : {},
 			close
 		};
 	} catch (error) {
@@ -374,7 +477,7 @@ pi-manager-service init --directory /private/new-directory --chat-origin http://
 pi-manager-service serve --config /private/new-directory/supervisor.json
 
 Init writes credentials into separate private files, never stdout. No legacy state is read.
-Serve is opt-in trusted-local development, NOT isolation from same-UID code. It owns three
+Serve is opt-in trusted-local development, NOT isolation from same-UID code. It owns four
 service children and does not depend on a Pi/client lifetime. Native is unavailable by default.
 For separately provisioned isolation, start pi-manager-public, pi-manager-admin and
 pi-manager-executor independently, each with --config /its/private/config.json. Provision
@@ -383,7 +486,8 @@ No configuration assertion proves isolation. No host users/groups/sudo are chang
 Admin UI login uses administrator-credential.json only on the private administrator origin.
 Requester credentials never approve. Queued tasks require fresh approval after restart;
 unknown tasks are never replayed. Existing Pi PIDs are never adopted.
-Pi→Web enrollment/chat, Docker, updates and MCP are not implemented by this service slice.
+MCP is available at the public origin's /mcp endpoint using requester credentials only.
+Native Web needs explicit installed-extension and registrar configuration. Updates are unavailable.
 `);
 		return;
 	}
@@ -413,6 +517,7 @@ Pi→Web enrollment/chat, Docker, updates and MCP are not implemented by this se
 			ready: true,
 			publicPort: supervisor.publicPort,
 			adminPort: supervisor.adminPort,
+			...supervisor.chatPort ? { chatPort: supervisor.chatPort } : {},
 			scope: "trusted-local-development"
 		}) + "\n");
 	}

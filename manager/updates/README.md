@@ -205,3 +205,136 @@ npm run typecheck
 The tests use generated real gzip/USTAR bytes, actual temporary files, and fake
 official transport responses. HTTPS policy is tested at the request boundary.
 No public registry/download or production acceptance is claimed by these tests.
+
+## Isolated recursive candidate installer (Task4 next slice)
+
+`candidate.ts` adds **executor-private** `CandidateInstaller.create(options)`,
+`CandidateInstaller.open(options)`, `install(request)` and
+`verify(candidateId, expectedReceiptSha256)`. There is no activation method,
+live pointer change, candidate execution or public update capability. Results
+remain `installed-unverified`, `runnable: false`, `activation: "not-attempted"`.
+An independent real Pi/Web/session compatibility probe is still required.
+
+The administrator supplies a new canonical 0700 `root` under a private 0700
+parent, the existing `preparedRoot`, its explicit daemon-host coordinate
+`hostPreparedRoot`, fixed trusted `hostWorkerPath` (this directory's
+`candidate-worker.py`) and `hostGuardSource` (`gate/gate/runtime_install.py`),
+an exact local `sha256:…` image ID, exact `daemonId`/Unix `socketPath`, and an
+explicit `network: "host" | "none"`. Host networking is **not network isolation**.
+The image must provide `/usr/bin/python3`, `/usr/local/bin/node` and
+`/usr/local/lib/node_modules/npm/bin/npm-cli.js`; the executor uses
+`/usr/bin/docker` for bounded attach output. No image pull/build occurs.
+These construction inputs and optional `extensionPackages`/`budget` never come
+from browser requests. All installations sharing a resource budget must share
+one canonical candidate root; additional roots are separate administrator budgets.
+`open` must match the persisted construction policy exactly, including key order.
+
+An install request has exactly `installationId`, executor-persisted `release`,
+executor-persisted `expectedIdentity`, and relative `preparedKey` (the stager's
+`candidateKey`). Before Docker creation, it rereads actual artifact bytes,
+checks SHA512 against the authoritative release, reruns archive validation and
+compares the persisted preparation receipt's release/content/executable bindings.
+The worker rechecks artifact SHA512 at the daemon's mount boundary. The prior
+stage's extracted tree is never mounted or executed. A duplicate or partial
+candidate is never adopted, overwritten or replayed.
+
+### Write-time and aggregate bounds
+
+One persisted, exclusive root-wide `.writer` covers admission, artifact checking,
+Docker mutations, npm, export and receipts across IDs/handles/processes. Unknown
+locks fail closed. Every retained candidate directory, including empty partials,
+is charged at least **514 MiB**, or its actual file lengths if larger. Before a
+new candidate, admission reserves another 514 MiB, 60,008 entries, one slot,
+and **1 GiB** for the single active worker's tmpfs. Defaults are 4 candidate
+slots, 4 GiB aggregate bytes and 250,000 retained entries. Administrator-only
+ceilings are 32 slots, 32 GiB and 2,000,000 entries. No automatic eviction,
+quota edits or crash recovery are provided. A partial requires explicit
+administrator reconciliation; a failed Docker mutation keeps the writer lock
+unless the exact known owned container has been positively removed.
+
+The untrusted recursive npm writes do **not** target a host bind mount or an
+unbounded Docker volume. `/work` is a kernel-bounded **1 GiB / 100,000 inode
+tmpfs**, including npm cache/HOME/config/scratch/tree; rootfs is read-only and
+`/dev/shm` is limited to 1 MiB. Worker UID/GID are 1000:1000, all capabilities
+are dropped, no-new-privileges is set, memory+swap are capped at 2 GiB, CPUs at
+2 and PIDs at 64. Logs are disabled. No Docker socket, executor state, workspace,
+personal HOME, credentials or shared node_modules are mounted. Read-only inputs
+are only the artifact and trusted worker/guard source files. The read-only image
+is trusted administrator-selected runtime code, not candidate code.
+
+Validated files are streamed out as bounded records. The receiver independently
+checks paths, parents, file sizes/hashes and safe relative bin links, reserves
+bytes **before each file is opened** (including bin-link target bytes before
+link creation), and writes at most **512 MiB / 60,000
+entries / depth 32**. Export is capped at 768 MiB total, 1 MiB per line, and
+64 KiB stderr; a receipt is at most 1 MiB. npm output is limited during reading
+to 4 MiB per process, with a 120-second command deadline (version queries 5s),
+300-second worker deadline and 330-second attachment deadline. HTTP fetches use
+15-second timeout and zero retries. These are logical-byte/entry reservations
+for exported files, not claims about host filesystem metadata/block allocation;
+the npm writable filesystem itself has the separate hard tmpfs limit.
+
+### Source, closure and content evidence
+
+The worker extracts **the single existing** `NPM_NETWORK_GUARD` literal from the
+trusted Gate source using Python AST/literal evaluation; it does not import or
+execute Gate. npm runs with a newly constructed clean environment, fixed official
+registry, empty user/global npmrc, fresh HOME/cache, engine-strict, ignore-scripts,
+omit-dev, audit/fund/update-notifier disabled. Origin denial is sticky even when
+npm swallows an optional-dependency failure. The guard is policy for trusted npm,
+not a JavaScript sandbox or a substitute for kernel network isolation.
+
+Actual npm first resolves a v3 lock with `install --package-lock-only`. The whole
+lock is checked for exact stable versions, canonical official tarball URLs,
+canonical SHA512 integrity, no aliases/git/URL/file dependencies or unproven
+bundles/links. Only the exact top artifact has a local exception: npm's absolute
+`file:/input/artifact.tgz` or pinned npm 11.19.0's exact
+`file:../../input/artifact.tgz` spelling from `/work/tree`, with matching SHA512.
+`npm ci --ignore-scripts --omit=dev` installs it, and real `npm ls --all
+--omit=dev --json` must succeed without missing/invalid/extraneous dependencies.
+Installed manifests must match the lock. Omitted optional packages require
+explicit OS/CPU/libc incompatibility evidence; unexplained omission fails closed.
+
+All installed files, directories, modes and safe bin-link destinations are
+hashed, including lockfiles and executable bytes. Special files, hardlinks,
+escaping links and excess bounds fail closed. Files/directories are frozen to
+0400/0500; this prevents accidental writes, **not hostile same-UID mutation**.
+The host independently hashes the exported tree and lock before writing its
+private receipt. Evidence binds candidate ID, release, pinned image, Node/npm
+versions, dependency-validation output hash, lock, complete tree and declared
+executables. `install` also returns `receiptSha256`: persist that value in the
+authoritative executor task, separately from the candidate. `verify` requires
+that persisted hash, checks receipt/release/intent and rereads actual contents.
+It is content revalidation, **not** a compatibility/activation decision.
+
+### Verification and current acceptance boundary
+
+```sh
+node --import ./tests/register-ts.mjs --test --experimental-test-isolation=none \
+  tests/manager-candidate-install.test.ts tests/manager-candidate-output.test.ts \
+  tests/manager-candidate-worker.test.mjs
+npm run typecheck
+# Explicit opt-in: exact pinned existing image and exact daemon; new resources only.
+PYTHONDONTWRITEBYTECODE=1 python3 integration-tests/candidate-install/storage-probe.py
+node --import ./tests/register-ts.mjs integration-tests/candidate-install/acceptance.ts
+# Offline final-output control only; does not test recursive registry downloads.
+node --import ./tests/register-ts.mjs integration-tests/candidate-install/acceptance.ts --local-only
+node --import ./tests/register-ts.mjs integration-tests/candidate-install/official-acceptance.ts
+```
+
+Real synthetic recursive installation, lifecycle-script trap, content/receipt
+tamper rejection and no-replay acceptance passed. The hard-storage probe observed
+ENOSPC exactly at its 1 MiB test limit. Official Pi 1.4.0 passed artifact and
+lock validation, but two fresh isolated actual `npm ci` attempts failed on
+official tarball HTTPS timeouts (`shebang-command@2.0.0`, then
+`undici-types@8.9.0`). No official installed-candidate success or runnable/live
+update claim follows. Exact evidence/retained failure paths are recorded in the
+Task4 candidate-install report. No production resources were changed.
+
+After the final FIFO-open and link-byte-accounting hardening, the full regression
+suite passed (88 passed, zero failed, one optional browser skip), but fresh
+recursive synthetic reruns also encountered direct official `is-odd@3.0.1`
+tarball timeouts. Earlier recursive success is not misrepresented as a passing
+final-source network rerun. The final-source `--local-only` network-disabled
+actual npm control passed, including independent receipt-release/lock/installed
+file tampering and replay refusal; it is explicitly not recursive or Pi acceptance.

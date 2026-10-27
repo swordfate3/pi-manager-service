@@ -1,26 +1,152 @@
 # Pi Manager
 
-独立于 Pi 进程的管理服务项目。当前包已提取原 Hub 的多会话入口、登记、管理页面，以及 Gate/Pi runtime 的受控执行源码；它可以在零个 Pi 的情况下初始化并启动 Hub。
+Pi Manager 是独立于 Pi 启动的管理程序；Pi Web `v1` 是负责聊天的薄扩展。先启动 Manager，即使一个 Pi 都没有，也能打开管理网页，再申请创建第一个 Pi。
 
-**当前状态：完成阶段 2 的独立源码与分发提取，阶段 3 的持久任务存储与原生生命周期库已完成本地验收，尚未完成统一 Manager 产品。** 现有 Hub CLI 可运行，但这不是新的进程主管；Gate/runtime 源码不会由 CLI 自动部署或启动。新增持久任务存储及原生 Pi 生命周期库；它们尚未接入管理网页、任务执行器或 CLI。本包没有 MCP 服务、扩展管理任务或生产迁移逻辑，不应替代现有部署。
+开发预览版本，尚未正式发布；实际启用的后端由部署策略决定。**创建、独立审批、停止、保存数据后恢复，以及只提交／查询任务的 MCP 已接通；版本和扩展更新仍在开发，不能把候选包下载成功当成更新成功。** 仓库不包含个人部署的凭据、状态和数据卷；仅启用会话门户的部署也不等于已经开放生命周期管理。
 
-## 构建与 CLI
+```text
+管理网页 / MCP → 公共入口 → 受限执行器 → 自己创建的 Pi
+                              ↑                 └─ Pi Web：聊天
+                      独立管理员审批                  ↓
+                                         Manager 会话门户
+```
 
-需要 Node `>=22.19.0`。开发环境可以复用本机已安装的依赖，但分发只声明运行时依赖 `ws`，不包含开发用 `node_modules` 链接。
+公共入口、私有管理员入口、执行器、会话门户是四个独立服务。可信本机开发时可用一个主管命令统一启动；面向不可信 Agent 时必须实际分离用户／容器和挂载权限，不能仅靠不同端口或不同 HOME。
+
+## 从源码运行
+
+需要 Node `>=22.19.0`。本轮实际验收平台是 Linux；原生后端依赖 Linux `/proc`。没有宣称 Windows 原生或 macOS 生命周期已通过。
+
+```bash
+npm ci --ignore-scripts
+npm run build
+node dist/manager/pi-manager-service.mjs --help
+```
+
+`npm ci` 只能用于自己的独立依赖目录，不能在指向其他项目的共享 `node_modules` 链接上执行。构建产物的完整性校验不需要开发依赖；打包安装测试会在全新临时目录安装真正声明的运行依赖。
+
+## 零 Pi 启动：可信本机开发
+
+下面的 `init` 只能创建新目录，不会读取或覆盖现有 Hub/Gate/Pi 状态。将示例路径换成你自己的**新私有目录**。
+
+```bash
+node dist/manager/pi-manager-service.mjs init \
+  --directory /absolute/new-manager-data \
+  --chat-origin http://127.0.0.1:18200
+
+node dist/manager/pi-manager-service.mjs serve \
+  --config /absolute/new-manager-data/supervisor.json
+```
+
+默认入口：
+
+| 入口 | 用途 |
+| --- | --- |
+| `http://127.0.0.1:18200/sessions/` | Pi 会话门户，零 Pi 时列表为空 |
+| `http://127.0.0.1:18201/` | 申请、查询自己的任务；页面有会话门户链接 |
+| `http://127.0.0.1:18202/` | 私有管理员登录、核对精确任务、批准执行 |
+| `http://127.0.0.1:18201/mcp` | 使用申请者凭据的 MCP HTTP 接口 |
+
+默认没有启用生命周期后端，因此不能创建 Pi。初始化文件包括：
+
+| 文件／目录 | 内容 |
+| --- | --- |
+| `supervisor.json` | 四个服务的固定配置文件位置 |
+| `public.json`、`admin.json` | 各自的监听来源和 IPC 路径 |
+| `executor.json` | 允许的后端、目录、凭据摘要和执行策略 |
+| `chat.json` | 会话门户监听、登记状态和运行目录 |
+| `requester-credential.json` | 申请者登录凭据，不具有批准能力 |
+| `administrator-credential.json` | 独立管理员登录凭据，不能交给 Agent |
+| `tasks/` | 唯一执行器维护的持久任务和审计 |
+| `submit/`、`admin/` | 分开的申请／批准 IPC 目录 |
+| `chat-state/`、`chat-runtime/` | 登记状态和会话路由 socket；不是 Pi 会话数据 |
+
+凭据只写入私有文件，不会打印在初始化输出中。不要把管理员凭据粘贴到模型对话。管理员页只在内存保存短期登录令牌，不使用 Cookie 或浏览器存储；刷新后需要重新登录。端口不同不能隔离 Cookie，因此不能改回跨端口共享的登录 Cookie。
+
+## 启用原生 Pi（仅可信本机）
+
+初始化时显式指定已安装的 Pi 和允许的目录：
+
+```bash
+node dist/manager/pi-manager-service.mjs init \
+  --directory /absolute/new-manager-data \
+  --chat-origin http://127.0.0.1:18200 \
+  --trusted-local-native yes \
+  --native-executable /absolute/path/to/pi \
+  --workspace /absolute/allowed-projects
+```
+
+之后在私有 `executor.json` 中补充管理员批准的工作区选项及**已安装的干净 Web 包**：
+
+```json
+{
+  "native": {
+    "web": {
+      "extensionPath": "/absolute/installed-pi-web/extensions/mirror-server.ts",
+      "hubConfigFile": "/absolute/new-manager-data/chat.json",
+      "port": 18310
+    }
+  }
+}
+```
+
+这是补充片段，不要用它覆盖完整 `executor.json`。Web 包及其运行依赖必须完整安装，不能只复制单个 TypeScript 文件。多个 Web 实例依赖扩展自己的端口选择／登记，不能用上面的单个端口断言任意部署均无冲突。
+
+后端默认关闭项目／HOME 扩展、上下文、工具和 MCP 的自动发现，重新构造子进程环境，也不会继承个人模型凭据。测试使用明确配置的确定性 provider。正常模型服务需要另外显式配置管理员批准的 provider；**这个版本还不是自动复制现有个人 Pi 环境的安装器**。
+
+管理网页选择 `Create managed Pi`、目标 ID、已允许目录，提交后任务进入 `pending_approval`，不会立即启动。管理员在另一入口核对目标和修订号后批准。停止也走同一审批路径。配置了 Web 的原生实例可以选择 `Restore owned Pi`：启动新进程，加载原保存数据，重新登记；不接管磁盘记录里的旧 PID。
+
+原生同 UID 下，Pi 仍可能访问该用户有权访问的其他文件。目录白名单只限制启动目录，不是文件系统隔离；不可信 Agent 应使用经过验证的容器／账户权限部署。
+
+## Docker 后端
+
+管理员在 `executor.json` 中选择 `docker`，同时将 `native` 设为 `null`。公共请求只能选择已批准目录、动作和目标 ID，不能指定镜像、命令、挂载或 Docker 参数。
+
+固定策略包括本地 daemon 身份、完整 `sha256` 镜像 ID、宿主路径坐标、独立私有日志目录和允许的工作区根。默认 UID/GID `1000:1000`、只读系统层、丢弃全部 capabilities、`no-new-privileges`、资源和日志限制；默认不联网。Web 登记是显式的 host-network 选项，不能宣称该选项提供网络隔离。
+
+每个新实例拥有自己的持久 home 卷；停止和恢复保留同一个精确容器及数据卷。Web 配置会继续原来保存的对话，不是只保留一个空 home。后端没有自动拉取／构建／清理镜像、删除 home、接管其他容器的接口。
+
+如果执行器本身运行在容器内，Docker bind mount 的 Source 仍由**宿主 daemon**解释。必须显式保证路径坐标一致，不能把执行器里的 `/data` 误当成宿主的同一目录。Docker socket 只能给受限执行器，不能挂到公共入口、MCP 或 Pi Agent。
+
+## MCP
+
+当前使用官方 Streamable HTTP SDK。公共来源的 `/mcp` 要求申请者 Bearer 凭据。已有三个任务工具，另在本地开发中接入只读版本查询：
+
+- `manager_submit_task`：提交受限的创建／停止／恢复申请。
+- `manager_get_task`：查询自己的持久任务。
+- `manager_list_tasks`：列出自己的任务。
+- `manager_list_pi_versions`：只读查询官方稳定 Pi 版本，可按数字前缀搜索和分页；不提交更新、不批准任务，也不安装候选。
+
+没有批准工具，没有任意 shell／Docker 参数，也没有通过请求覆盖 requester 的能力。客户端退出不取消已经由执行器接手的任务。
+
+实际 Pi 1.1.0 客户端配置形状已用隔离配置验证：
+
+```json
+{
+  "mcpServers": {
+    "manager": {
+      "url": "http://127.0.0.1:18201/mcp",
+      "headers": { "Authorization": "Bearer ${PI_MANAGER_REQUESTER_TOKEN}" }
+    }
+  }
+}
+```
+
+只给这个客户端提供申请者变量；不要给它管理员凭据或批准 socket。远程连接使用可信 HTTPS 网关并保留精确 Host／Origin 校验。项目不依赖阿里云、WSL 或某个固定用户名；本轮没有修改任何公网、TLS、登录或隧道配置。
+
+## 更新、恢复与故障边界
+
+- 任务持久保存 ID、请求者、幂等键和修订号；响应丢失先查询原 ID，不换一个键盲目重做。
+- 队列中未执行的批准不会跨执行器重启自动恢复，需要重新核对。
+- 重启时正在执行但结果未确定的任务变为 `unknown`，禁止自动重放；需管理员核实实际资源。
+- 原生实例逻辑名称保留，不允许另一个用户复用；恢复只使用私有成功记录和保存数据。
+- [官方候选包模块](manager/updates/README.md)包含精确来源／完整性校验、严格解包、全局写入锁和总量限制。单纯下载的结果仍是 `prepared-unverified`；后续已另行实现隔离递归安装、私有兼容性验证和原生切换协调器，但**完整的审批／更新接线及当前源码的真实升级、回退与故障验收尚未完成，因此界面仍不开放版本更新**。某次安装或探测成功不能代替完整更新验收；最新范围见实施记录顶部。
+- 扩展安装／更新／移除及完整更新互斥流程仍未完成。保留旧 Gate/runtime 源码不等于新的 Manager 已接好它们。
+
+## 验证
 
 ```bash
 npm run build
-node dist/hub/pi-web-hub.mjs --help
-node dist/hub/pi-web-hub.mjs init --config /tmp/pi-manager/config.json --port 0
-node dist/hub/pi-web-hub.mjs serve --config /tmp/pi-manager/config.json
-```
-
-打包安装后，等价入口名为 `pi-manager`，命令仍是原有的 `init`、`serve`、`issue`、`revoke`、`pair` 和 `revoke-management`。`init` 会独占创建私有配置及状态目录；不要把真实生产配置、凭据或状态复制到测试目录。
-
-构建输出是 `dist/hub/pi-web-hub.mjs`。`dist/build-manifest.json` 绑定打包后仍存在的 Manager、Gate 和 runtime 可执行源码及构建输出；它有意排除测试、锁文件和 TypeScript/Vite 开发配置，因此解压真实 tarball 后仍可运行 `verify:dist`。验证命令：
-
-```bash
-npm run typecheck
 npm run verify:dist
 npm run test:package
 npm run test:unit
@@ -28,65 +154,16 @@ npm run test:gate:offline
 npm run test:runtime:offline
 ```
 
-临时端口和 Unix socket 覆盖单独运行：
+真实 Pi/Web、Docker、新权限域和浏览器测试都使用临时状态及假模型，不进入默认测试。需要按各自测试的显式 opt-in 运行，不使用生产卷、真实会话或个人凭据。未运行的项目必须保留为未运行，不能拿遗留测试结果代替新服务验收。
 
-```bash
-npm run test:socket
-npm run test:gate:socket
-```
+`pi-manager-service` 是新增服务主管入口；`pi-manager` 暂时保留旧 Hub CLI 的 `init/serve/issue/revoke` 等命令用于兼容，不是同一个配置格式。独立权限部署使用 `pi-manager-public`、`pi-manager-admin`、`pi-manager-executor`、`pi-manager-chat` 各自的 `--config`，不能把可信本机主管当成权限隔离方案。
 
-这些测试只应使用临时配置和临时状态。真实 Docker/浏览器验收保留在 `integration-tests/runtime-updater/`，必须按原有显式环境变量启用；普通测试不会调用生产 Docker。
+## 文档与交付边界
 
-## 当前可用边界
+- [拆分设计与验收标准](docs/superpowers/specs/2026-10-26-pi-manager-separation-design.md)
+- [实施与验收历史](docs/validation/2026-10-26-manager-service-progress.md)
+- [来源及许可记录](docs/source-provenance.md)
+- [逐文件迁移清单](docs/migration-inventory.json)
+- [原实验性权限探针](integration-tests/manager-isolation/README.md)（不是新服务的隔离验收）
 
-- Hub CLI 可以独立初始化和启动；零个 Pi 时管理页面和空会话 API 可用。
-- 已提取的 Hub 可以签发/撤销单会话登记凭据、接受现有兼容 Pi Web 适配器登记，并提供多会话门户及已有管理页面。
-- Gate/runtime 源码和校验工具随包分发，但 CLI 不会自动启动、部署或编排它们；遗留更新来源默认未配置。
-- 浏览器中的聊天仍由独立的 Pi Web 扩展负责。不安装 Manager，也能使用单会话 Web 扩展。
-
-## 开发中的管理基础模块
-
-`manager/task-store.ts` 保存具有请求者、幂等键、修订号和八种状态的任务，提供独占写入、原子持久化和显式崩溃恢复。执行结果不明的任务恢复为 `unknown`，不会自动重放。当前尚没有网页审批 API 或执行器把任务转成生命周期动作。
-
-`manager/backends/native.ts` 是只供受信本机调用的内部库。管理员固定 Pi 可执行路径和允许的工作区根，调用者只能选择根内相对目录。后端只控制自己新建并保留句柄的子进程，不扫描或接管既有 PID，也不从审计文件恢复控制权。默认关闭工具、MCP 和资源自动发现，子进程使用独立 agent 目录及重新构造的环境；这不是已经配置好个人模型和 Web 登记的普通 Pi 工作环境。
-
-原生后端的验收平台仅为 Linux/WSL2；没有据此宣称 Windows/macOS 可用。`agent_end` 不等于自动工作已结束，生成测试等待 `agent_settled`，但后者也不是更新激活的互斥屏障。本阶段不提供更新能力。目录白名单只限制启动位置，不限制同 UID 原生 Pi 的宿主文件访问；开放不可信 Agent 管理接口之前，必须先验证实际账户或容器权限隔离。
-
-私有模块的测试使用临时目录和自有进程。实际 Pi 生成验收另行执行，模型部分是确定性测试 provider，不连接真实模型服务：
-
-```bash
-node --import ./tests/register-ts.mjs tests/manager-task-store.test.ts
-node --import ./tests/register-ts.mjs tests/native-backend.test.ts
-node --import ./tests/register-ts.mjs integration-tests/native-lifecycle.test.ts
-```
-
-精确通过项目、审查及尚未完成的服务/MCP 边界见[实施与验收记录](docs/validation/2026-10-26-manager-service-progress.md)。不要把这些库的测试命令当作产品启动命令。
-
-另外提供了[临时容器权限隔离实验](integration-tests/manager-isolation/README.md)：它只使用新容器、新卷、假凭据和固定标记动作，验证公共入口、执行器和 Agent 的挂载/权限与独立审批边界。默认离线测试不调用 Docker，实验必须显式开启；[实际正反验收记录](docs/validation/2026-10-26-manager-container-isolation.md)单独列出结果。该实验不随运行包发布，不是新的生产执行器，也没有让管理网页或 MCP 获得创建 Pi 的能力。
-
-## 后续设计目标（本阶段未实现）
-
-- 统一管理受管 Pi 的创建、停止、更新和回退。
-- 通过同一任务模型管理扩展安装与更新。
-- 提供独立的 MCP 调用入口，将原生后端接入受限执行器，加入 Docker 后端，并完成跨平台隔离验收。
-- 形成一个对用户统一、内部维持低权限入口与受限执行器边界的 Manager 产品。
-
-## 文档
-
-- [架构、迁移和验收设计](docs/superpowers/specs/2026-10-26-pi-manager-separation-design.md)
-- [本地来源与迁移状态](docs/source-provenance.md)
-- [逐文件迁移与 SHA-256 清单](docs/migration-inventory.json)
-- [保留的旧 Web/Hub 混合集成测试](integration-tests/legacy-web/README.md)
-
-## 已知边界
-
-- Manager 自身尚无已发布、已审核的版本来源。默认版本状态不访问网络，也不会把旧 Web 仓库当作 Manager 发布渠道；调用者只能显式注入已审核来源。
-- `gate/gate/sources.py`、`gate/gate/registry.py` 和 `gate/gate/deploy.py` 保留原实现中的旧 Hub 仓库与入口约束，作为未接线的遗留集成。没有弱化来源检查，也不宣称 Manager 自更新可用。
-- Gate/runtime 的真实 Docker 验收没有在普通构建中运行；原生后端当前仅为内部库，其服务接线、Web 登记与跨平台启动仍属于后续阶段。
-- 旧 Web/Hub 混合测试已完整保留但不进入默认离线测试；需要跨项目安装式夹具后才能重新执行，不能把保存文件视为通过。
-
-## 本轮不做的事
-
-不停止现有 Hub/Gate，不修改阿里云、隧道、密码或真实会话，不删除旧实现，不推送远程或合并 main。只有后续统一管理服务、后端及隔离验收完成后，才另行安排部署切换。
-
-Pi Web 的 `v1` 是 Git 分支名，不表示发布了一个新版本。对应 Web 包已完成单会话拆分；安装验证、跨包登记与独立运行的实际结果及未运行项目见[拆分验证记录](docs/validation/2026-10-26-independent-packages.md)。两个项目都仍是本地开发成果，没有替换现有部署。
+本地开发不自动迁入真实 Pi／Hub／Gate，不停止旧部署、不修改域名和密码、不推送／合并／发布。上线需要完整兼容性、权限域和更新验收，以及单独批准的迁移、试运行、切换和恢复点流程。

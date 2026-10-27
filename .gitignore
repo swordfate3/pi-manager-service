@@ -4,3 +4,15 @@ node_modules
 .tmp/
 __pycache__/
 *.pyc
+
+# Personal deployment inputs and generated artifacts are not source code.
+.env
+.env.*
+!.env.example
+/config/
+/state/
+/backup/
+*.tgz
+/coverage/
+/test-results/
+/playwright-report/

@@ -157,6 +157,12 @@ var ExecutorClient = class {
 	listTasks() {
 		return this.call({ op: "list" });
 	}
+	versions(options = {}) {
+		return this.call({
+			op: "versions",
+			options
+		});
+	}
 	workspaces() {
 		return this.call({ op: "workspaces" });
 	}
@@ -197,6 +203,11 @@ function header(req, name) {
 	for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === name.toLowerCase()) values.push(req.rawHeaders[i + 1]);
 	requireThat(values.length <= 1);
 	return values[0];
+}
+function bearer(req) {
+	const auth = header(req, "authorization");
+	requireThat(auth && auth.startsWith("Bearer "), 401);
+	return token(auth.slice(7));
 }
 function boundary(req, origin) {
 	requireThat(header(req, "host") === new URL(origin).host, 403);
@@ -276,7 +287,14 @@ async function listen(handler, endpoint) {
 }
 //#endregion
 //#region manager/ui.ts
-function renderPage(res, admin) {
+function renderPage(res, admin, chatOrigin) {
+	const chatLink = new URL("/sessions/", chatOrigin).href.replace(/[&<>"']/g, (c) => ({
+		"&": "&amp;",
+		"<": "&lt;",
+		">": "&gt;",
+		"\"": "&quot;",
+		"'": "&#39;"
+	})[c]);
 	res.writeHead(200, {
 		"Content-Type": "text/html; charset=utf-8",
 		"Cache-Control": "no-store",
@@ -287,27 +305,57 @@ function renderPage(res, admin) {
 	res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pi Manager</title>
 <style>body{font:16px system-ui;background:#f4f6fa;color:#17253d;margin:0}main{max-width:850px;margin:32px auto;padding:20px}section{background:white;border:1px solid #ccd5e2;border-radius:12px;padding:20px;margin:18px 0}label{display:block;margin:12px 0}input,select,button{font:inherit;padding:10px;max-width:100%;box-sizing:border-box}input,select{width:100%}button{cursor:pointer;margin:5px 8px 5px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere}#message{min-height:24px}li{margin:15px 0;overflow-wrap:anywhere}.notice{color:#61451b}button:disabled{cursor:default;opacity:.5}</style>
 <main data-admin="${admin}"><h1>Pi Manager</h1><p>Independent task management · available with zero Pi instances</p>
-<p class="notice">Native execution is trusted-local development only, not untrusted isolation. Docker, updates and Pi→Web enrollment are unavailable in this slice.</p>
+<nav><a href="${chatLink}" rel="noreferrer">Open Pi sessions</a> · Management credentials are never forwarded to the chat portal.</nav>
+<p class="notice">Native execution is trusted-local development only, not untrusted isolation. Docker uses an administrator-fixed profile. Updates are not enabled.</p>
 <section><h2>${admin ? "Private administrator entry" : "Task requester entry"}</h2><p>${admin ? "Enter your separately provisioned administrator credential. Agent credentials cannot approve. You cannot approve your own request." : "Enter a requester credential. Approval happens separately in the private administrator entry."}</p>
 <form id="login"><label>Credential<input id="credential" type="password" autocomplete="off" required></label><button>Unlock</button></form><button id="logout" hidden>Lock</button></section>
 <p id="message" role="status" aria-live="polite"></p><section id="content" hidden><h2>Create or stop a managed Pi</h2><p id="capabilities"></p>
-<form id="task"><label>Action<select id="action"><option value="create">Create native Pi</option><option value="stop">Stop owned native Pi</option></select></label><label>Target ID<input id="target" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" required></label><label>Allowed directory<select id="workspace"></select></label><button id="submit">Submit for independent approval</button></form>
+<h2>Official Pi release catalog</h2><p>This catalog is read-only. Update execution is not enabled, and a listed release does not imply candidate compatibility or approval.</p>
+<form id="version-search"><label>Numeric version prefix<input id="version-query" inputmode="decimal" pattern="[0-9.]*" maxlength="64" autocomplete="off"></label><button>Search official versions</button></form>
+<p id="catalog-status" role="status">Catalog locked.</p><ul id="versions"></ul><button id="versions-next" type="button" hidden>Next page</button>
+<form id="task"><label>Action<select id="action"><option value="create">Create managed Pi</option><option value="stop">Stop owned Pi</option><option value="start" hidden>Restore owned Pi</option></select></label><label>Target ID<input id="target" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" required></label><label>Allowed directory<select id="workspace"></select></label><button id="submit">Submit for independent approval</button></form>
 <button id="refresh">Refresh tasks</button><h2>Tasks</h2><p>After a lost response, refresh to reconcile before any new action. Restarted queued tasks require fresh review and approval; unknown tasks are never replayed.</p><ul id="tasks"></ul></section>
 <section id="review" hidden><h2>Exact task review</h2><pre id="review-data"></pre><button id="approve">Approve and execute this revision</button><button id="cancel">Close review</button></section></main><script src="/app.js" defer><\/script></html>`);
 }
 var browserScript = `"use strict";
 const el = id => document.getElementById(id);
 const administrator = document.querySelector('main').dataset.admin === 'true';
-let credential = '', reviewed = null, busy = false, lastSubmission = null;
+let credential = '', reviewed = null, busy = false, lastSubmission = null, catalogGeneration = 0, catalogQuery = '', catalogCursor = null;
 const message = text => { el('message').textContent = text; };
 async function api(route, data) {
   const headers = {};
-  if (!administrator && credential) headers.Authorization = 'Bearer ' + credential;
+  if (credential) headers.Authorization = 'Bearer ' + credential;
   if (data !== undefined) headers['Content-Type'] = 'application/json';
   const response = await fetch('/api/manager/' + route, {method:data === undefined ? 'GET':'POST',headers,credentials:'same-origin',cache:'no-store',body:data === undefined ? undefined:JSON.stringify(data)});
   const value = await response.json(); if (!response.ok) throw Error(value.error || 'Request failed'); return value;
 }
 function hideReview() { reviewed = null; el('review').hidden = true; el('review-data').textContent = ''; }
+function resetCatalog() {
+  catalogGeneration++; catalogQuery = ''; catalogCursor = null; el('version-query').value = '';
+  el('versions').replaceChildren(); el('versions-next').hidden = true; el('catalog-status').textContent = 'Catalog locked.';
+}
+async function loadVersions(append) {
+  const generation = ++catalogGeneration;
+  const options = {query:catalogQuery,limit:50}; if (append && catalogCursor) options.cursor = catalogCursor;
+  el('catalog-status').textContent = 'Checking the read-only official Pi release catalog...';
+  try {
+    const page = await api('versions', options);
+    if (generation !== catalogGeneration || !credential) return;
+    if (!['fresh','stale','unavailable'].includes(page.status) || !Array.isArray(page.versions) ||
+        !page.versions.every(version => typeof version === 'string' && /^[0-9]+\\.[0-9]+\\.[0-9]+$/.test(version))) throw Error('Catalog response invalid');
+    if (!append) el('versions').replaceChildren();
+    for (const version of page.versions) { const item = document.createElement('li'); item.textContent = version; el('versions').append(item); }
+    catalogCursor = typeof page.nextCursor === 'string' ? page.nextCursor : null; el('versions-next').hidden = !catalogCursor;
+    const readOnly = ' Read-only; update execution is not enabled and compatibility is not implied.';
+    el('catalog-status').textContent = page.status === 'fresh' ? 'Official Pi release catalog is fresh.' + readOnly :
+      page.status === 'stale' ? 'Official registry unavailable; showing stale cached versions.' + readOnly :
+      'Official Pi release catalog unavailable. No official versions are available.' + readOnly;
+  } catch(e) {
+    if (generation !== catalogGeneration || !credential) return;
+    if (!append) el('versions').replaceChildren(); catalogCursor = null; el('versions-next').hidden = true;
+    el('catalog-status').textContent = 'Official Pi release catalog unavailable. Read-only update execution remains disabled.';
+  }
+}
 async function refresh() {
   const tasks = await api('tasks'); el('tasks').replaceChildren();
   for (const task of tasks) {
@@ -324,14 +372,17 @@ async function refresh() {
 el('login').onsubmit = async e => {
   e.preventDefault(); const input = el('credential').value; el('credential').value = '';
   try {
-    if (administrator) await api('login', {credential:input}); else credential = input;
+    if (administrator) credential = (await api('login', {credential:input})).sessionToken; else credential = input;
     const capabilities = await api('capabilities'); const choices = await api('workspaces');
-    el('capabilities').textContent = capabilities.native ? 'Native: trusted-local development. Enrollment/chat unavailable.' : 'Native execution is not configured.';
-    el('submit').disabled = !capabilities.native; el('workspace').replaceChildren();
+    el('capabilities').textContent = (capabilities.native ? 'Native: trusted-local development.' : capabilities.docker ? 'Docker: fixed container profile.' : 'Lifecycle execution is not configured.') + (capabilities.enrollment ? ' Explicit Web enrollment configured.' : ' Web enrollment is not configured.') + ' Updates unavailable. Official release discovery is read-only.';
+    el('action').querySelector('[value="start"]').hidden = !(capabilities.docker || capabilities.native && capabilities.enrollment);
+    el('submit').disabled = !(capabilities.native || capabilities.docker); el('workspace').replaceChildren();
     for (const w of choices) { const option = document.createElement('option'); option.value = w.id; option.textContent = w.label; el('workspace').append(option); }
-    el('content').hidden = false; el('login').hidden = true; el('logout').hidden = false; message('Unlocked. No task has been approved.'); await refresh();
-  } catch(e) { credential = ''; message(e.message); }
+    el('content').hidden = false; el('login').hidden = true; el('logout').hidden = false; message('Unlocked. No task has been approved.'); await refresh(); await loadVersions(false);
+  } catch(e) { credential = ''; resetCatalog(); message(e.message); }
 };
+el('version-search').onsubmit = async e => { e.preventDefault(); catalogQuery = el('version-query').value; catalogCursor = null; await loadVersions(false); };
+el('versions-next').onclick = () => { if (catalogCursor) return loadVersions(true); };
 el('task').onsubmit = async e => {
   e.preventDefault(); if (busy) return; busy = true; el('submit').disabled = true;
   const request = {action:el('action').value,target:el('target').value}; if (request.action === 'create') request.workspace = el('workspace').value;
@@ -352,9 +403,12 @@ el('approve').onclick = async () => {
 el('refresh').onclick = () => refresh().catch(e => message(e.message));
 el('cancel').onclick = hideReview;
 el('logout').onclick = async () => {
-  try { if (administrator) await api('logout',{}); } catch(e) { message(e.message); return; }
-  credential = ''; lastSubmission = null; hideReview(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
+  catalogGeneration++; el('catalog-status').textContent = 'Catalog refresh paused while logout is pending.';
+  try { if (administrator) await api('logout',{}); }
+  catch(e) { el('catalog-status').textContent = 'Logout failed. The catalog refresh was cancelled; search again to refresh.'; message(e.message); return; }
+  credential = ''; lastSubmission = null; hideReview(); resetCatalog(); el('content').hidden = true; el('tasks').replaceChildren(); el('login').hidden = false; el('logout').hidden = true; message('Locked.');
 };
+resetCatalog();
 `;
 function renderScript(res) {
 	res.writeHead(200, {
@@ -367,7 +421,7 @@ function renderScript(res) {
 //#endregion
 //#region manager/admin-service.ts
 /** Run privately, with only the separately provisioned admin socket accessible.
-* Credentials are typed into this origin, exchanged for short-lived HttpOnly cookies,
+* Credentials are typed into this origin, exchanged for short-lived memory-only bearer,
 * never embedded in HTML, URL, logs, shared HOME or the public proxy process.
 */
 async function startAdminService(value) {
@@ -378,7 +432,7 @@ async function startAdminService(value) {
 	const server = await listen(async (req, res) => {
 		boundary(req, config.origin);
 		if (req.method === "GET" && req.url === "/") {
-			renderPage(res, true);
+			renderPage(res, true, config.chatOrigin);
 			return;
 		}
 		if (req.method === "GET" && req.url === "/app.js") {
@@ -386,7 +440,6 @@ async function startAdminService(value) {
 			return;
 		}
 		for (const [id, s] of sessions) if (s.expires < Date.now()) sessions.delete(id);
-		const cookieFlags = `; HttpOnly; SameSite=Strict; Path=/; Max-Age=900${config.origin.startsWith("https:") ? "; Secure" : ""}`;
 		if (req.method === "POST" && req.url === "/api/manager/login") {
 			if (Date.now() > windowEnds) {
 				attempts = 0;
@@ -405,13 +458,13 @@ async function startAdminService(value) {
 				client,
 				expires: Date.now() + 9e5
 			});
-			res.setHeader("Set-Cookie", `manager_session=${id}${cookieFlags}`);
-			reply(res, 200, { authenticated: true });
+			reply(res, 200, {
+				authenticated: true,
+				sessionToken: id
+			});
 			return;
 		}
-		const cookie = header(req, "cookie");
-		requireThat(cookie && /^manager_session=[0-9a-f]{64}$/.test(cookie), 401);
-		const id = cookie.slice(16);
+		const id = bearer(req);
 		const session = sessions.get(id);
 		requireThat(session, 401);
 		const client = session.client;
@@ -420,7 +473,6 @@ async function startAdminService(value) {
 			if (req.url === "/api/manager/logout") {
 				keys(record(body), []);
 				sessions.delete(id);
-				res.setHeader("Set-Cookie", "manager_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
 				reply(res, 200, { authenticated: false });
 			} else if (req.url === "/api/manager/approve") {
 				const b = record(body);
@@ -439,7 +491,8 @@ async function startAdminService(value) {
 				const b = record(body);
 				keys(b, ["taskId", "revision"]);
 				reply(res, 200, await client.executeTask(b));
-			} else if (req.url === "/api/manager/tasks") reply(res, 202, await client.submitTask(body));
+			} else if (req.url === "/api/manager/versions") reply(res, 200, await client.versions(body));
+			else if (req.url === "/api/manager/tasks") reply(res, 202, await client.submitTask(body));
 			else throw new ManagerError(404);
 			return;
 		}

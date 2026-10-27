@@ -256,6 +256,10 @@ test("real HTTP: slow body deadline and malformed frames do not admit tasks or l
 });
 
 test("real browser: zero-Pi submit, private review, no credential storage, desktop and mobile", {skip:!process.env.PI_MANAGER_TEST_BROWSER}, async (t) => {
+  // Only the external registry boundary is synthetic; the browser, transports,
+  // executor catalog and task lifecycle below are real. Never require external
+  // registry access or personal configuration for browser acceptance.
+  const official = mockOfficialVersions(t);
   const f=await fixture(t);
   const {createServer}=await import("node:net");
   const reserve=createServer();await new Promise<void>(r=>reserve.listen(0,"127.0.0.1",r));
@@ -274,11 +278,21 @@ test("real browser: zero-Pi submit, private review, no credential storage, deskt
   const page=await context.newPage();const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
   await page.goto(browserOrigin);await page.locator("#credential").fill(admin);await page.locator("#login button").click();
   await page.locator("#content").waitFor({state:"visible"});assert.equal(await page.locator("#credential").inputValue(),"");
+  await page.locator("#versions li").waitFor();
+  assert.deepEqual(await page.locator("#versions li").allTextContents(), [official.version]);
+  await page.locator("#version-query").fill("2098");await page.locator("#version-search button").click();
+  await page.waitForFunction(()=>document.querySelectorAll("#versions li").length===0 && document.getElementById("catalog-status")?.textContent?.includes("catalog is fresh"));
+  await page.locator("#version-query").fill("2099");await page.locator("#version-search button").click();
+  await page.locator("#versions li").waitFor();
+  assert.deepEqual(await page.locator("#versions li").allTextContents(), [official.version]);
   assert.deepEqual(await context.cookies(), []);
   const publicHeaders: Record<string,string>[] = [];
   context.on("request", req => { if (new URL(req.url()).origin === publicOrigin) publicHeaders.push(req.headers()); });
   const requesterPage=await context.newPage();requesterPage.on("pageerror",e=>errors.push(e.message));await requesterPage.goto(publicOrigin);
   await requesterPage.locator("#credential").fill(agent);await requesterPage.locator("#login button").click();await requesterPage.locator("#content").waitFor({state:"visible"});
+  await requesterPage.locator("#versions li").waitFor();
+  assert.deepEqual(await requesterPage.locator("#versions li").allTextContents(), [official.version]);
+  assert.deepEqual((await f.call("/api/manager/tasks")).body, [], "catalog discovery must not create tasks");
   await requesterPage.locator("#target").fill("browser-pi");await requesterPage.locator("#submit").click();
   await requesterPage.waitForFunction(()=>document.getElementById("message")?.textContent?.includes("pending_approval"));
   const task=(await f.call("/api/manager/tasks")).body[0];assert.equal(task.target,"browser-pi");
@@ -295,4 +309,7 @@ test("real browser: zero-Pi submit, private review, no credential storage, deskt
   assert.ok(publicHeaders.length > 0);
   for (const h of publicHeaders) { assert.equal(h.cookie, undefined); assert.ok(!h.authorization || h.authorization === `Bearer ${agent}`); }
   await page.locator("#logout").click();await page.locator("#login").waitFor({state:"visible"});
+  assert.equal(await page.locator("#versions li").count(), 0);
+  assert.equal(await page.locator("#version-query").inputValue(), "");
+  assert.equal(await page.locator("#content").isVisible(), false);
 });

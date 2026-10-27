@@ -18,8 +18,8 @@ import { packedWeb } from './fixtures/packed-web.ts';
 
 // Executor-private coordinator acceptance. The gateway/approval adapters are a
 // later integration, so public updates stays false even if this test passes.
-// R1 fault modes are authored but UNRUN: they require separately authorized
-// genuine candidate proofs, not a substitute positive verifier or FS fixture.
+// R1 fault modes require separately authorized genuine candidate proofs, not
+// a substitute positive verifier or FS fixture. Results belong in validation.
 const preparedFault = process.env.PI_MANAGER_TEST_PREPARED_JOURNAL_FAULT;
 test(preparedFault ? `native installation retains original leases after prepared journal ${preparedFault} uncertainty`
   : 'native installation coordinates every official-candidate consumer and publishes before admission', {
@@ -195,7 +195,13 @@ test(preparedFault ? `native installation retains original leases after prepared
     assert.equal(await installation.inspect('later'), null);
   } finally { await unlink(peer); await symlink(originalPeer, peer); }
   const added = await installation.create(later);
-  assert.equal(added.instanceId, 'later'); assert.equal((await installation.snapshotRuntime('later')).version, '1.4.0');
+  assert.equal(added.instanceId, 'later');
+  // Pi allocates a session pathname at startup but persists it only after a
+  // conversation message. Exercise the new consumer before asking the private
+  // persisted-session snapshot seam to validate that file; never create it in
+  // the test or weaken NativeBackend's file/ownership validation.
+  assert.equal((await installation.generate('later', 'new consumer after activation')).text, 'SELECTED_OK 中文🙂');
+  assert.equal((await installation.snapshotRuntime('later')).version, '1.4.0');
   await assert.rejects(installation.activate(task), /revision/i);
   await installer.verify(candidateId, receiptHash);
   t.diagnostic(JSON.stringify({ scope: 'private-native-coordinator', affectedConsumers: consumerIds.length, hostNode: process.version, abi: process.versions.modules,

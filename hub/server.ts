@@ -966,7 +966,7 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
               : pathname === "/sessions/"
                 ? [
                     "text/html",
-                    renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl),
+                    renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl, config.managerLinks),
                   ]
                 : pathname === "/hub.js"
                   ? ["text/javascript", portalJs]
@@ -1259,6 +1259,26 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
     url,
     ...(managementUrl ? { managementUrl } : {}),
     socketPath: config.socketPath,
+    /** Host-local launcher lookup only; never exposes a registration token. */
+    sessionPath(runId: string): string | undefined {
+      const matches = [...sessions.values()].filter(session => session.grant.run_id === runId && session.expires > Date.now());
+      return !stopped && matches.length === 1 ? `/s/${matches[0].generation}/` : undefined;
+    },
+    /** Local readiness only; never exposed as a public control-plane endpoint. */
+    async isRunReady(runId: string): Promise<boolean> {
+      if (stopped || !/^[a-f0-9]{32}$/.test(runId)) return false;
+      // Unlike current()/verified(), this observation must not retire sessions
+      // or write bounded state. Normal registry/sweep lifecycle owns retirement.
+      const matches = [...sessions.values()].filter(s => s.grant.run_id === runId);
+      if (matches.length !== 1) return false;
+      const session = matches[0];
+      const live = () => {
+        if (stopped || session.expires <= Date.now() || sessions.get(session.generation) !== session) return false;
+        const grant = readGrant(config, runId);
+        return !grant.revoked && equal(grant.token, session.grant.token) && grant.backendHost === session.grant.backendHost;
+      };
+      try { return live() && await proof(session.grant, session.generation, session.port) && live(); } catch { return false; }
+    },
     close() {
       if (closing) return closing;
       stopped = true;

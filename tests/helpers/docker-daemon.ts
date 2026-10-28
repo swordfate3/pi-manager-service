@@ -17,6 +17,8 @@ export async function dockerDaemon(t: TestContext) {
   const calls: { method: string; route: string; body: any }[] = [];
   const cleanups: (() => Promise<unknown>)[] = [];
   const behavior = { daemonId, loseCreateReply: false, failStart: false };
+  const imageEnv = ["PATH=/usr/local/bin:/usr/bin:/bin", "NODE_VERSION=24.0.0", "PYTHON=/usr/bin/python3"];
+  const imageLabels: Record<string, string> = {};
   const server = http.createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -25,7 +27,7 @@ export async function dockerDaemon(t: TestContext) {
     calls.push({ method: req.method!, route, body });
     const send = (status: number, data?: any) => { res.writeHead(status, { "content-type": "application/json" }); res.end(data === undefined ? undefined : JSON.stringify(data)); };
     if (route === "/info") return send(200, { ID: behavior.daemonId });
-    if (route.startsWith("/images/")) return send(200, { Id: image, Config: { Volumes: null, User: "1000:1000", Entrypoint: ["/usr/local/bin/pi-entrypoint"], Env: ["PATH=/usr/local/bin:/usr/bin:/bin"] } });
+    if (route.startsWith("/images/")) return send(200, { Id: image, Config: { Volumes: null, User: "1000:1000", Entrypoint: ["/usr/local/bin/pi-entrypoint"], Env: imageEnv, Labels: imageLabels } });
     if (route === "/volumes/create") {
       const data = { Name: body.Name, Driver: body.Driver, Options: null, Labels: body.Labels };
       volumes.set(body.Name, data); return send(201, data);
@@ -36,6 +38,7 @@ export async function dockerDaemon(t: TestContext) {
       const data = { Id: id, Image: body.Image, Config: structuredClone(body), HostConfig: body.HostConfig,
         Mounts: body.HostConfig.Mounts.map((m: any) => ({ Type: m.Type, Source: m.Source, Destination: m.Target, RW: !m.ReadOnly, ...(m.Type === "volume" ? { Name: m.Source } : {}) })),
         State: { Running: false, Status: "created" } };
+      data.Config.Env = [...imageEnv.filter(e => !body.Env.some((v: string) => v.split("=")[0] === e.split("=")[0])), ...body.Env];
       containers.set(id, data);
       if (behavior.loseCreateReply) return req.socket.destroy();
       return send(201, { Id: id, Warnings: [] });
@@ -58,5 +61,5 @@ export async function dockerDaemon(t: TestContext) {
     try { for (const cleanup of cleanups.reverse()) await cleanup(); }
     finally { server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); await rm(root, { recursive: true, force: true }); }
   });
-  return { root, work, state, socketPath, image, daemonId, containers, volumes, calls, behavior, cleanups };
+  return { root, work, state, socketPath, image, daemonId, containers, volumes, calls, behavior, cleanups, imageEnv, imageLabels };
 }

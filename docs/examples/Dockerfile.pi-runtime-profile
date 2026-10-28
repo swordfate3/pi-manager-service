@@ -1,0 +1,18 @@
+# Optional test/deployment image preparation; never used automatically.
+# Supply the administrator-selected immutable local base via BASE_IMAGE.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Prepare the nested model-bind parents before the fresh home volume's normal
+# image copy-up. No root/sudo at build time or normal runtime is required.
+USER 1000:1000
+RUN umask 077 && mkdir -p /home/node/.pi/manager-agent \
+    && test ! -L /home/node && test ! -L /home/node/.pi \
+    && test ! -L /home/node/.pi/manager-agent \
+    && test "$(stat -c '%u:%g' /home/node/.pi)" = "1000:1000" \
+    && test "$(stat -c '%u:%g' /home/node/.pi/manager-agent)" = "1000:1000" \
+    && chmod 0700 /home/node/.pi /home/node/.pi/manager-agent \
+    && test -w /home/node/.pi/manager-agent
+LABEL cn.swordfate.pi-manager.profile-home="uid1000-v1"
+
+# Entrypoint/Cmd are inherited; the manager still supplies its fixed arguments.

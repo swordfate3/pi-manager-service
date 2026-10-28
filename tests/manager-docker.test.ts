@@ -126,6 +126,19 @@ test("real executor reports fixed Docker isolation and rejects frontend Docker a
   assert.equal(f.calls.filter(c => c.method === "POST").length, 0);
 });
 
+test("Docker adapter accepts an approved dynamic workspace only under explicit browser policy", async t => {
+  const f = await fixture(t);
+  Object.assign(f.config, { workspaceBrowser: { home: f.root, defaultRoot: "projects" } });
+  const executor = await startExecutor(f.config); f.cleanups.push(() => executor.close());
+  const client = new ExecutorClient({ socketPath: f.config.submitSocket, credential: alice });
+  const operator = new AdminClient({ socketPath: f.config.adminSocket, credential: admin });
+  const task = await client.submitTask({ key: "dynamic-docker", action: "create", target: "dynamic-docker", workspace: { root: "projects", path: "project" } });
+  assert.deepEqual(task.payload, { workspace: { root: "projects", path: "project" } });
+  const approved = await operator.approveTask((await operator.reviewTask(task.id)).binding);
+  await operator.executeTask({ taskId: task.id, revision: approved.revision });
+  assert.equal((await terminal(client, task.id)).state, "succeeded");
+});
+
 test("real executor owns create-stop-start across restart without cross-requester control or target reuse", async t => {
   const f = await managed(t);
   const created = await run(f, create);

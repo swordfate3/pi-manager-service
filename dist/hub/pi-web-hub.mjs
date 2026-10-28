@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import net, { isIP } from "node:net";
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
@@ -774,7 +775,9 @@ var config_exports = /* @__PURE__ */ __exportAll({
 	initializeHub: () => initializeHub,
 	issueSession: () => issueSession,
 	managementConfig: () => managementConfig,
+	managerLinksConfig: () => managerLinksConfig,
 	privateDirectory: () => privateDirectory,
+	provisionGrant: () => provisionGrant,
 	readGrant: () => readGrant,
 	readHubConfig: () => readHubConfig,
 	readPrivateJson: () => readPrivateJson,
@@ -816,6 +819,7 @@ function readHubConfig(file) {
 	if (runtimeDir === stateDir || runtimeDir.startsWith(`${stateDir}${path.sep}`) || stateDir.startsWith(`${runtimeDir}${path.sep}`)) throw new Error("Hub IPC and administrator state must be separate directories");
 	const publicUrl = value.publicUrl === void 0 ? void 0 : validatedPublicUrl(value.publicUrl);
 	if (publicUrl && new URL(publicUrl).pathname !== "/") throw new Error("Hub public URL must use the domain root");
+	const managerLinks = value.managerLinks === void 0 ? void 0 : managerLinksConfig(value.managerLinks, publicUrl);
 	if (process.platform === "win32") throw new Error("Bundled hub currently requires Unix IPC (Linux/macOS); standalone Pi Web still works");
 	const lifecycle = value.lifecycle === void 0 ? void 0 : lifecycleConfig(value.lifecycle);
 	const runtimeUpdates = value.runtimeUpdates === void 0 ? void 0 : lifecycleConfig(value.runtimeUpdates);
@@ -829,10 +833,33 @@ function readHubConfig(file) {
 		port,
 		leaseMs,
 		publicUrl,
+		...managerLinks ? { managerLinks } : {},
 		...lifecycle ? { lifecycle } : {},
 		...runtimeUpdates ? { runtimeUpdates } : {},
 		...gateManagement ? { gateManagement } : {},
 		...management ? { management } : {}
+	};
+}
+function managerLinksConfig(value, chatPublicUrl) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid manager links configuration");
+	const links = value;
+	if (Object.keys(links).some((key) => key !== "requester" && key !== "administrator") || !chatPublicUrl) throw new Error("Manager links require a canonical chat public URL");
+	const root = (url) => {
+		const canonical = validatedPublicUrl(url);
+		if (canonical !== `${new URL(canonical).origin}/`) throw new Error("Manager links must use canonical root URLs");
+		return canonical;
+	};
+	const requester = root(links.requester);
+	const administrator = links.administrator === void 0 ? void 0 : root(links.administrator);
+	const origins = [
+		new URL(chatPublicUrl).origin,
+		new URL(requester).origin,
+		...administrator ? [new URL(administrator).origin] : []
+	];
+	if (new Set(origins).size !== origins.length) throw new Error("Manager links must use separate origins");
+	return {
+		requester,
+		...administrator ? { administrator } : {}
 	};
 }
 function managementConfig(value, chatPort, chatPublicUrl) {
@@ -866,14 +893,35 @@ function hasControls(value) {
 function readGrant(config, runId) {
 	if (!/^[0-9a-f]{32}$/.test(runId)) throw new Error("Invalid session capability");
 	const grant = readPrivateJson(path.join(config.stateDir, "grants", `${runId}.json`));
-	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean") throw new Error("Invalid session capability");
+	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean" || grant.provisionKey !== void 0 && !validProvisionKey(grant.provisionKey)) throw new Error("Invalid session capability");
 	return grant;
+}
+/** Local private-state lookup only. Caller holds the existing state writer lock. */
+function provisionGrant(config, key) {
+	if (!validProvisionKey(key)) throw new Error("Invalid provisioning key");
+	const dir = opendirSync(path.join(config.stateDir, "grants"));
+	let found;
+	let count = 0;
+	try {
+		for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+			if (++count > 32768) throw new Error("Hub grant scan limit exceeded");
+			if (!/^[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+			const grant = readGrant(config, entry.name.slice(0, -5));
+			if (grant.provisionKey !== key) continue;
+			if (found) throw new Error("Ambiguous provisioning key");
+			found = grant;
+		}
+	} finally {
+		dir.closeSync();
+	}
+	return found;
 }
 function issueSession(config, output, options) {
 	privateDirectory(config.stateDir);
 	privateDirectory(path.join(config.stateDir, "grants"));
 	const backendHost = options.backendHost ?? "127.0.0.1";
 	if (!validHost(backendHost) || !options.label.trim() || options.label.length > 120 || hasControls(options.label)) throw new Error("Invalid session label or backend host");
+	if (options.provisionKey !== void 0 && !validProvisionKey(options.provisionKey)) throw new Error("Invalid provisioning key");
 	const credential = {
 		run_id: randomBytes(16).toString("hex"),
 		token: randomBytes(32).toString("hex"),
@@ -884,12 +932,33 @@ function issueSession(config, output, options) {
 		label: options.label,
 		backendHost,
 		revoked: false,
-		exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`)
+		exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`),
+		...options.provisionKey ? { provisionKey: options.provisionKey } : {}
 	};
 	const resolvedOutput = path.join(realpathSync(path.dirname(path.resolve(output))), path.basename(output));
 	const stateRoot = realpathSync(config.stateDir);
 	if (resolvedOutput === config.socketPath || resolvedOutput === stateRoot || resolvedOutput.startsWith(`${stateRoot}${path.sep}`)) throw new Error("Session credential must be outside the administrator state directory");
-	withStateWriter(config, (writer) => {
+	return withStateWriter(config, (writer) => {
+		if (options.provisionKey) {
+			writer.assertAdmission();
+			const previous = provisionGrant(config, options.provisionKey);
+			if (previous) {
+				if (previous.revoked || previous.label !== options.label || previous.backendHost !== backendHost) throw new Error("Provisioning conflict");
+				const saved = {
+					run_id: previous.run_id,
+					token: previous.token,
+					...previous.interactions ? { interactions: previous.interactions } : {}
+				};
+				try {
+					lstatSync(resolvedOutput);
+					if (!isDeepStrictEqual(readPrivateJson(resolvedOutput), saved)) throw new Error("Provisioning export conflict");
+				} catch (error) {
+					if (error.code !== "ENOENT") throw error;
+					publishCredential(resolvedOutput, saved);
+				}
+				return saved;
+			}
+		}
 		try {
 			lstatSync(resolvedOutput);
 			throw new Error("Credential output already exists");
@@ -898,8 +967,8 @@ function issueSession(config, output, options) {
 		}
 		writer.write(`grants/${credential.run_id}.json`, grant, { exclusive: true });
 		publishCredential(resolvedOutput, credential);
+		return credential;
 	});
-	return credential;
 }
 function revokeSession(config, runId) {
 	withStateWriter(config, (writer) => {
@@ -910,11 +979,13 @@ function revokeSession(config, runId) {
 		}, { security: true });
 	});
 }
+var validProvisionKey;
 var init_config = __esmMin((() => {
 	init_connection_config();
 	init_interaction_signing();
 	init_lifecycle();
 	init_state_budget();
+	validProvisionKey = (key) => typeof key === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(key);
 }));
 //#endregion
 //#region hub/gateway-auth.ts
@@ -3250,7 +3321,7 @@ var portalHtml = `<!doctype html>
 <div id="notice" role="status"></div><section id="sessions" class="grid" aria-label="在线 Pi 会话"></section>
 <section id="empty" class="empty" hidden><span class="empty-icon">π</span><h3>还没有在线会话</h3><p>为 Pi 配置本总管的登记 socket 和独立凭据。<br>已启动的会话会自动出现在这里。</p></section>
 <footer><span>每个会话独立连接 · 退出一个不影响其他会话</span><span>Pi Web Hub</span></footer></main></body></html>`;
-function renderPortalHtml(admin, chatUrl, managementUrl) {
+function renderPortalHtml(admin, chatUrl, managementUrl, managerLinks) {
 	const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({
 		"&": "&amp;",
 		"<": "&lt;",
@@ -3258,8 +3329,20 @@ function renderPortalHtml(admin, chatUrl, managementUrl) {
 		"\"": "&quot;",
 		"'": "&#39;"
 	})[c] ?? c);
+	const loopback = (value) => {
+		try {
+			return [
+				"localhost",
+				"127.0.0.1",
+				"[::1]"
+			].includes(new URL(value).hostname);
+		} catch {
+			return false;
+		}
+	};
+	const administratorLabel = managerLinks?.administrator && loopback(managerLinks.administrator) && !loopback(managerLinks.requester) ? "打开管理员入口（仅本机可用） ↗" : "打开管理员入口 ↗";
 	if (admin) return portalHtml.replace("<head>", `<head><meta name="pi-chat-origin" content="${escapeHtml(chatUrl)}">`);
-	return portalHtml.replace("<a id=\"new-pi-entry\" class=\"open\" href=\"#new-pi\">新建 Pi</a>", managementUrl ? `<a class="open" href="${escapeHtml(managementUrl)}sessions/#new-pi" rel="noopener noreferrer">新建 Pi ↗</a>` : "").replace("<script src=\"/hub-management.js\" defer><\/script>", "").replace(/<details class="management">[\s\S]*?<\/details>/, managementUrl ? `<p class="management"><a href="${escapeHtml(managementUrl)}sessions/" rel="noopener noreferrer">打开运行管理 ↗</a></p>` : "");
+	return portalHtml.replace("<a id=\"new-pi-entry\" class=\"open\" href=\"#new-pi\">新建 Pi</a>", managerLinks ? `<a id="new-pi-entry" class="open" href="${escapeHtml(managerLinks.requester)}" rel="noopener noreferrer">新建 Pi ↗</a>` : managementUrl ? `<a class="open" href="${escapeHtml(managementUrl)}sessions/#new-pi" rel="noopener noreferrer">新建 Pi ↗</a>` : "").replace("<script src=\"/hub-management.js\" defer><\/script>", "").replace(/<details class="management">[\s\S]*?<\/details>/, managerLinks?.administrator ? `<p class="management"><a id="manager-admin-entry" href="${escapeHtml(managerLinks.administrator)}" rel="noopener noreferrer">${administratorLabel}</a></p>` : managerLinks ? "" : managementUrl ? `<p class="management"><a href="${escapeHtml(managementUrl)}sessions/" rel="noopener noreferrer">打开运行管理 ↗</a></p>` : "");
 }
 var portalJs = `(() => {
   const get = (id) => document.getElementById(id);
@@ -4180,7 +4263,7 @@ function captureHubMetadata(moduleUrl = import.meta.url) {
 	{
 		const embedded = {
 			"version": "0.1.0",
-			"build": "bf59bc31d50e08d3c804ce058169a1a338d710d7c8177c6e789f37cb6aa0c566"
+			"build": "3c4ebf2e0f8493164fd284e6a844a855e627812f150ec710a0d5c129147a3a84"
 		};
 		if (embedded && isStableSemver(embedded.version) && SHA256.test(embedded.build)) return Object.freeze({
 			version: embedded.version,
@@ -5100,7 +5183,7 @@ async function startLockedHub(config, options) {
 				}));
 				return;
 			}
-			const asset = admin && new RegExp(`^/interactions/${HUB_GENERATION_SOURCE}/[a-f0-9]{32}/$`).test(pathname ?? "") ? ["text/html", renderInteractionPageHtml()] : admin && pathname === "/interaction-page.js" ? ["text/javascript", interactionPageJs] : admin && pathname === "/interaction-page.css" ? ["text/css", interactionPageCss] : pathname === "/sessions/" ? ["text/html", renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl)] : pathname === "/hub.js" ? ["text/javascript", portalJs] : admin && pathname === "/hub-management.js" ? ["text/javascript", portalManagementJs] : pathname === "/hub.css" ? ["text/css", portalCss + portalManagementCss] : void 0;
+			const asset = admin && new RegExp(`^/interactions/${HUB_GENERATION_SOURCE}/[a-f0-9]{32}/$`).test(pathname ?? "") ? ["text/html", renderInteractionPageHtml()] : admin && pathname === "/interaction-page.js" ? ["text/javascript", interactionPageJs] : admin && pathname === "/interaction-page.css" ? ["text/css", interactionPageCss] : pathname === "/sessions/" ? ["text/html", renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl, config.managerLinks)] : pathname === "/hub.js" ? ["text/javascript", portalJs] : admin && pathname === "/hub-management.js" ? ["text/javascript", portalManagementJs] : pathname === "/hub.css" ? ["text/css", portalCss + portalManagementCss] : void 0;
 			if (!asset) {
 				fail(response, pathname?.startsWith("/s/") ? 410 : 404);
 				return;
@@ -5351,6 +5434,28 @@ async function startLockedHub(config, options) {
 		url,
 		...managementUrl ? { managementUrl } : {},
 		socketPath: config.socketPath,
+		/** Host-local launcher lookup only; never exposes a registration token. */
+		sessionPath(runId) {
+			const matches = [...sessions.values()].filter((session) => session.grant.run_id === runId && session.expires > Date.now());
+			return !stopped && matches.length === 1 ? `/s/${matches[0].generation}/` : void 0;
+		},
+		/** Local readiness only; never exposed as a public control-plane endpoint. */
+		async isRunReady(runId) {
+			if (stopped || !/^[a-f0-9]{32}$/.test(runId)) return false;
+			const matches = [...sessions.values()].filter((s) => s.grant.run_id === runId);
+			if (matches.length !== 1) return false;
+			const session = matches[0];
+			const live = () => {
+				if (stopped || session.expires <= Date.now() || sessions.get(session.generation) !== session) return false;
+				const grant = readGrant(config, runId);
+				return !grant.revoked && equal(grant.token, session.grant.token) && grant.backendHost === session.grant.backendHost;
+			};
+			try {
+				return live() && await proof(session.grant, session.generation, session.port) && live();
+			} catch {
+				return false;
+			}
+		},
 		close() {
 			if (closing) return closing;
 			stopped = true;

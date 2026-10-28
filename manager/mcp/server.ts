@@ -9,7 +9,8 @@ import { ManagerError, requireThat } from "../validation.ts";
 import type { TaskSubmission, VersionQueryOptions } from "../api.ts";
 
 const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
-const submission = z.object({ key: id, action: z.enum(["create", "stop", "start"]), target: id, workspace: id.optional() }).strict().superRefine((v, ctx) => {
+const workspaceSelection = z.object({ root: id, path: z.string().max(4096) }).strict();
+const submission = z.object({ key: id, action: z.enum(["create", "stop", "start"]), target: id, workspace: z.union([id, workspaceSelection]).optional() }).strict().superRefine((v, ctx) => {
   if ((v.action === "create") !== (v.workspace !== undefined)) ctx.addIssue({ code: "custom", message: "Create requires workspace; stop/start forbid it" });
 });
 const getTask = z.object({ taskId: z.string().uuid() }).strict();

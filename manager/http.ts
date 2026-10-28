@@ -8,14 +8,20 @@ export function header(req: IncomingMessage, name: string): string | undefined {
   requireThat(values.length <= 1); return values[0];
 }
 export function bearer(req: IncomingMessage): string {
-  const auth = header(req, "authorization"); requireThat(auth && auth.startsWith("Bearer "), 401); return token(auth.slice(7));
+  const auth = header(req, "authorization");
+  // Browsers behind a Basic-auth gateway need Authorization for the gateway.
+  // The gateway removes it before forwarding; Manager's credential stays separate.
+  const management = header(req, "x-pi-manager-token");
+  requireThat(!(auth !== undefined && management !== undefined));
+  if (management !== undefined) return token(management);
+  requireThat(auth && auth.startsWith("Bearer "), 401); return token(auth.slice(7));
 }
 export function boundary(req: IncomingMessage, origin: string) {
   requireThat(header(req, "host") === new URL(origin).host, 403);
   const from = header(req, "origin");
   requireThat(req.method === "GET" ? from === undefined || from === origin : from === origin, 403);
   // Reject ambiguity even for cookie-authenticated routes.
-  header(req, "authorization"); header(req, "cookie"); header(req, "content-type");
+  header(req, "authorization"); header(req, "x-pi-manager-token"); header(req, "cookie"); header(req, "content-type");
   requireThat(req.url && req.url.length <= 512 && !/[\\%?#]/.test(req.url));
 }
 export async function jsonBody(req: IncomingMessage): Promise<unknown> {

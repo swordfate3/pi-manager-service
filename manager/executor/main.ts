@@ -6,9 +6,11 @@ import { requireThat } from "../validation.ts";
 import { TaskEngine } from "./engine.ts";
 import { NativeTaskAdapter } from "./native-adapter.ts";
 import { DockerTaskAdapter } from "./docker-adapter.ts";
+import { WorkspacePolicy } from "../workspaces.ts";
 
 export async function startExecutor(value: unknown) {
   const config = executorConfig(value);
+  const workspacePolicy = await WorkspacePolicy.open(config);
   await privateDirectory(config.stateRoot);
   for (const socket of [config.submitSocket, config.adminSocket]) {
     requireThat(Buffer.byteLength(socket) <= 100);
@@ -17,9 +19,9 @@ export async function startExecutor(value: unknown) {
     let exists = true; try { await lstat(socket); } catch (e) { if ((e as NodeJS.ErrnoException).code === "ENOENT") exists = false; else throw e; }
     requireThat(!exists, 409);
   }
-  const adapter = config.docker ? await DockerTaskAdapter.open(config) : config.native ? new NativeTaskAdapter(config) : undefined;
+  const adapter = config.docker ? await DockerTaskAdapter.open(config, workspacePolicy) : config.native ? new NativeTaskAdapter(config, workspacePolicy) : undefined;
   let engine: TaskEngine;
-  try { engine = await TaskEngine.open(config, adapter); }
+  try { engine = await TaskEngine.open(config, adapter, { workspacePolicy }); }
   catch (error) { await adapter?.close(); throw error; }
   const servers: Awaited<ReturnType<typeof listen>>[] = [];
   try {

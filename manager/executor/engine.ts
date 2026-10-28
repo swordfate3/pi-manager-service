@@ -7,9 +7,10 @@ import type { ApprovalBinding, TaskView, VersionCatalogPage, VersionQueryOptions
 import { DockerOutcomeUnknownError } from "../backends/docker-engine.ts";
 import { ExecutionOutcomeUnknownError } from "../errors.ts";
 import { CatalogError, PI_PACKAGE, ReleaseCatalog } from "../updates/catalog.ts";
+import { WorkspacePolicy, workspaceSelection } from "../workspaces.ts";
 
 type Principal = ExecutorConfig["principals"][number];
-interface TaskEngineOptions { readonly catalog?: ReleaseCatalog }
+interface TaskEngineOptions { readonly catalog?: ReleaseCatalog; readonly workspacePolicy?: WorkspacePolicy }
 const MAX_VERSION_QUERIES = 16;
 function requestHash(t: TaskRequest) { return digest(canonical({ key: t.key, requester: t.requester, target: t.target, action: t.action, payload: t.payload })); }
 function view(t: TaskRecord): TaskView {
@@ -28,6 +29,7 @@ export class TaskEngine {
   readonly #approvals = new Map<string, ApprovalBinding>();
   readonly #running = new Set<Promise<void>>();
   readonly #catalog: ReleaseCatalog;
+  readonly #workspaces: WorkspacePolicy | undefined;
   readonly #catalogQueries = new Set<Promise<VersionCatalogPage>>();
   readonly #shutdown = new AbortController();
   #tail: Promise<unknown> = Promise.resolve();
@@ -36,13 +38,15 @@ export class TaskEngine {
   private constructor(config: ExecutorConfig, store: TaskStore, adapter: TaskBackendAdapter | undefined, options: TaskEngineOptions) {
     this.#config = structuredClone(config); this.#store = store; this.#adapter = adapter;
     this.#catalog = options.catalog ?? new ReleaseCatalog({ metadataDeadlineMs: 2500 });
+    this.#workspaces = options.workspacePolicy;
     this.#adapterPolicy = canonical({ policy: adapter?.policy ?? null, actions: adapter?.actions ?? [] });
-    this.#policyHash = digest(canonical({ workspaces: config.workspaces, principals: config.principals.map(p => ({ id: p.id, role: p.role })), adapter: this.#adapterPolicy }));
+    this.#policyHash = digest(canonical({ workspaces: config.workspaces, workspaceBrowser: config.workspaceBrowser ?? null, principals: config.principals.map(p => ({ id: p.id, role: p.role })), adapter: this.#adapterPolicy }));
   }
   static async open(config: ExecutorConfig, adapter?: TaskBackendAdapter, options: TaskEngineOptions = {}) {
     const store = await TaskStore.open(config.stateRoot, { recoverStaleLock: config.recoverStaleLock });
-    const engine = new TaskEngine(config, store, adapter, options);
     try {
+      const workspacePolicy = options.workspacePolicy ?? (config.workspaceBrowser ? await WorkspacePolicy.open(config) : undefined);
+      const engine = new TaskEngine(config, store, adapter, { ...options, workspacePolicy });
       for (const task of await store.list()) {
         if (task.state === "running" || task.state === "waiting_idle") await store.transition(task.id, task.state, "unknown", { expectedRevision: task.revision });
       }
@@ -86,6 +90,17 @@ export class TaskEngine {
   #assertPolicy() {
     requireThat(canonical({ policy: this.#adapter?.policy ?? null, actions: this.#adapter?.actions ?? [] }) === this.#adapterPolicy, 409);
   }
+  async #validateWorkspace(request: TaskRequest) {
+    if (request.action !== "create") return;
+    const payload = record(request.payload); keys(payload, ["workspace"]);
+    if (typeof payload.workspace === "string") {
+      const id = identifier(payload.workspace); requireThat(Object.hasOwn(this.#config.workspaces, id));
+      if (this.#workspaces) await this.#workspaces.resolve(id);
+      return;
+    }
+    requireThat(this.#workspaces && this.#workspaces.browser());
+    await this.#workspaces.resolve(workspaceSelection(payload.workspace));
+  }
   async #handle(p: Principal, admin: boolean, m: Record<string, unknown>): Promise<unknown> {
     if (m.op === "capabilities") {
       keys(m, ["op"]);
@@ -94,6 +109,8 @@ export class TaskEngine {
         isolation: capabilities?.isolation ?? "unavailable", enrollment: capabilities?.enrollment ?? false, updates: false, approval: admin };
     }
     if (m.op === "workspaces") { keys(m, ["op"]); return Object.entries(this.#config.workspaces).map(([id, w]) => ({ id, label: w.label })); }
+    if (m.op === "workspace-browser") { keys(m, ["op"]); return this.#workspaces?.browser() ?? null; }
+    if (m.op === "browse-workspaces") { keys(m, ["op", "query"]); requireThat(this.#workspaces); return await this.#workspaces.browse(m.query); }
     if (m.op === "resources") { keys(m, ["op"]); return await this.#adapter?.resources(p.id) ?? []; }
     if (m.op === "list") {
       keys(m, ["op"]); const list = await this.#store.list();
@@ -103,12 +120,13 @@ export class TaskEngine {
       keys(m, ["op", "request"]); const r = record(m.request);
       requireThat(r.action === "create" || r.action === "stop" || r.action === "start", 503);
       keys(r, r.action === "create" ? ["key", "action", "target", "workspace"] : ["key", "action", "target"]);
-      const request: TaskRequest = { key: identifier(r.key), requester: p.id, target: identifier(r.target), action: r.action, payload: r.action === "create" ? { workspace: identifier(r.workspace) } : {} };
-      if (r.action === "create") requireThat(Object.hasOwn(this.#config.workspaces, r.workspace as string));
+      const workspace = r.action !== "create" ? undefined : typeof r.workspace === "string" ? identifier(r.workspace) : workspaceSelection(r.workspace);
+      const request: TaskRequest = { key: identifier(r.key), requester: p.id, target: identifier(r.target), action: r.action,
+        payload: r.action === "create" ? structuredClone({ workspace: workspace! }) as unknown as import("../contracts.ts").JsonValue : {} };
       requireThat(this.#adapter?.actions.includes(r.action), 503);
       // Idempotency must work even after a stop/restart removed the live resource.
       const existing = (await this.#store.list()).find(t => t.requester === p.id && t.key === r.key);
-      if (!existing) await this.#adapter!.validate(request);
+      if (!existing) { await this.#validateWorkspace(request); await this.#adapter!.validate(request); }
       const task = await this.#store.submit(request); return view(task);
     }
     if (m.op === "get" || m.op === "review") {
@@ -123,6 +141,7 @@ export class TaskEngine {
       requireThat(t.revision === revision(m.revision) && ["pending_approval", "queued"].includes(t.state) && !this.#approvals.has(t.id), 409);
       requireThat(m.requestHash === requestHash(t) && m.policyHash === this.#policyHash, 409);
       this.#assertPolicy();
+      await this.#validateWorkspace(t);
       requireThat(this.#adapter?.actions.includes(t.action), 503); await this.#adapter!.validate(t);
       this.#assertPolicy();
       const approved = t.state === "pending_approval" ? await this.#store.transition(t.id, "pending_approval", "queued", { expectedRevision: t.revision }) : t;
@@ -135,6 +154,7 @@ export class TaskEngine {
       const approval = this.#approvals.get(t.id);
       requireThat(approval && t.state === "queued" && approval.revision === t.revision && approval.requestHash === requestHash(t) && approval.policyHash === this.#policyHash, 403);
       this.#assertPolicy();
+      await this.#validateWorkspace(t);
       requireThat(this.#adapter?.actions.includes(t.action), 503); await this.#adapter!.validate(t);
       this.#assertPolicy();
       const started = await this.#store.transition(t.id, "queued", this.#adapter!.waitForIdle ? "waiting_idle" : "running", { expectedRevision: t.revision });

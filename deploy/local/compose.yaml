@@ -1,0 +1,44 @@
+# Linux trusted-local quickstart. No Docker socket and no Pi lifecycle backend.
+name: ${PI_MANAGER_PROJECT_NAME:-pi-manager-local}
+services:
+  manager:
+    image: pi-manager-local:0.1.0
+    build:
+      context: ../..
+      dockerfile: deploy/local/Dockerfile
+      args:
+        NODE_IMAGE: ${PI_MANAGER_NODE_IMAGE:-node:24.22.1-bookworm-slim}
+    user: "${PI_MANAGER_UID:-1000}:${PI_MANAGER_GID:-1000}"
+    init: true
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 2.0
+    stop_grace_period: 150s
+    volumes:
+      - type: bind
+        source: ${PI_MANAGER_DATA_PARENT:?Set PI_MANAGER_DATA_PARENT to a private absolute directory}
+        target: /data
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const fs=require('node:fs'); const c=JSON.parse(fs.readFileSync('/data/manager/public.json','utf8')); fetch(c.origin+'/',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

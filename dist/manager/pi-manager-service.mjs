@@ -37,6 +37,74 @@ function identifier(value) {
 }
 var digest = (value) => createHash("sha256").update(value).digest("hex");
 //#endregion
+//#region manager/backends/runtime-profile.ts
+var absolute$1 = (v) => {
+	requireThat(typeof v === "string" && path.isAbsolute(v) && v !== "/" && path.resolve(v) === v && !v.includes("\0") && !v.includes("\\"));
+	return v;
+};
+function runtimeProfile(value) {
+	const p = record(structuredClone(value));
+	keys(p, [], [
+		"runtimeVolume",
+		"modelsFile",
+		"environment",
+		"extensions"
+	]);
+	if (p.runtimeVolume !== void 0) requireThat(typeof p.runtimeVolume === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(p.runtimeVolume) && !p.runtimeVolume.startsWith("pi-manager-home-"));
+	if (p.modelsFile !== void 0) absolute$1(p.modelsFile);
+	if (p.environment !== void 0) {
+		const env = record(p.environment);
+		requireThat(Object.keys(env).length <= 32);
+		let bytes = 0;
+		for (const [key, value] of Object.entries(env)) {
+			requireThat(/^[A-Z_][A-Z0-9_]*$/.test(key) && ![
+				"HOME",
+				"PATH",
+				"NODE_OPTIONS",
+				"NODE_PATH"
+			].includes(key) && !/^(LD_|PI_)/.test(key));
+			requireThat(typeof value === "string" && !value.includes("\0"));
+			bytes += Buffer.byteLength(`${key}=${value}\0`);
+		}
+		requireThat(bytes <= 8192);
+		Object.freeze(env);
+	}
+	if (p.extensions !== void 0) {
+		requireThat(Array.isArray(p.extensions) && p.extensions.length <= 16);
+		for (const value of p.extensions) {
+			const e = record(value);
+			keys(e, ["packageRoot", "entry"]);
+			absolute$1(e.packageRoot);
+			requireThat(typeof e.entry === "string" && e.entry.length <= 512 && !/[\\\0]/.test(e.entry) && e.entry.split("/").every((s) => s !== "" && s !== "." && s !== "..") && /\.(ts|js|mjs)$/.test(e.entry));
+			Object.freeze(e);
+		}
+		Object.freeze(p.extensions);
+	}
+	return Object.freeze(p);
+}
+var runtimeProfileSources = (p) => p ? [...p.modelsFile ? [p.modelsFile] : [], ...(p.extensions ?? []).map((e) => e.packageRoot)] : [];
+//#endregion
+//#region manager/enrollment/client.ts
+function enrollmentConfig(value) {
+	const e = record(structuredClone(value));
+	keys(e, [
+		"socketPath",
+		"authorityFile",
+		"registryHostDirectory",
+		"exportHostDirectory"
+	]);
+	for (const p of Object.values(e)) requireThat(absolute(p) !== "/" && !p.includes("\\"));
+	const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+	const paths = [
+		path.dirname(e.socketPath),
+		e.authorityFile,
+		e.registryHostDirectory,
+		e.exportHostDirectory
+	];
+	requireThat(!paths.some((a, i) => paths.slice(i + 1).some((b) => overlaps(a, b))));
+	return Object.freeze(e);
+}
+//#endregion
 //#region manager/config.ts
 function absolute(value) {
 	requireThat(typeof value === "string" && path.isAbsolute(value) && !value.includes("\0") && path.resolve(value) === value);
@@ -82,6 +150,7 @@ function executorConfig(value) {
 		"workspaces"
 	], [
 		"docker",
+		"workspaceBrowser",
 		"recoverStaleLock",
 		"socketMode"
 	]);
@@ -123,27 +192,28 @@ function executorConfig(value) {
 		], [
 			"protectedRoots",
 			"timeoutMs",
+			"startupTimeoutMs",
 			"entrypoint",
 			"command",
-			"web"
+			"web",
+			"runtimeProfile"
 		]);
 		const dockerPath = (v) => {
 			const p = absolute(v);
 			requireThat(p !== path.parse(p).root);
 			return p;
 		};
-		const overlaps = (a, b) => {
-			const contains = (root, value) => {
-				const r = path.relative(root, value);
-				return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r);
-			};
-			return contains(a, b) || contains(b, a);
+		const contains = (root, value) => {
+			const r = path.relative(root, value);
+			return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r);
 		};
+		const overlaps = (a, b) => contains(a, b) || contains(b, a);
 		dockerPath(d.socketPath);
 		dockerPath(d.stateRoot);
 		requireThat(d.pathCoordinates === "host" && typeof d.daemonId === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(d.daemonId));
 		requireThat(typeof d.image === "string" && /^sha256:[a-f0-9]{64}$/.test(d.image));
 		requireThat(d.timeoutMs === void 0 || Number.isSafeInteger(d.timeoutMs) && d.timeoutMs >= 1 && d.timeoutMs <= 12e4);
+		requireThat(d.startupTimeoutMs === void 0 || Number.isSafeInteger(d.startupTimeoutMs) && d.startupTimeoutMs >= 100 && d.startupTimeoutMs <= 12e4);
 		for (const args of [d.entrypoint, d.command]) if (args !== void 0) requireThat(Array.isArray(args) && args.length > 0 && args.length <= 64 && args.every((a) => typeof a === "string" && a.length > 0 && a.length <= 8192 && !a.includes("\0")));
 		requireThat(d.protectedRoots === void 0 || Array.isArray(d.protectedRoots) && d.protectedRoots.length <= 61);
 		const protectedPaths = [
@@ -157,12 +227,18 @@ function executorConfig(value) {
 		];
 		if (d.web !== void 0) {
 			const w = record(d.web);
-			keys(w, [
-				"packageRoot",
+			keys(w, ["packageRoot", "port"], [
 				"hubConfigFile",
-				"port"
-			], ["provider"]);
-			protectedPaths.push(dockerPath(w.packageRoot), dockerPath(w.hubConfigFile));
+				"enrollment",
+				"provider"
+			]);
+			requireThat(w.hubConfigFile === void 0 !== (w.enrollment === void 0));
+			protectedPaths.push(dockerPath(w.packageRoot));
+			if (w.hubConfigFile !== void 0) protectedPaths.push(dockerPath(w.hubConfigFile));
+			if (w.enrollment !== void 0) {
+				const e = enrollmentConfig(w.enrollment);
+				protectedPaths.push(path.dirname(e.socketPath), e.authorityFile, e.registryHostDirectory, e.exportHostDirectory);
+			}
 			requireThat(Number.isInteger(w.port) && w.port >= 1 && w.port <= 65535 && d.command === void 0 && d.entrypoint === void 0);
 			if (w.provider !== void 0) {
 				const p = record(w.provider);
@@ -175,13 +251,17 @@ function executorConfig(value) {
 				requireThat([p.name, p.model].every((v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(v)));
 			}
 		}
+		if (d.runtimeProfile !== void 0) {
+			requireThat(d.web !== void 0);
+			protectedPaths.push(...runtimeProfileSources(runtimeProfile(d.runtimeProfile)));
+		}
 		requireThat(!overlaps(c.stateRoot, d.stateRoot));
 		const roots = record(d.workspaceRoots);
 		requireThat(Object.keys(roots).length > 0 && Object.keys(roots).length <= 32);
 		for (const [name, value] of Object.entries(roots)) {
 			identifier(name);
 			const root = dockerPath(value);
-			requireThat(!protectedPaths.some((p) => overlaps(root, p)));
+			requireThat(!protectedPaths.some((p) => c.workspaceBrowser === void 0 ? overlaps(root, p) : contains(p, root)));
 		}
 	}
 	if (c.native !== null) {
@@ -246,6 +326,19 @@ function executorConfig(value) {
 		requireThat(typeof w.path === "string" && w.path.length <= 512 && !path.isAbsolute(w.path) && !w.path.includes("\\") && !w.path.includes("\0") && !w.path.split("/").includes(".."));
 		const backend = c.docker ?? c.native;
 		requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, w.root));
+	}
+	if (c.workspaceBrowser !== void 0) {
+		const browser = record(c.workspaceBrowser);
+		keys(browser, ["home", "defaultRoot"]);
+		const home = absolute(browser.home);
+		requireThat(home !== path.parse(home).root);
+		const defaultRoot = identifier(browser.defaultRoot);
+		const backend = c.docker ?? c.native;
+		requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, defaultRoot));
+		for (const root of Object.values(backend.workspaceRoots)) {
+			const relative = path.relative(home, root);
+			requireThat(relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+		}
 	}
 	return c;
 }

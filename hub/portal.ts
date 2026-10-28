@@ -1,4 +1,5 @@
 import { approvalsPortalCss, approvalsPortalHtml, approvalsPortalJs } from "./approvals-portal.ts";
+import type { ManagerLinks } from "./config.ts";
 import { launchPortalCss, launchPortalHtml, launchPortalJs } from "./launch-portal.ts";
 import { runtimePortalJs } from "./runtime-portal.ts";
 
@@ -14,21 +15,34 @@ export const portalHtml = `<!doctype html>
 <section id="empty" class="empty" hidden><span class="empty-icon">π</span><h3>还没有在线会话</h3><p>为 Pi 配置本总管的登记 socket 和独立凭据。<br>已启动的会话会自动出现在这里。</p></section>
 <footer><span>每个会话独立连接 · 退出一个不影响其他会话</span><span>Pi Web Hub</span></footer></main></body></html>`;
 
-export function renderPortalHtml(admin: boolean, chatUrl: string, managementUrl?: string) {
+export function renderPortalHtml(admin: boolean, chatUrl: string, managementUrl?: string, managerLinks?: ManagerLinks) {
   const escapeHtml = (s: string) =>
     s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c);
+  const loopback = (value: string) => {
+    try { return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(value).hostname); } catch { return false; }
+  };
+  const administratorLabel =
+    managerLinks?.administrator && loopback(managerLinks.administrator) && !loopback(managerLinks.requester)
+      ? "打开管理员入口（仅本机可用） ↗"
+      : "打开管理员入口 ↗";
   if (admin) return portalHtml.replace("<head>", `<head><meta name="pi-chat-origin" content="${escapeHtml(chatUrl)}">`);
   return portalHtml
     .replace(
       '<a id="new-pi-entry" class="open" href="#new-pi">新建 Pi</a>',
-      managementUrl
+      managerLinks
+        ? `<a id="new-pi-entry" class="open" href="${escapeHtml(managerLinks.requester)}" rel="noopener noreferrer">新建 Pi ↗</a>`
+        : managementUrl
         ? `<a class="open" href="${escapeHtml(managementUrl)}sessions/#new-pi" rel="noopener noreferrer">新建 Pi ↗</a>`
         : "",
     )
     .replace('<script src="/hub-management.js" defer></script>', "")
     .replace(
       /<details class="management">[\s\S]*?<\/details>/,
-      managementUrl
+      managerLinks?.administrator
+        ? `<p class="management"><a id="manager-admin-entry" href="${escapeHtml(managerLinks.administrator)}" rel="noopener noreferrer">${administratorLabel}</a></p>`
+        : managerLinks
+          ? ""
+          : managementUrl
         ? `<p class="management"><a href="${escapeHtml(managementUrl)}sessions/" rel="noopener noreferrer">打开运行管理 ↗</a></p>`
         : "",
     );

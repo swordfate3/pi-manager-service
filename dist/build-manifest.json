@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "source": {
-    "count": 131,
-    "sha256": "bf59bc31d50e08d3c804ce058169a1a338d710d7c8177c6e789f37cb6aa0c566",
+    "count": 146,
+    "sha256": "3c4ebf2e0f8493164fd284e6a844a855e627812f150ec710a0d5c129147a3a84",
     "files": [
       {
         "path": "bin/pi-manager-admin.mjs",
@@ -15,6 +15,10 @@
       {
         "path": "bin/pi-manager-executor.mjs",
         "sha256": "a3a43f71beee108d04bae055fe547a5bb451400a7297a13642f5d32b7edcb324"
+      },
+      {
+        "path": "bin/pi-manager-local.mjs",
+        "sha256": "283f3dd154742416bb03035f0e368f2b34425c22f133c84fde7408381b4996e6"
       },
       {
         "path": "bin/pi-manager-public.mjs",
@@ -150,7 +154,7 @@
       },
       {
         "path": "hub/config.ts",
-        "sha256": "d5b439722fdc9491b9c724fdaf4403767f5c2afbc42c0505225d0746048ac44e"
+        "sha256": "42a41a627e918727efe9326693bce9a5ceac089d65b26b379402a74cbc824314"
       },
       {
         "path": "hub/forward-queue.ts",
@@ -202,7 +206,7 @@
       },
       {
         "path": "hub/portal.ts",
-        "sha256": "5d2196701a83f50680274e38a44953b52b4c8f07fa2e1edddc4f23c47c0f1cc0"
+        "sha256": "4aa362d0a17276445a4508bc0273f105f1fa3b72a78c8f85918a2d573b0c5ec5"
       },
       {
         "path": "hub/restart-api.ts",
@@ -218,7 +222,7 @@
       },
       {
         "path": "hub/server.ts",
-        "sha256": "556391d0a83828d255da5f3fabfc8a004752a4f0b953ac2404b11594fa95eeba"
+        "sha256": "b76f4f16434658c79d524e3f9eac5f0fd864ee69039b4ace30c00c2d403e3d6d"
       },
       {
         "path": "hub/state-budget.ts",
@@ -230,11 +234,11 @@
       },
       {
         "path": "manager/admin-service.ts",
-        "sha256": "bade4f8a955b5c6484da9b39b1747b656c472766d862d2c6fa51f44a512e2710"
+        "sha256": "318c8563769af17603f99e00b431254e263311b5d02fdbe0f36290dc8fa0ee7b"
       },
       {
         "path": "manager/api.ts",
-        "sha256": "f7158ff6722fdbb6ed039a0206cfbad51b47851f2cec72dc239f5b6d64f66ec6"
+        "sha256": "3d713c4d655e3350bc8369090ec48419bacc3eb7142197e17730928457aab160"
       },
       {
         "path": "manager/backends/docker-engine.ts",
@@ -242,7 +246,7 @@
       },
       {
         "path": "manager/backends/docker.ts",
-        "sha256": "4b046825bfddba4032efd61de002c5a76ac829686f806319dd28ab2e4839d6d8"
+        "sha256": "254ef0f4af19cf5764423a9bc38f5e300e46244b8fc811bdb8d530aa174fd55b"
       },
       {
         "path": "manager/backends/native.ts",
@@ -253,16 +257,28 @@
         "sha256": "38f38b62ada757669246b6a29a6601fcadc6ec1ca10264ccb2ed4584599ec53b"
       },
       {
+        "path": "manager/backends/runtime-profile.ts",
+        "sha256": "a6e683fe29e520e71e9eea5f9c0dd3003225d909c6b7be5a043a736dcbda0268"
+      },
+      {
         "path": "manager/chat-service.ts",
-        "sha256": "581829dc3c51516b2ab502f948f7eef6cbb9164f7b578706576ed0948cf2a7c3"
+        "sha256": "378a8117de84126d15ceee833b312bc549aa70dabadc5b733adf98a80efa4b8f"
       },
       {
         "path": "manager/config.ts",
-        "sha256": "b42096d9c0b562efada37182b0c8a0d1dce4cb39f484fa40f183e26918addadd"
+        "sha256": "6a3ae7ad107cc6363416450034337cc23958fd8030cd321cb1238812c8fa08c8"
       },
       {
         "path": "manager/contracts.ts",
         "sha256": "063029200584c8b4ad564643c372d97d3f5a567cda33888ad5b9a0eac5b833a3"
+      },
+      {
+        "path": "manager/enrollment/client.ts",
+        "sha256": "b1fd0dadb862301f7811255dd651af36c108034269ec5387004bbe27c37a37b5"
+      },
+      {
+        "path": "manager/enrollment/server.ts",
+        "sha256": "3afdb8f0883202fedf34b3a93bafa47c0b381e3744e77800a9531c74f7ce82bb"
       },
       {
         "path": "manager/errors.ts",
@@ -278,31 +294,71 @@
       },
       {
         "path": "manager/executor/client.ts",
-        "sha256": "534589c6ce80f68ad2d617aaf5382932bad175713bb36c9f7f6079f9d52b043a"
+        "sha256": "fafdbd6d72aadf5cf0f0616575df2017461a2471d17efbbd3367d33adad891a0"
       },
       {
         "path": "manager/executor/docker-adapter.ts",
-        "sha256": "6357b673a53af600dff1290fc3ba2db97d3e63788d76c4c0b246d76feef62d54"
+        "sha256": "313effba63ab860dbb744e5561a826b6523bc7c2358cffd3ac7368829a504560"
       },
       {
         "path": "manager/executor/engine.ts",
-        "sha256": "5883ef090deac7ca2f0523931739bdb2a31e09bd6dac114f6f87501f42f8ae20"
+        "sha256": "ef01926bff002b9217c1099ab71617e48c1b9c754a7a263f25ff3fb193ea1cda"
       },
       {
         "path": "manager/executor/main.ts",
-        "sha256": "4190d3d31f80115ea4be995ea2fe4e0226fcfbc6224e4ed877bf7b5d7ed107ac"
+        "sha256": "3fe38f4d8c8e55ef00907033195cc2518400f530252a16cce4b077e22f5d58cf"
       },
       {
         "path": "manager/executor/native-adapter.ts",
-        "sha256": "a074946c7f49ff6198ef474be6a37366c7762b7839cbd03df5f21cc69c9fd65e"
+        "sha256": "1ac12dbe18f4c5ed54f7ae2a7cf2a30955eba0edaa7b844afdabd1732736b9ea"
       },
       {
         "path": "manager/http.ts",
-        "sha256": "bcf7b594fe94200cbe73c1bda3e5b8773cb0e6c60dbf3952ab97b9863aaf27c1"
+        "sha256": "db7c03ef7c5b3c05ea3a4422171f4a33565c7b4b880788458f1955b96171fa5c"
       },
       {
         "path": "manager/initialize.ts",
         "sha256": "18e4ffc234af3c46065bc622a370b1701c0ecb2133f0b6ae1de525fa56a6a9e2"
+      },
+      {
+        "path": "manager/local-account-cli.ts",
+        "sha256": "efa8e928c562c8838301bae0093049157d8b3127d3d52f190e6b044060e5761f"
+      },
+      {
+        "path": "manager/local-auth-ui.ts",
+        "sha256": "0d399c0275c9d74fc70dbe0941962ab580dc37d98211dcaea5a1e1a918266c7e"
+      },
+      {
+        "path": "manager/local-auth.ts",
+        "sha256": "db3379309423e91c50c444f97e8361c433ba3aab03cd09592c1129a8d12ae462"
+      },
+      {
+        "path": "manager/local-config.ts",
+        "sha256": "c4cbfa84dbf2b700f40e0041d448eff069d311c3d461f48d584d255c392dbec5"
+      },
+      {
+        "path": "manager/local-launcher.ts",
+        "sha256": "bef479a534f349b6b2885cf2a48bbd506a8e2db59b2bf6411bb665150643c879"
+      },
+      {
+        "path": "manager/local-security.ts",
+        "sha256": "910798ed2b8adff754fa0fcc64ef4004628e75220429dbb4e26ea604c45603d7"
+      },
+      {
+        "path": "manager/local-service.ts",
+        "sha256": "476aa23cf6c855a8012b3f82d1e44357ab19738d6f749913944e9383906d9009"
+      },
+      {
+        "path": "manager/local-store.ts",
+        "sha256": "7963f4c2a1ca9261498e588bd3deff5aa7ac2195e46052e33f9b921b317e1782"
+      },
+      {
+        "path": "manager/local-ui.ts",
+        "sha256": "3c225d28d72827a51c1ae22694ea595e6a41825d5b3a353fe3434ecb67759f0e"
+      },
+      {
+        "path": "manager/local-websocket.ts",
+        "sha256": "85ebd20e4052fc436788b24fbb0fa6aaaa8d59f9c8cc24b7d1df71897474c7df"
       },
       {
         "path": "manager/main.ts",
@@ -310,7 +366,7 @@
       },
       {
         "path": "manager/mcp/server.ts",
-        "sha256": "b8a0d69c26646c45ec757ba974cd67b4d9c42691550c10f34bfcfd17b52f7caf"
+        "sha256": "4e77db83b330cdc5ba8ec5aee5c44f45dc103aa80ac9c6e8d6bf9f70a48fffa6"
       },
       {
         "path": "manager/process-entry.ts",
@@ -322,7 +378,7 @@
       },
       {
         "path": "manager/service.ts",
-        "sha256": "e4f820ef85e2450d991f0a2befa59822fb5a9ff0df149b3ef6564482c694a437"
+        "sha256": "39967aef5bb923cd75b91c142a5fa1f3bcbece207c2ed4875abb0d8fce11f926"
       },
       {
         "path": "manager/supervisor.ts",
@@ -334,7 +390,7 @@
       },
       {
         "path": "manager/ui.ts",
-        "sha256": "9593aadbfd11190f3bab3895593c6d5ee136301d03ebd635291751f75dfe1de4"
+        "sha256": "4764ae1abac9dcf4de71a9e07fd04a36c5fa5582834e5e60255e756618fd2879"
       },
       {
         "path": "manager/updates/README.md",
@@ -437,8 +493,12 @@
         "sha256": "5abc300f6000a2092575bd513ed5afcb9f7fe489afd42d8834098046d8616fff"
       },
       {
+        "path": "manager/workspaces.ts",
+        "sha256": "b1c4ab049ee3cf5bd4c281cdcdeefe52206c9608db63c0d3254ccd00e24f1d66"
+      },
+      {
         "path": "package.json",
-        "sha256": "03ac72d0b2cacd61d5ee6c1f823b4b4149972e0f4a7e2428a19d5b402afdbefc"
+        "sha256": "252d257fe52df3f6276ce3736b4cee75fbcc486294c292633d1a344928f142eb"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -526,37 +586,41 @@
       },
       {
         "path": "scripts/manager-dist.mjs",
-        "sha256": "3badb31db1619284b3d5af6f053eecd770c8266351c0d04f6b56294cb5fba71b"
+        "sha256": "79fc6b1f6f6f5df8af257d1e580ea7cc8e4b2a7f2e6c6338bcf819e94bf7d479"
       }
     ]
   },
   "outputs": {
-    "count": 6,
-    "sha256": "ef22def0508a3b919c00dd5e5404508e4d8466e4b33229b93c0d99b8b0e94890",
+    "count": 7,
+    "sha256": "de94bcf1770753d6202209ae84d47d9b0b64804d02074c2c48c06445b66e4c77",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "03e1212e132f85ec8acdbec4c7ca2cf14eb03dca9d196b30d9f3e4a5bce44163"
+        "sha256": "04eb39b00caa3a1cc11a5eb8438eb02a5bd9acb3ce56c03c688a5e47ceb207fe"
       },
       {
         "path": "manager/pi-manager-admin.mjs",
-        "sha256": "d2a79b95492ba998ef2a7f86e8c72a628d35edc11a61fadb6670441123ac1866"
+        "sha256": "3d6f2d84ee7f8682ca8f8ee2dc4687a0fc79877ee14eb018362f8268a40577d1"
       },
       {
         "path": "manager/pi-manager-chat.mjs",
-        "sha256": "4aa76bbc7d0478eca113b2262ad233878800e0a8aea6d3f9ea43a4c3ea20716e"
+        "sha256": "59f8b8f76ec42efc40b9a631ed4c73e4b705af6200590c2a4119722ce477d674"
       },
       {
         "path": "manager/pi-manager-executor.mjs",
-        "sha256": "374cf09080c63a1a590dfab505185650f1c1aab4362c0d4e5916bf17026fcb9d"
+        "sha256": "d27b30d60ea1cc33786ace7c527ec107c3bf86fe1f5111da659e1257ee92d58c"
+      },
+      {
+        "path": "manager/pi-manager-local.mjs",
+        "sha256": "1107d14b6741d8d8aa78749ace77c4b4bc7064ba88caf7a6c28d72d90205419c"
       },
       {
         "path": "manager/pi-manager-public.mjs",
-        "sha256": "a5402def0e1b787f204f5ab5de436ff0604929bf28e6f8bdbe10f0db30a46aee"
+        "sha256": "c9181664bccf97a89c813d1d0779ebbefcb5526e741dff69225bc5ab4590f340"
       },
       {
         "path": "manager/pi-manager-service.mjs",
-        "sha256": "2fec4dbd42980fcc9aa327cf2fe1a31ff8785d80f54689fa623fa5034463972b"
+        "sha256": "faf4975a324cee85beaf0e395a1d9897dc87ff8da51cdd81426635cb91dafd77"
       }
     ]
   }

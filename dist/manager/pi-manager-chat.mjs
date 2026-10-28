@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, sign, timingSafeEqual } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import net, { isIP } from "node:net";
 import path from "node:path";
-import http from "node:http";
+import http, { createServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { fileURLToPath } from "node:url";
 import { pipeline } from "node:stream";
 import { constants as constants$1, createBrotliCompress, createGzip } from "node:zlib";
-import { open } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, realpath } from "node:fs/promises";
 //#region protocol/connection-config.ts
 /** Never include the supplied value in errors: it may contain a credential. */
 function validatedPublicUrl(value) {
@@ -474,6 +475,17 @@ function withStateWriter(config, operation) {
 	}
 }
 var storageDiagnostics = (config) => withStateWriter(config, (writer) => writer.diagnostics());
+/** Grant must already be durable and charged before publishing an export. */
+function publishCredential(file, credential) {
+	const fd = openSync(file, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 384);
+	try {
+		writeFileSync(fd, `${JSON.stringify(credential)}\n`);
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+	syncDirectory(path.dirname(file));
+}
 //#endregion
 //#region hub/interaction-signing.ts
 function interactionSigning(config) {
@@ -672,7 +684,7 @@ var GateLifecycle = class {
 };
 //#endregion
 //#region hub/config.ts
-function privateDirectory(directory) {
+function privateDirectory$1(directory) {
 	privateStateDirectory(directory);
 }
 function readPrivateJson$1(file) {
@@ -695,6 +707,7 @@ function readHubConfig(file) {
 	if (runtimeDir === stateDir || runtimeDir.startsWith(`${stateDir}${path.sep}`) || stateDir.startsWith(`${runtimeDir}${path.sep}`)) throw new Error("Hub IPC and administrator state must be separate directories");
 	const publicUrl = value.publicUrl === void 0 ? void 0 : validatedPublicUrl(value.publicUrl);
 	if (publicUrl && new URL(publicUrl).pathname !== "/") throw new Error("Hub public URL must use the domain root");
+	const managerLinks = value.managerLinks === void 0 ? void 0 : managerLinksConfig(value.managerLinks, publicUrl);
 	if (process.platform === "win32") throw new Error("Bundled hub currently requires Unix IPC (Linux/macOS); standalone Pi Web still works");
 	const lifecycle = value.lifecycle === void 0 ? void 0 : lifecycleConfig(value.lifecycle);
 	const runtimeUpdates = value.runtimeUpdates === void 0 ? void 0 : lifecycleConfig(value.runtimeUpdates);
@@ -708,10 +721,33 @@ function readHubConfig(file) {
 		port,
 		leaseMs,
 		publicUrl,
+		...managerLinks ? { managerLinks } : {},
 		...lifecycle ? { lifecycle } : {},
 		...runtimeUpdates ? { runtimeUpdates } : {},
 		...gateManagement ? { gateManagement } : {},
 		...management ? { management } : {}
+	};
+}
+function managerLinksConfig(value, chatPublicUrl) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid manager links configuration");
+	const links = value;
+	if (Object.keys(links).some((key) => key !== "requester" && key !== "administrator") || !chatPublicUrl) throw new Error("Manager links require a canonical chat public URL");
+	const root = (url) => {
+		const canonical = validatedPublicUrl(url);
+		if (canonical !== `${new URL(canonical).origin}/`) throw new Error("Manager links must use canonical root URLs");
+		return canonical;
+	};
+	const requester = root(links.requester);
+	const administrator = links.administrator === void 0 ? void 0 : root(links.administrator);
+	const origins = [
+		new URL(chatPublicUrl).origin,
+		new URL(requester).origin,
+		...administrator ? [new URL(administrator).origin] : []
+	];
+	if (new Set(origins).size !== origins.length) throw new Error("Manager links must use separate origins");
+	return {
+		requester,
+		...administrator ? { administrator } : {}
 	};
 }
 function managementConfig(value, chatPort, chatPublicUrl) {
@@ -745,8 +781,83 @@ function hasControls(value) {
 function readGrant(config, runId) {
 	if (!/^[0-9a-f]{32}$/.test(runId)) throw new Error("Invalid session capability");
 	const grant = readPrivateJson$1(path.join(config.stateDir, "grants", `${runId}.json`));
-	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean") throw new Error("Invalid session capability");
+	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean" || grant.provisionKey !== void 0 && !validProvisionKey(grant.provisionKey)) throw new Error("Invalid session capability");
 	return grant;
+}
+var validProvisionKey = (key) => typeof key === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(key);
+/** Local private-state lookup only. Caller holds the existing state writer lock. */
+function provisionGrant(config, key) {
+	if (!validProvisionKey(key)) throw new Error("Invalid provisioning key");
+	const dir = opendirSync(path.join(config.stateDir, "grants"));
+	let found;
+	let count = 0;
+	try {
+		for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+			if (++count > 32768) throw new Error("Hub grant scan limit exceeded");
+			if (!/^[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+			const grant = readGrant(config, entry.name.slice(0, -5));
+			if (grant.provisionKey !== key) continue;
+			if (found) throw new Error("Ambiguous provisioning key");
+			found = grant;
+		}
+	} finally {
+		dir.closeSync();
+	}
+	return found;
+}
+function issueSession(config, output, options) {
+	privateDirectory$1(config.stateDir);
+	privateDirectory$1(path.join(config.stateDir, "grants"));
+	const backendHost = options.backendHost ?? "127.0.0.1";
+	if (!validHost(backendHost) || !options.label.trim() || options.label.length > 120 || hasControls(options.label)) throw new Error("Invalid session label or backend host");
+	if (options.provisionKey !== void 0 && !validProvisionKey(options.provisionKey)) throw new Error("Invalid provisioning key");
+	const credential = {
+		run_id: randomBytes(16).toString("hex"),
+		token: randomBytes(32).toString("hex"),
+		...config.management ? { interactions: interactionSigning(config).pin } : {}
+	};
+	const grant = {
+		...credential,
+		label: options.label,
+		backendHost,
+		revoked: false,
+		exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`),
+		...options.provisionKey ? { provisionKey: options.provisionKey } : {}
+	};
+	const resolvedOutput = path.join(realpathSync(path.dirname(path.resolve(output))), path.basename(output));
+	const stateRoot = realpathSync(config.stateDir);
+	if (resolvedOutput === config.socketPath || resolvedOutput === stateRoot || resolvedOutput.startsWith(`${stateRoot}${path.sep}`)) throw new Error("Session credential must be outside the administrator state directory");
+	return withStateWriter(config, (writer) => {
+		if (options.provisionKey) {
+			writer.assertAdmission();
+			const previous = provisionGrant(config, options.provisionKey);
+			if (previous) {
+				if (previous.revoked || previous.label !== options.label || previous.backendHost !== backendHost) throw new Error("Provisioning conflict");
+				const saved = {
+					run_id: previous.run_id,
+					token: previous.token,
+					...previous.interactions ? { interactions: previous.interactions } : {}
+				};
+				try {
+					lstatSync(resolvedOutput);
+					if (!isDeepStrictEqual(readPrivateJson$1(resolvedOutput), saved)) throw new Error("Provisioning export conflict");
+				} catch (error) {
+					if (error.code !== "ENOENT") throw error;
+					publishCredential(resolvedOutput, saved);
+				}
+				return saved;
+			}
+		}
+		try {
+			lstatSync(resolvedOutput);
+			throw new Error("Credential output already exists");
+		} catch (error) {
+			if (error.code !== "ENOENT") throw error;
+		}
+		writer.write(`grants/${credential.run_id}.json`, grant, { exclusive: true });
+		publishCredential(resolvedOutput, credential);
+		return credential;
+	});
 }
 //#endregion
 //#region protocol/runtime-metadata.ts
@@ -2267,7 +2378,7 @@ function createInteractionApi(config, management, hooks) {
 }
 //#endregion
 //#region hub/management.ts
-var digest = (value) => createHash("sha256").update(value).digest("hex");
+var digest$1 = (value) => createHash("sha256").update(value).digest("hex");
 var hex$2 = (value, length) => typeof value === "string" && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
 var equal$1 = (a, b) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 var stateFile = (config) => path.join(config.stateDir, "management.json");
@@ -2299,7 +2410,7 @@ var HubManagement = class {
 		if (values.length !== 1) return void 0;
 		const token = values[0].slice(this.cookieName.length + 1);
 		if (!hex$2(token, 64)) return void 0;
-		const key = digest(token);
+		const key = digest$1(token);
 		const session = this.sessions.get(key);
 		let state;
 		try {
@@ -2339,7 +2450,7 @@ var HubManagement = class {
 		return withStateWriter(this.config, (writer) => {
 			const state = readState(this.config);
 			if (!state || !state.pairHash || state.expires <= this.now() || state.failures >= 10) throw new Error("Management unlock rejected");
-			if (!hex$2(code, 32) || !equal$1(digest(code), state.pairHash)) {
+			if (!hex$2(code, 32) || !equal$1(digest$1(code), state.pairHash)) {
 				saveState(writer, {
 					...state,
 					failures: state.failures + 1
@@ -2377,7 +2488,7 @@ var HubManagement = class {
 		const token = randomBytes(32).toString("hex");
 		const csrf = randomBytes(32).toString("hex");
 		const expires = this.now() + 18e5;
-		this.sessions.set(digest(token), {
+		this.sessions.set(digest$1(token), {
 			epoch: state.epoch,
 			expires,
 			csrf,
@@ -3040,7 +3151,7 @@ var portalHtml = `<!doctype html>
 <div id="notice" role="status"></div><section id="sessions" class="grid" aria-label="在线 Pi 会话"></section>
 <section id="empty" class="empty" hidden><span class="empty-icon">π</span><h3>还没有在线会话</h3><p>为 Pi 配置本总管的登记 socket 和独立凭据。<br>已启动的会话会自动出现在这里。</p></section>
 <footer><span>每个会话独立连接 · 退出一个不影响其他会话</span><span>Pi Web Hub</span></footer></main></body></html>`;
-function renderPortalHtml(admin, chatUrl, managementUrl) {
+function renderPortalHtml(admin, chatUrl, managementUrl, managerLinks) {
 	const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ({
 		"&": "&amp;",
 		"<": "&lt;",
@@ -3048,8 +3159,20 @@ function renderPortalHtml(admin, chatUrl, managementUrl) {
 		"\"": "&quot;",
 		"'": "&#39;"
 	})[c] ?? c);
+	const loopback = (value) => {
+		try {
+			return [
+				"localhost",
+				"127.0.0.1",
+				"[::1]"
+			].includes(new URL(value).hostname);
+		} catch {
+			return false;
+		}
+	};
+	const administratorLabel = managerLinks?.administrator && loopback(managerLinks.administrator) && !loopback(managerLinks.requester) ? "打开管理员入口（仅本机可用） ↗" : "打开管理员入口 ↗";
 	if (admin) return portalHtml.replace("<head>", `<head><meta name="pi-chat-origin" content="${escapeHtml(chatUrl)}">`);
-	return portalHtml.replace("<a id=\"new-pi-entry\" class=\"open\" href=\"#new-pi\">新建 Pi</a>", managementUrl ? `<a class="open" href="${escapeHtml(managementUrl)}sessions/#new-pi" rel="noopener noreferrer">新建 Pi ↗</a>` : "").replace("<script src=\"/hub-management.js\" defer><\/script>", "").replace(/<details class="management">[\s\S]*?<\/details>/, managementUrl ? `<p class="management"><a href="${escapeHtml(managementUrl)}sessions/" rel="noopener noreferrer">打开运行管理 ↗</a></p>` : "");
+	return portalHtml.replace("<a id=\"new-pi-entry\" class=\"open\" href=\"#new-pi\">新建 Pi</a>", managerLinks ? `<a id="new-pi-entry" class="open" href="${escapeHtml(managerLinks.requester)}" rel="noopener noreferrer">新建 Pi ↗</a>` : managementUrl ? `<a class="open" href="${escapeHtml(managementUrl)}sessions/#new-pi" rel="noopener noreferrer">新建 Pi ↗</a>` : "").replace("<script src=\"/hub-management.js\" defer><\/script>", "").replace(/<details class="management">[\s\S]*?<\/details>/, managerLinks?.administrator ? `<p class="management"><a id="manager-admin-entry" href="${escapeHtml(managerLinks.administrator)}" rel="noopener noreferrer">${administratorLabel}</a></p>` : managerLinks ? "" : managementUrl ? `<p class="management"><a href="${escapeHtml(managementUrl)}sessions/" rel="noopener noreferrer">打开运行管理 ↗</a></p>` : "");
 }
 var portalJs = `(() => {
   const get = (id) => document.getElementById(id);
@@ -3595,7 +3718,7 @@ function createRestartApi(config, hooks, management = new HubManagement(config))
 	const provider = config.lifecycle ? new GateLifecycle(config.lifecycle) : void 0;
 	const runtimeProvider = config.runtimeUpdates ? new GateRuntimeUpdates(config.runtimeUpdates) : void 0;
 	const receipts = path.join(config.stateDir, "restarts");
-	if (provider) privateDirectory(receipts);
+	if (provider) privateDirectory$1(receipts);
 	const file = (id) => {
 		if (!hex(id)) throw new Error();
 		return path.join(receipts, `${id}.json`);
@@ -4210,7 +4333,7 @@ async function startHub(config, options = {}) {
 		stateDir: serving.root
 	};
 	try {
-		privateDirectory(config.runtimeDir);
+		privateDirectory$1(config.runtimeDir);
 		const lock = path.join(config.runtimeDir, "hub.lock");
 		mkdirSync(lock, { mode: 448 });
 		const owner = path.join(lock, "owner.json");
@@ -4246,11 +4369,11 @@ async function startHub(config, options = {}) {
 	}
 }
 async function startLockedHub(config, options) {
-	privateDirectory(config.stateDir);
-	privateDirectory(config.runtimeDir);
-	privateDirectory(path.join(config.stateDir, "grants"));
-	privateDirectory(path.join(config.stateDir, "generations"));
-	privateDirectory(path.join(config.stateDir, "bounded"));
+	privateDirectory$1(config.stateDir);
+	privateDirectory$1(config.runtimeDir);
+	privateDirectory$1(path.join(config.stateDir, "grants"));
+	privateDirectory$1(path.join(config.stateDir, "generations"));
+	privateDirectory$1(path.join(config.stateDir, "bounded"));
 	if (existsSync(config.socketPath)) {
 		const stat = lstatSync(config.socketPath);
 		if (!stat.isSocket() || stat.uid !== process.getuid?.()) throw new Error("Unsafe hub socket path");
@@ -4877,7 +5000,7 @@ async function startLockedHub(config, options) {
 				}));
 				return;
 			}
-			const asset = admin && new RegExp(`^/interactions/${HUB_GENERATION_SOURCE}/[a-f0-9]{32}/$`).test(pathname ?? "") ? ["text/html", renderInteractionPageHtml()] : admin && pathname === "/interaction-page.js" ? ["text/javascript", interactionPageJs] : admin && pathname === "/interaction-page.css" ? ["text/css", interactionPageCss] : pathname === "/sessions/" ? ["text/html", renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl)] : pathname === "/hub.js" ? ["text/javascript", portalJs] : admin && pathname === "/hub-management.js" ? ["text/javascript", portalManagementJs] : pathname === "/hub.css" ? ["text/css", portalCss + portalManagementCss] : void 0;
+			const asset = admin && new RegExp(`^/interactions/${HUB_GENERATION_SOURCE}/[a-f0-9]{32}/$`).test(pathname ?? "") ? ["text/html", renderInteractionPageHtml()] : admin && pathname === "/interaction-page.js" ? ["text/javascript", interactionPageJs] : admin && pathname === "/interaction-page.css" ? ["text/css", interactionPageCss] : pathname === "/sessions/" ? ["text/html", renderPortalHtml(admin, config.publicUrl ?? url, config.management?.publicUrl ?? managementUrl, config.managerLinks)] : pathname === "/hub.js" ? ["text/javascript", portalJs] : admin && pathname === "/hub-management.js" ? ["text/javascript", portalManagementJs] : pathname === "/hub.css" ? ["text/css", portalCss + portalManagementCss] : void 0;
 			if (!asset) {
 				fail(response, pathname?.startsWith("/s/") ? 410 : 404);
 				return;
@@ -5128,6 +5251,28 @@ async function startLockedHub(config, options) {
 		url,
 		...managementUrl ? { managementUrl } : {},
 		socketPath: config.socketPath,
+		/** Host-local launcher lookup only; never exposes a registration token. */
+		sessionPath(runId) {
+			const matches = [...sessions.values()].filter((session) => session.grant.run_id === runId && session.expires > Date.now());
+			return !stopped && matches.length === 1 ? `/s/${matches[0].generation}/` : void 0;
+		},
+		/** Local readiness only; never exposed as a public control-plane endpoint. */
+		async isRunReady(runId) {
+			if (stopped || !/^[a-f0-9]{32}$/.test(runId)) return false;
+			const matches = [...sessions.values()].filter((s) => s.grant.run_id === runId);
+			if (matches.length !== 1) return false;
+			const session = matches[0];
+			const live = () => {
+				if (stopped || session.expires <= Date.now() || sessions.get(session.generation) !== session) return false;
+				const grant = readGrant(config, runId);
+				return !grant.revoked && equal(grant.token, session.grant.token) && grant.backendHost === session.grant.backendHost;
+			};
+			try {
+				return live() && await proof(session.grant, session.generation, session.port) && live();
+			} catch {
+				return false;
+			}
+		},
 		close() {
 			if (closing) return closing;
 			stopped = true;
@@ -5178,11 +5323,36 @@ function record(value) {
 function keys(value, required, optional = []) {
 	requireThat(required.every((k) => Object.hasOwn(value, k)) && Object.keys(value).every((k) => [...required, ...optional].includes(k)));
 }
+function identifier(value) {
+	requireThat(typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value));
+	return value;
+}
+function taskId(value) {
+	requireThat(typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value));
+	return value;
+}
+var digest = (value) => createHash("sha256").update(value).digest("hex");
+function token(value) {
+	requireThat(typeof value === "string" && /^[A-Za-z0-9_-]{32,128}$/.test(value), 401);
+	return value;
+}
+function equalHash(a, b) {
+	return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 //#endregion
 //#region manager/config.ts
 function absolute(value) {
 	requireThat(typeof value === "string" && path.isAbsolute(value) && !value.includes("\0") && path.resolve(value) === value);
 	return value;
+}
+/** Provisioning owns OS users/groups/mounts; checking a mode is NOT proof of isolation. */
+async function privateDirectory(directory, allowGroupSearch = false) {
+	await mkdir(directory, {
+		recursive: true,
+		mode: 448
+	});
+	const s = await lstat(directory);
+	requireThat(s.isDirectory() && !s.isSymbolicLink() && s.uid === process.getuid?.() && (s.mode & (allowGroupSearch ? 23 : 63)) === 0 && await realpath(directory) === directory, 403);
 }
 async function readPrivateJson(file) {
 	const handle = await open(absolute(file), constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -5195,23 +5365,203 @@ async function readPrivateJson(file) {
 	}
 }
 //#endregion
+//#region manager/http.ts
+function header(req, name) {
+	const values = [];
+	for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === name.toLowerCase()) values.push(req.rawHeaders[i + 1]);
+	requireThat(values.length <= 1);
+	return values[0];
+}
+function bearer(req) {
+	const auth = header(req, "authorization");
+	const management = header(req, "x-pi-manager-token");
+	requireThat(!(auth !== void 0 && management !== void 0));
+	if (management !== void 0) return token(management);
+	requireThat(auth && auth.startsWith("Bearer "), 401);
+	return token(auth.slice(7));
+}
+async function jsonBody(req) {
+	requireThat(header(req, "content-type") === "application/json");
+	const declared = header(req, "content-length");
+	requireThat(!declared || Number(declared) <= 8192, 413);
+	const chunks = [];
+	let size = 0;
+	for await (const chunk of req) {
+		size += chunk.length;
+		requireThat(size <= 8192, 413);
+		chunks.push(chunk);
+	}
+	try {
+		return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+	} catch {
+		throw new ManagerError(400);
+	}
+}
+function reply(res, status, value) {
+	if (res.destroyed || res.writableEnded) return;
+	res.writeHead(status, {
+		"Content-Type": "application/json",
+		"Cache-Control": "no-store",
+		"X-Content-Type-Options": "nosniff"
+	});
+	res.end(JSON.stringify(value));
+}
+async function listen(handler, endpoint) {
+	const sockets = /* @__PURE__ */ new Set();
+	const server = createServer({
+		maxHeaderSize: 8192,
+		requestTimeout: 5e3,
+		headersTimeout: 5e3,
+		connectionsCheckingInterval: 250
+	}, (req, res) => {
+		const deadline = setTimeout(() => {
+			reply(res, 408, { error: "Request deadline exceeded" });
+			req.socket.destroy();
+		}, 5e3);
+		handler(req, res).catch((error) => reply(res, error instanceof ManagerError ? error.status : 503, { error: error instanceof ManagerError ? error.message : "Service unavailable" })).finally(() => clearTimeout(deadline));
+	});
+	server.maxConnections = 64;
+	server.maxRequestsPerSocket = 20;
+	server.keepAliveTimeout = 1e3;
+	server.setTimeout(5e3, (socket) => socket.destroy());
+	server.on("connection", (socket) => {
+		sockets.add(socket);
+		socket.once("close", () => sockets.delete(socket));
+	});
+	server.on("clientError", (_error, socket) => {
+		socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+	});
+	await new Promise((resolve, reject) => {
+		server.once("error", reject);
+		if (typeof endpoint === "number") server.listen(endpoint, "127.0.0.1", resolve);
+		else server.listen(endpoint, resolve);
+	});
+	let closing;
+	return {
+		port: typeof server.address() === "object" ? server.address().port : 0,
+		close() {
+			return closing ??= new Promise((resolve, reject) => {
+				server.close((error) => error ? reject(error) : resolve());
+				for (const socket of sockets) socket.destroy();
+			});
+		}
+	};
+}
+//#endregion
+//#region manager/enrollment/server.ts
+var overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+function provisioningConfig(value) {
+	const p = record(structuredClone(value));
+	keys(p, [
+		"socketPath",
+		"exportDir",
+		"tokenHash"
+	], ["socketMode"]);
+	requireThat(absolute(p.socketPath) !== "/" && absolute(p.exportDir) !== "/");
+	requireThat(typeof p.tokenHash === "string" && /^[a-f0-9]{64}$/.test(p.tokenHash));
+	requireThat(p.socketMode === void 0 || p.socketMode === 384 || p.socketMode === 432);
+	return Object.freeze(p);
+}
+/** Private, bounded enrollment only. No Docker authority or capability responses. */
+async function startEnrollmentBroker(hub, input, ready) {
+	const config = provisioningConfig(input);
+	requireThat(process.getuid?.() === 1e3, 403);
+	const parent = path.dirname(config.socketPath);
+	requireThat(![
+		hub.stateDir,
+		hub.runtimeDir,
+		config.exportDir
+	].some((p) => overlaps(parent, p)) && ![hub.stateDir, hub.runtimeDir].some((p) => overlaps(config.exportDir, p)), 403);
+	await privateDirectory(parent, config.socketMode === 432);
+	for (const p of [
+		config.exportDir,
+		hub.stateDir,
+		path.join(hub.stateDir, "grants"),
+		hub.runtimeDir
+	]) {
+		privateDirectory$1(p);
+		requireThat(await realpath(p) === p, 403);
+	}
+	try {
+		await lstat(config.socketPath);
+		throw new ManagerError(409);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+	}
+	const server = await listen(async (req, res) => {
+		requireThat(equalHash(digest(bearer(req)), config.tokenHash), 401);
+		requireThat(header(req, "host") === "pi-enrollment", 403);
+		requireThat(req.method === "POST" && ["/issue", "/status"].includes(req.url ?? ""), 404);
+		requireThat(header(req, "origin") === void 0, 403);
+		const input = record(await jsonBody(req));
+		keys(input, ["key", "label"]);
+		const key = taskId(input.key), label = identifier(input.label);
+		try {
+			if (req.url === "/issue") {
+				issueSession(hub, path.join(config.exportDir, `registration-${key}.json`), {
+					label,
+					provisionKey: key
+				});
+				reply(res, 200, { ok: true });
+			} else {
+				const grant = withStateWriter(hub, (writer) => {
+					writer.assertAdmission();
+					return provisionGrant(hub, key);
+				});
+				requireThat(!grant || grant.label === label, 409);
+				reply(res, 200, { ready: !!grant && !grant.revoked && await ready(grant.run_id) });
+			}
+		} catch {
+			throw new ManagerError(409);
+		}
+	}, config.socketPath);
+	try {
+		await chmod(config.socketPath, config.socketMode ?? 384);
+	} catch (error) {
+		await server.close();
+		throw error;
+	}
+	return server;
+}
+//#endregion
 //#region manager/chat-service.ts
 /** Chat/registration plane only: no legacy lifecycle or update control sockets. */
-async function startChatService(configFile) {
-	keys(record(await readPrivateJson(configFile)), [
+function chatConfig(value) {
+	const config = record(value);
+	keys(config, [
 		"port",
 		"stateDir",
 		"runtimeDir"
 	], [
 		"host",
 		"publicUrl",
-		"leaseMs"
+		"leaseMs",
+		"managerLinks",
+		"provisioning"
 	]);
-	const hub = await startHub(readHubConfig(configFile));
-	return {
-		port: Number(new URL(hub.url).port),
-		close: () => hub.close()
-	};
+	return config;
+}
+async function startChatService(configFile) {
+	const value = chatConfig(await readPrivateJson(configFile));
+	const provisioning = value.provisioning === void 0 ? void 0 : provisioningConfig(value.provisioning);
+	const config = readHubConfig(configFile);
+	const hub = await startHub(config);
+	try {
+		const broker = provisioning ? await startEnrollmentBroker(config, provisioning, (run) => hub.isRunReady(run)) : void 0;
+		return {
+			port: Number(new URL(hub.url).port),
+			close: async () => {
+				try {
+					await broker?.close();
+				} finally {
+					await hub.close();
+				}
+			}
+		};
+	} catch (error) {
+		await hub.close();
+		throw error;
+	}
 }
 //#endregion
 //#region manager/process-entry.ts

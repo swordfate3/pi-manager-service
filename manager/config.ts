@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import type { NativeBackendConfig } from "./backends/native.ts";
 import type { DockerBackendConfig } from "./backends/docker.ts";
 import { identifier, keys, record, requireThat } from "./validation.ts";
+import { runtimeProfile, runtimeProfileSources } from "./backends/runtime-profile.ts";
+import { enrollmentConfig } from "./enrollment/client.ts";
 
 export interface ServiceConfig { socketPath: string; origin: string; chatOrigin: string; port: number }
 export interface ExecutorConfig {
@@ -13,6 +15,7 @@ export interface ExecutorConfig {
   trustedLocalNative: boolean; native: NativeBackendConfig | null;
   docker?: DockerBackendConfig | null;
   workspaces: Record<string, { label: string; root: string; path: string }>;
+  workspaceBrowser?: { home: string; defaultRoot: string };
   recoverStaleLock?: boolean; socketMode?: number;
 }
 export function absolute(value: unknown): string {
@@ -32,7 +35,7 @@ export function serviceConfig(value: unknown): ServiceConfig {
 }
 export function executorConfig(value: unknown): ExecutorConfig {
   const c = record(structuredClone(value));
-  keys(c, ["stateRoot", "submitSocket", "adminSocket", "principals", "trustedLocalNative", "native", "workspaces"], ["docker", "recoverStaleLock", "socketMode"]);
+  keys(c, ["stateRoot", "submitSocket", "adminSocket", "principals", "trustedLocalNative", "native", "workspaces"], ["docker", "workspaceBrowser", "recoverStaleLock", "socketMode"]);
   absolute(c.stateRoot); absolute(c.submitSocket); absolute(c.adminSocket);
   requireThat(path.dirname(c.submitSocket as string) !== path.dirname(c.adminSocket as string));
   requireThat(typeof c.trustedLocalNative === "boolean");
@@ -49,16 +52,15 @@ export function executorConfig(value: unknown): ExecutorConfig {
   requireThat(c.native === null || c.docker == null);
   if (c.docker != null) {
     const d = record(c.docker);
-    keys(d, ["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots"], ["protectedRoots", "timeoutMs", "entrypoint", "command", "web"]);
+    keys(d, ["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots"], ["protectedRoots", "timeoutMs", "startupTimeoutMs", "entrypoint", "command", "web", "runtimeProfile"]);
     const dockerPath = (v: unknown) => { const p = absolute(v); requireThat(p !== path.parse(p).root); return p; };
-    const overlaps = (a: string, b: string) => {
-      const contains = (root: string, value: string) => { const r = path.relative(root, value); return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r); };
-      return contains(a, b) || contains(b, a);
-    };
+    const contains = (root: string, value: string) => { const r = path.relative(root, value); return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r); };
+    const overlaps = (a: string, b: string) => contains(a, b) || contains(b, a);
     dockerPath(d.socketPath); dockerPath(d.stateRoot);
     requireThat(d.pathCoordinates === "host" && typeof d.daemonId === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(d.daemonId));
     requireThat(typeof d.image === "string" && /^sha256:[a-f0-9]{64}$/.test(d.image));
     requireThat(d.timeoutMs === undefined || (Number.isSafeInteger(d.timeoutMs) && (d.timeoutMs as number) >= 1 && (d.timeoutMs as number) <= 120000));
+    requireThat(d.startupTimeoutMs === undefined || (Number.isSafeInteger(d.startupTimeoutMs) && (d.startupTimeoutMs as number) >= 100 && (d.startupTimeoutMs as number) <= 120000));
     for (const args of [d.entrypoint, d.command]) if (args !== undefined) {
       requireThat(Array.isArray(args) && args.length > 0 && args.length <= 64 && args.every(a => typeof a === "string" && a.length > 0 && a.length <= 8192 && !a.includes("\0")));
     }
@@ -68,20 +70,30 @@ export function executorConfig(value: unknown): ExecutorConfig {
       d.stateRoot as string, d.socketPath as string, fileURLToPath(new URL("..", import.meta.url)),
       ...((d.protectedRoots ?? []) as unknown[]).map(dockerPath)];
     if (d.web !== undefined) {
-      const w = record(d.web); keys(w, ["packageRoot", "hubConfigFile", "port"], ["provider"]);
-      protectedPaths.push(dockerPath(w.packageRoot), dockerPath(w.hubConfigFile));
+      const w = record(d.web); keys(w, ["packageRoot", "port"], ["hubConfigFile", "enrollment", "provider"]);
+      requireThat((w.hubConfigFile === undefined) !== (w.enrollment === undefined));
+      protectedPaths.push(dockerPath(w.packageRoot));
+      if (w.hubConfigFile !== undefined) protectedPaths.push(dockerPath(w.hubConfigFile));
+      if (w.enrollment !== undefined) {
+        const e = enrollmentConfig(w.enrollment);
+        protectedPaths.push(path.dirname(e.socketPath), e.authorityFile, e.registryHostDirectory, e.exportHostDirectory);
+      }
       requireThat(Number.isInteger(w.port) && (w.port as number) >= 1 && (w.port as number) <= 65535 && d.command === undefined && d.entrypoint === undefined);
       if (w.provider !== undefined) {
         const p = record(w.provider); keys(p, ["packageRoot", "name", "model"]); protectedPaths.push(dockerPath(p.packageRoot));
         requireThat([p.name,p.model].every(v => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(v)));
       }
     }
+    if (d.runtimeProfile !== undefined) { requireThat(d.web !== undefined); protectedPaths.push(...runtimeProfileSources(runtimeProfile(d.runtimeProfile))); }
     requireThat(!overlaps(c.stateRoot as string, d.stateRoot as string));
     const roots = record(d.workspaceRoots);
     requireThat(Object.keys(roots).length > 0 && Object.keys(roots).length <= 32);
     for (const [name, value] of Object.entries(roots)) {
       identifier(name); const root = dockerPath(value);
-      requireThat(!protectedPaths.some(p => overlaps(root, p)));
+      // Preserve the legacy static policy. The narrower ancestor exception is
+      // opt-in with workspaceBrowser, whose resolver hides protected branches
+      // and rejects every mount that would contain one.
+      requireThat(!protectedPaths.some(p => c.workspaceBrowser === undefined ? overlaps(root, p) : contains(p, root)));
     }
   }
   if (c.native !== null) {
@@ -105,6 +117,17 @@ export function executorConfig(value: unknown): ExecutorConfig {
     requireThat(typeof w.path === "string" && w.path.length <= 512 && !path.isAbsolute(w.path) && !w.path.includes("\\") && !w.path.includes("\0") && !w.path.split("/").includes(".."));
     const backend = (c.docker ?? c.native) as DockerBackendConfig | NativeBackendConfig | null;
     requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, w.root as string));
+  }
+  if (c.workspaceBrowser !== undefined) {
+    const browser = record(c.workspaceBrowser); keys(browser, ["home", "defaultRoot"]);
+    const home = absolute(browser.home); requireThat(home !== path.parse(home).root);
+    const defaultRoot = identifier(browser.defaultRoot);
+    const backend = (c.docker ?? c.native) as DockerBackendConfig | NativeBackendConfig | null;
+    requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, defaultRoot));
+    for (const root of Object.values(backend.workspaceRoots)) {
+      const relative = path.relative(home, root);
+      requireThat(relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    }
   }
   return c as unknown as ExecutorConfig;
 }

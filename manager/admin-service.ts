@@ -4,7 +4,7 @@ import { AdminClient } from "./executor/admin-client.ts";
 import { bearer, boundary, jsonBody, listen, reply } from "./http.ts";
 import { keys, ManagerError, record, requireThat, taskId, token } from "./validation.ts";
 import { renderPage, renderScript } from "./ui.ts";
-import type { ApprovalBinding, TaskSubmission, VersionQueryOptions } from "./api.ts";
+import type { ApprovalBinding, TaskSubmission, VersionQueryOptions, WorkspaceBrowseQuery } from "./api.ts";
 
 /** Run privately, with only the separately provisioned admin socket accessible.
  * Credentials are typed into this origin, exchanged for short-lived memory-only bearer,
@@ -43,6 +43,7 @@ export async function startAdminService(value: unknown) {
         const b = record(body); keys(b, ["taskId", "revision"]);
         reply(res, 200, await client.executeTask(b as { taskId: string; revision: number }));
       } else if (req.url === "/api/manager/versions") reply(res, 200, await client.versions(body as VersionQueryOptions));
+      else if (req.url === "/api/manager/workspaces/browse") reply(res, 200, await client.browseWorkspaces(body as WorkspaceBrowseQuery));
       else if (req.url === "/api/manager/tasks") reply(res, 202, await client.submitTask(body as TaskSubmission));
       else throw new ManagerError(404);
       return;
@@ -50,6 +51,7 @@ export async function startAdminService(value: unknown) {
     requireThat(req.method === "GET", 404);
     if (req.url === "/api/manager/tasks") reply(res, 200, await client.listTasks());
     else if (req.url === "/api/manager/workspaces") reply(res, 200, await client.workspaces());
+    else if (req.url === "/api/manager/workspace-browser") reply(res, 200, await client.workspaceBrowser());
     else if (req.url === "/api/manager/capabilities") reply(res, 200, await client.capabilities());
     else if (/^\/api\/manager\/tasks\/[^/]+\/review$/.test(req.url!)) reply(res, 200, await client.reviewTask(taskId(req.url!.split("/")[4])));
     else if (req.url?.startsWith("/api/manager/tasks/")) reply(res, 200, await client.getTask(taskId(req.url.slice("/api/manager/tasks/".length))));

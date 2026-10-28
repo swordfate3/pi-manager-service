@@ -1,5 +1,8 @@
 import type { TaskRecord } from "./contracts.ts";
-export type TaskSubmission = { key: string; action: "create"; target: string; workspace: string } | { key: string; action: "stop" | "start"; target: string };
+export interface WorkspaceSelection { root: string; path: string }
+export interface WorkspaceBrowseQuery { root: string; path: string }
+export interface WorkspaceDirectoryPage { root: string; path: string; directories: { name: string; path: string }[]; truncated: boolean }
+export type TaskSubmission = { key: string; action: "create"; target: string; workspace: string | WorkspaceSelection } | { key: string; action: "stop" | "start"; target: string };
 export type TaskView = Omit<TaskRecord, "result"> & { result?: { status: string; instanceId?: string } };
 export interface TaskClient {
   submitTask(request: TaskSubmission): Promise<TaskView>;
@@ -10,6 +13,7 @@ export interface TaskClient {
 export interface ApprovalBinding { taskId: string; revision: number; requestHash: string; policyHash: string }
 export interface TaskReview { task: TaskView; binding: ApprovalBinding; requiresFreshApproval: boolean }
 export interface WorkspaceChoice { id: string; label: string }
+export interface WorkspaceBrowserView { defaultRoot: string; roots: WorkspaceChoice[] }
 export interface Capabilities { native: boolean; isolation: "trusted-local-development" | "fixed-container" | "unavailable"; enrollment: boolean; docker: boolean; updates: false; approval: boolean }
 export interface VersionQueryOptions { query?: string; cursor?: string; limit?: number }
 export interface VersionCatalogPage {

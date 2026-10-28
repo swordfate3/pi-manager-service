@@ -40,12 +40,13 @@ function mockOfficialVersions(t: any) {
   return { version, calls: () => calls };
 }
 
-async function fixture(t: any) {
+async function fixture(t: any, dynamicWorkspace = false) {
   const cleanups: (() => Promise<void>)[] = [];
   const native = await harness({ after: (fn: () => Promise<void>) => cleanups.push(fn) } as any);
   const config = { stateRoot: path.join(native.parent, "mcp-tasks"), submitSocket: path.join(native.parent, "submit", "rpc.sock"), adminSocket: path.join(native.parent, "admin", "rpc.sock"),
     principals: [{ id: "mcp-agent", role: "submitter" as const, tokenHash: digest(credential) }, { id: "operator", role: "admin" as const, tokenHash: digest(administrator) }],
-    trustedLocalNative: true, native: native.config, workspaces: { project: { label: "Synthetic project", root: "work", path: "project" } } };
+    trustedLocalNative: true, native: native.config, workspaces: { project: { label: "Synthetic project", root: "work", path: "project" } },
+    ...(dynamicWorkspace ? { workspaceBrowser: { home: native.parent, defaultRoot: "work" } } : {}) };
   for (const n of ["submit", "admin"]) await mkdir(path.join(native.parent, n), { mode: 0o700 });
   let executor = await startExecutor(config);
   let module: typeof import("../manager/mcp/server.ts") | undefined;
@@ -90,6 +91,19 @@ test("MCP tool surface denies self-approval and extra authority fields", async t
   assert.equal(forged.isError, true);
   const http = new ExecutorClient({ socketPath: f.config.submitSocket, credential });
   assert.deepEqual(await http.listTasks(), []);
+});
+
+test("MCP submit accepts the same safe dynamic workspace selection without exposing approval tools", async t => {
+  const f = await fixture(t, true);
+  await f.client.connect(f.transport);
+  const result = await f.client.callTool({ name: "manager_submit_task", arguments: {
+    key: "mcp-dynamic", action: "create", target: "mcp-dynamic", workspace: { root: "work", path: "project" },
+  } });
+  assert.equal(result.isError, undefined);
+  const task = JSON.parse((result.content[0] as any).text);
+  assert.equal(task.state, "pending_approval");
+  assert.deepEqual(task.payload, { workspace: { root: "work", path: "project" } });
+  await assert.rejects(f.client.callTool({ name: "manager_approve_task", arguments: { taskId: task.id } }));
 });
 
 test("official MCP version tool is strict, read-only and shares the executor catalog", async t => {

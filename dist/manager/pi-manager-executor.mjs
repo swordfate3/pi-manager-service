@@ -7,8 +7,9 @@ import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, ran
 import http, { createServer } from "node:http";
 import { Agent, request } from "node:https";
 import { checkServerIdentity, rootCertificates } from "node:tls";
-import { spawn } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import net, { isIP } from "node:net";
+import { spawn } from "node:child_process";
 //#region manager/validation.ts
 var ManagerError = class extends Error {
 	status;
@@ -61,6 +62,214 @@ function equalHash(a, b) {
 	return a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 //#endregion
+//#region manager/backends/runtime-profile.ts
+var absolute$4 = (v) => {
+	requireThat(typeof v === "string" && path.isAbsolute(v) && v !== "/" && path.resolve(v) === v && !v.includes("\0") && !v.includes("\\"));
+	return v;
+};
+function runtimeProfile(value) {
+	const p = record$1(structuredClone(value));
+	keys(p, [], [
+		"runtimeVolume",
+		"modelsFile",
+		"environment",
+		"extensions"
+	]);
+	if (p.runtimeVolume !== void 0) requireThat(typeof p.runtimeVolume === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(p.runtimeVolume) && !p.runtimeVolume.startsWith("pi-manager-home-"));
+	if (p.modelsFile !== void 0) absolute$4(p.modelsFile);
+	if (p.environment !== void 0) {
+		const env = record$1(p.environment);
+		requireThat(Object.keys(env).length <= 32);
+		let bytes = 0;
+		for (const [key, value] of Object.entries(env)) {
+			requireThat(/^[A-Z_][A-Z0-9_]*$/.test(key) && ![
+				"HOME",
+				"PATH",
+				"NODE_OPTIONS",
+				"NODE_PATH"
+			].includes(key) && !/^(LD_|PI_)/.test(key));
+			requireThat(typeof value === "string" && !value.includes("\0"));
+			bytes += Buffer.byteLength(`${key}=${value}\0`);
+		}
+		requireThat(bytes <= 8192);
+		Object.freeze(env);
+	}
+	if (p.extensions !== void 0) {
+		requireThat(Array.isArray(p.extensions) && p.extensions.length <= 16);
+		for (const value of p.extensions) {
+			const e = record$1(value);
+			keys(e, ["packageRoot", "entry"]);
+			absolute$4(e.packageRoot);
+			requireThat(typeof e.entry === "string" && e.entry.length <= 512 && !/[\\\0]/.test(e.entry) && e.entry.split("/").every((s) => s !== "" && s !== "." && s !== "..") && /\.(ts|js|mjs)$/.test(e.entry));
+			Object.freeze(e);
+		}
+		Object.freeze(p.extensions);
+	}
+	return Object.freeze(p);
+}
+var runtimeProfileSources = (p) => p ? [...p.modelsFile ? [p.modelsFile] : [], ...(p.extensions ?? []).map((e) => e.packageRoot)] : [];
+async function validateRuntimeSources(profile) {
+	try {
+		if (profile.modelsFile) {
+			requireThat(await realpath(profile.modelsFile) === profile.modelsFile);
+			const file = await open(profile.modelsFile, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+			try {
+				const info = await file.stat();
+				requireThat(info.isFile() && info.size <= 1024 * 1024);
+				record$1(JSON.parse(await file.readFile("utf8")));
+			} finally {
+				await file.close();
+			}
+		}
+		for (const e of profile.extensions ?? []) {
+			requireThat(await realpath(e.packageRoot) === e.packageRoot && (await stat(e.packageRoot)).isDirectory());
+			const entry = path.join(e.packageRoot, e.entry);
+			requireThat(await realpath(entry) === entry && (await stat(entry)).isFile());
+		}
+	} catch {
+		throw new ManagerError(400);
+	}
+}
+function runtimeProfileMounts(p) {
+	return p ? [
+		...p.runtimeVolume ? [{
+			Type: "volume",
+			Source: p.runtimeVolume,
+			Target: "/home/node/.local",
+			ReadOnly: true,
+			VolumeOptions: { NoCopy: true }
+		}] : [],
+		...p.modelsFile ? [{
+			Type: "bind",
+			Source: p.modelsFile,
+			Target: "/home/node/.pi/manager-agent/models.json",
+			ReadOnly: true
+		}] : [],
+		...(p.extensions ?? []).map((e, i) => ({
+			Type: "bind",
+			Source: e.packageRoot,
+			Target: `/opt/pi-profile/extensions/${i}`,
+			ReadOnly: true
+		}))
+	] : [];
+}
+//#endregion
+//#region manager/enrollment/client.ts
+function enrollmentConfig(value) {
+	const e = record$1(structuredClone(value));
+	keys(e, [
+		"socketPath",
+		"authorityFile",
+		"registryHostDirectory",
+		"exportHostDirectory"
+	]);
+	for (const p of Object.values(e)) requireThat(absolute$3(p) !== "/" && !p.includes("\\"));
+	const overlaps = (a, b) => a === b || a.startsWith(b + "/") || b.startsWith(a + "/");
+	const paths = [
+		path.dirname(e.socketPath),
+		e.authorityFile,
+		e.registryHostDirectory,
+		e.exportHostDirectory
+	];
+	requireThat(!paths.some((a, i) => paths.slice(i + 1).some((b) => overlaps(a, b))));
+	return Object.freeze(e);
+}
+/** Nonblocking descriptor checks precede reads, including for FIFOs/devices. */
+async function readEnrollmentAuthority(file) {
+	try {
+		const handle = await open(absolute$3(file), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+		try {
+			const s = await handle.stat();
+			requireThat(s.isFile() && s.uid === process.getuid?.() && s.nlink === 1 && (s.mode & 63) === 0 && s.size <= 8192, 403);
+			const value = record$1(JSON.parse(await handle.readFile("utf8")));
+			keys(value, ["token"]);
+			return token(value.token);
+		} finally {
+			await handle.close();
+		}
+	} catch {
+		throw new ManagerError(403);
+	}
+}
+var EnrollmentClient = class {
+	#config;
+	#active = /* @__PURE__ */ new Set();
+	#closed = false;
+	constructor(config) {
+		this.#config = structuredClone(config);
+	}
+	async #call(operation, key, label, timeoutMs = 5e3) {
+		const data = JSON.stringify({
+			key: taskId(key),
+			label: identifier$1(label)
+		});
+		requireThat(!this.#closed && this.#active.size < 16, 503);
+		const authority = await readEnrollmentAuthority(this.#config.authorityFile);
+		requireThat(!this.#closed && this.#active.size < 16, 503);
+		return new Promise((resolve, reject) => {
+			let done = false;
+			const req = http.request({
+				socketPath: this.#config.socketPath,
+				path: `/${operation}`,
+				method: "POST",
+				agent: false,
+				headers: {
+					host: "pi-enrollment",
+					authorization: `Bearer ${authority}`,
+					"content-type": "application/json",
+					"content-length": Buffer.byteLength(data)
+				}
+			});
+			this.#active.add(req);
+			const finish = (value) => {
+				if (done) return;
+				done = true;
+				clearTimeout(timer);
+				this.#active.delete(req);
+				req.destroy();
+				if (value) resolve(value);
+				else reject(new ManagerError(503));
+			};
+			const timer = setTimeout(() => finish(), Math.max(1, Math.min(timeoutMs, 5e3)));
+			req.on("error", () => finish());
+			req.on("response", (res) => {
+				let size = 0;
+				const chunks = [];
+				res.on("error", () => finish());
+				res.on("aborted", () => finish());
+				res.on("data", (chunk) => {
+					size += chunk.length;
+					if (size > 1024) finish();
+					else chunks.push(chunk);
+				});
+				res.on("end", () => {
+					if (done) return;
+					try {
+						requireThat(res.statusCode === 200);
+						const value = record$1(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+						keys(value, operation === "issue" ? ["ok"] : ["ready"]);
+						requireThat(operation === "issue" ? value.ok === true : typeof value.ready === "boolean");
+						finish(value);
+					} catch {
+						finish();
+					}
+				});
+			});
+			req.end(data);
+		});
+	}
+	async issue(key, label) {
+		await this.#call("issue", key, label);
+	}
+	async status(key, label, timeoutMs) {
+		return (await this.#call("status", key, label, timeoutMs)).ready === true;
+	}
+	close() {
+		this.#closed = true;
+		for (const req of this.#active) req.destroy();
+	}
+};
+//#endregion
 //#region manager/config.ts
 function absolute$3(value) {
 	requireThat(typeof value === "string" && path.isAbsolute(value) && !value.includes("\0") && path.resolve(value) === value);
@@ -78,6 +287,7 @@ function executorConfig(value) {
 		"workspaces"
 	], [
 		"docker",
+		"workspaceBrowser",
 		"recoverStaleLock",
 		"socketMode"
 	]);
@@ -119,27 +329,28 @@ function executorConfig(value) {
 		], [
 			"protectedRoots",
 			"timeoutMs",
+			"startupTimeoutMs",
 			"entrypoint",
 			"command",
-			"web"
+			"web",
+			"runtimeProfile"
 		]);
 		const dockerPath = (v) => {
 			const p = absolute$3(v);
 			requireThat(p !== path.parse(p).root);
 			return p;
 		};
-		const overlaps = (a, b) => {
-			const contains = (root, value) => {
-				const r = path.relative(root, value);
-				return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r);
-			};
-			return contains(a, b) || contains(b, a);
+		const contains = (root, value) => {
+			const r = path.relative(root, value);
+			return r !== ".." && !r.startsWith(`..${path.sep}`) && !path.isAbsolute(r);
 		};
+		const overlaps = (a, b) => contains(a, b) || contains(b, a);
 		dockerPath(d.socketPath);
 		dockerPath(d.stateRoot);
 		requireThat(d.pathCoordinates === "host" && typeof d.daemonId === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(d.daemonId));
 		requireThat(typeof d.image === "string" && /^sha256:[a-f0-9]{64}$/.test(d.image));
 		requireThat(d.timeoutMs === void 0 || Number.isSafeInteger(d.timeoutMs) && d.timeoutMs >= 1 && d.timeoutMs <= 12e4);
+		requireThat(d.startupTimeoutMs === void 0 || Number.isSafeInteger(d.startupTimeoutMs) && d.startupTimeoutMs >= 100 && d.startupTimeoutMs <= 12e4);
 		for (const args of [d.entrypoint, d.command]) if (args !== void 0) requireThat(Array.isArray(args) && args.length > 0 && args.length <= 64 && args.every((a) => typeof a === "string" && a.length > 0 && a.length <= 8192 && !a.includes("\0")));
 		requireThat(d.protectedRoots === void 0 || Array.isArray(d.protectedRoots) && d.protectedRoots.length <= 61);
 		const protectedPaths = [
@@ -153,12 +364,18 @@ function executorConfig(value) {
 		];
 		if (d.web !== void 0) {
 			const w = record$1(d.web);
-			keys(w, [
-				"packageRoot",
+			keys(w, ["packageRoot", "port"], [
 				"hubConfigFile",
-				"port"
-			], ["provider"]);
-			protectedPaths.push(dockerPath(w.packageRoot), dockerPath(w.hubConfigFile));
+				"enrollment",
+				"provider"
+			]);
+			requireThat(w.hubConfigFile === void 0 !== (w.enrollment === void 0));
+			protectedPaths.push(dockerPath(w.packageRoot));
+			if (w.hubConfigFile !== void 0) protectedPaths.push(dockerPath(w.hubConfigFile));
+			if (w.enrollment !== void 0) {
+				const e = enrollmentConfig(w.enrollment);
+				protectedPaths.push(path.dirname(e.socketPath), e.authorityFile, e.registryHostDirectory, e.exportHostDirectory);
+			}
 			requireThat(Number.isInteger(w.port) && w.port >= 1 && w.port <= 65535 && d.command === void 0 && d.entrypoint === void 0);
 			if (w.provider !== void 0) {
 				const p = record$1(w.provider);
@@ -171,13 +388,17 @@ function executorConfig(value) {
 				requireThat([p.name, p.model].every((v) => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(v)));
 			}
 		}
+		if (d.runtimeProfile !== void 0) {
+			requireThat(d.web !== void 0);
+			protectedPaths.push(...runtimeProfileSources(runtimeProfile(d.runtimeProfile)));
+		}
 		requireThat(!overlaps(c.stateRoot, d.stateRoot));
 		const roots = record$1(d.workspaceRoots);
 		requireThat(Object.keys(roots).length > 0 && Object.keys(roots).length <= 32);
 		for (const [name, value] of Object.entries(roots)) {
 			identifier$1(name);
 			const root = dockerPath(value);
-			requireThat(!protectedPaths.some((p) => overlaps(root, p)));
+			requireThat(!protectedPaths.some((p) => c.workspaceBrowser === void 0 ? overlaps(root, p) : contains(p, root)));
 		}
 	}
 	if (c.native !== null) {
@@ -243,6 +464,19 @@ function executorConfig(value) {
 		const backend = c.docker ?? c.native;
 		requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, w.root));
 	}
+	if (c.workspaceBrowser !== void 0) {
+		const browser = record$1(c.workspaceBrowser);
+		keys(browser, ["home", "defaultRoot"]);
+		const home = absolute$3(browser.home);
+		requireThat(home !== path.parse(home).root);
+		const defaultRoot = identifier$1(browser.defaultRoot);
+		const backend = c.docker ?? c.native;
+		requireThat(backend !== null && Object.hasOwn(backend.workspaceRoots, defaultRoot));
+		for (const root of Object.values(backend.workspaceRoots)) {
+			const relative = path.relative(home, root);
+			requireThat(relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+		}
+	}
 	return c;
 }
 /** Provisioning owns OS users/groups/mounts; checking a mode is NOT proof of isolation. */
@@ -274,6 +508,9 @@ function header(req, name) {
 }
 function bearer(req) {
 	const auth = header(req, "authorization");
+	const management = header(req, "x-pi-manager-token");
+	requireThat(!(auth !== void 0 && management !== void 0));
+	if (management !== void 0) return token(management);
 	requireThat(auth && auth.startsWith("Bearer "), 401);
 	return token(auth.slice(7));
 }
@@ -1478,324 +1715,6 @@ var ReleaseCatalog = class {
 	}
 };
 //#endregion
-//#region manager/executor/engine.ts
-var MAX_VERSION_QUERIES = 16;
-function requestHash(t) {
-	return digest(canonical({
-		key: t.key,
-		requester: t.requester,
-		target: t.target,
-		action: t.action,
-		payload: t.payload
-	}));
-}
-function view(t) {
-	const { result, ...rest } = t;
-	const r = result && typeof result === "object" && !Array.isArray(result) ? result : void 0;
-	return {
-		...rest,
-		...r && typeof r.status === "string" ? { result: {
-			status: r.status,
-			...typeof r.instanceId === "string" ? { instanceId: r.instanceId } : {}
-		} } : {}
-	};
-}
-var TaskEngine = class TaskEngine {
-	#config;
-	#store;
-	#adapter;
-	#policyHash;
-	#adapterPolicy;
-	#approvals = /* @__PURE__ */ new Map();
-	#running = /* @__PURE__ */ new Set();
-	#catalog;
-	#catalogQueries = /* @__PURE__ */ new Set();
-	#shutdown = new AbortController();
-	#tail = Promise.resolve();
-	#closing = false;
-	#closePromise;
-	constructor(config, store, adapter, options) {
-		this.#config = structuredClone(config);
-		this.#store = store;
-		this.#adapter = adapter;
-		this.#catalog = options.catalog ?? new ReleaseCatalog({ metadataDeadlineMs: 2500 });
-		this.#adapterPolicy = canonical({
-			policy: adapter?.policy ?? null,
-			actions: adapter?.actions ?? []
-		});
-		this.#policyHash = digest(canonical({
-			workspaces: config.workspaces,
-			principals: config.principals.map((p) => ({
-				id: p.id,
-				role: p.role
-			})),
-			adapter: this.#adapterPolicy
-		}));
-	}
-	static async open(config, adapter, options = {}) {
-		const store = await TaskStore.open(config.stateRoot, { recoverStaleLock: config.recoverStaleLock });
-		const engine = new TaskEngine(config, store, adapter, options);
-		try {
-			for (const task of await store.list()) if (task.state === "running" || task.state === "waiting_idle") await store.transition(task.id, task.state, "unknown", { expectedRevision: task.revision });
-			await adapter?.restore?.(await store.list());
-			return engine;
-		} catch (error) {
-			await store.close();
-			throw error;
-		}
-	}
-	async dispatch(transport, credential, message) {
-		requireThat(!this.#closing, 503);
-		const h = digest(token(credential));
-		const principal = this.#config.principals.find((p) => equalHash(p.tokenHash, h));
-		requireThat(principal, 401);
-		requireThat(transport === "admin" ? principal.role === "admin" : principal.role === "submitter", 403);
-		const m = record$1(message);
-		const admin = transport === "admin";
-		if ([
-			"review",
-			"approve",
-			"execute"
-		].includes(m.op)) requireThat(admin, 403);
-		const copy = structuredClone(m);
-		if (copy.op === "versions") return await this.#versions(copy);
-		const pending = this.#tail.then(() => this.#handle(principal, admin, copy));
-		this.#tail = pending.catch(() => {});
-		try {
-			return await pending;
-		} catch (e) {
-			if (e instanceof TaskStoreConflictError) throw new ManagerError(409);
-			throw e;
-		}
-	}
-	async #versions(message) {
-		keys(message, ["op", "options"]);
-		const options = record$1(message.options);
-		keys(options, [], [
-			"query",
-			"cursor",
-			"limit"
-		]);
-		const copy = structuredClone(options);
-		requireThat(this.#catalogQueries.size < MAX_VERSION_QUERIES, 503);
-		const operation = this.#catalog.list(PI_PACKAGE, copy).catch((error) => {
-			if (error instanceof CatalogError && error.code === "invalid-query") throw new ManagerError(400);
-			throw new ManagerError(503);
-		});
-		this.#catalogQueries.add(operation);
-		try {
-			return await operation;
-		} finally {
-			this.#catalogQueries.delete(operation);
-		}
-	}
-	async #task(id, p, admin) {
-		const task = await this.#store.get(taskId(id));
-		requireThat(task && (admin || task.requester === p.id), 404);
-		return task;
-	}
-	#assertPolicy() {
-		requireThat(canonical({
-			policy: this.#adapter?.policy ?? null,
-			actions: this.#adapter?.actions ?? []
-		}) === this.#adapterPolicy, 409);
-	}
-	async #handle(p, admin, m) {
-		if (m.op === "capabilities") {
-			keys(m, ["op"]);
-			const capabilities = this.#adapter?.capabilities;
-			return {
-				native: capabilities?.native ?? false,
-				docker: capabilities?.docker ?? false,
-				isolation: capabilities?.isolation ?? "unavailable",
-				enrollment: capabilities?.enrollment ?? false,
-				updates: false,
-				approval: admin
-			};
-		}
-		if (m.op === "workspaces") {
-			keys(m, ["op"]);
-			return Object.entries(this.#config.workspaces).map(([id, w]) => ({
-				id,
-				label: w.label
-			}));
-		}
-		if (m.op === "resources") {
-			keys(m, ["op"]);
-			return await this.#adapter?.resources(p.id) ?? [];
-		}
-		if (m.op === "list") {
-			keys(m, ["op"]);
-			return (await this.#store.list()).filter((t) => !!t && (admin || t.requester === p.id)).map(view);
-		}
-		if (m.op === "submit") {
-			keys(m, ["op", "request"]);
-			const r = record$1(m.request);
-			requireThat(r.action === "create" || r.action === "stop" || r.action === "start", 503);
-			keys(r, r.action === "create" ? [
-				"key",
-				"action",
-				"target",
-				"workspace"
-			] : [
-				"key",
-				"action",
-				"target"
-			]);
-			const request = {
-				key: identifier$1(r.key),
-				requester: p.id,
-				target: identifier$1(r.target),
-				action: r.action,
-				payload: r.action === "create" ? { workspace: identifier$1(r.workspace) } : {}
-			};
-			if (r.action === "create") requireThat(Object.hasOwn(this.#config.workspaces, r.workspace));
-			requireThat(this.#adapter?.actions.includes(r.action), 503);
-			if (!(await this.#store.list()).find((t) => t.requester === p.id && t.key === r.key)) await this.#adapter.validate(request);
-			return view(await this.#store.submit(request));
-		}
-		if (m.op === "get" || m.op === "review") {
-			keys(m, ["op", "taskId"]);
-			const t = await this.#task(m.taskId, p, admin);
-			if (m.op === "get") return view(t);
-			return {
-				task: view(t),
-				binding: {
-					taskId: t.id,
-					revision: t.revision,
-					requestHash: requestHash(t),
-					policyHash: this.#policyHash
-				},
-				requiresFreshApproval: !this.#approvals.has(t.id)
-			};
-		}
-		if (m.op === "approve") {
-			keys(m, [
-				"op",
-				"taskId",
-				"revision",
-				"requestHash",
-				"policyHash"
-			]);
-			const t = await this.#task(m.taskId, p, admin);
-			requireThat(t.requester !== p.id, 403);
-			requireThat(t.revision === revision(m.revision) && ["pending_approval", "queued"].includes(t.state) && !this.#approvals.has(t.id), 409);
-			requireThat(m.requestHash === requestHash(t) && m.policyHash === this.#policyHash, 409);
-			this.#assertPolicy();
-			requireThat(this.#adapter?.actions.includes(t.action), 503);
-			await this.#adapter.validate(t);
-			this.#assertPolicy();
-			const approved = t.state === "pending_approval" ? await this.#store.transition(t.id, "pending_approval", "queued", { expectedRevision: t.revision }) : t;
-			this.#approvals.set(t.id, {
-				taskId: t.id,
-				revision: approved.revision,
-				requestHash: requestHash(t),
-				policyHash: this.#policyHash
-			});
-			return view(approved);
-		}
-		if (m.op === "execute") {
-			keys(m, [
-				"op",
-				"taskId",
-				"revision"
-			]);
-			const t = await this.#task(m.taskId, p, admin);
-			requireThat(t.revision === revision(m.revision) && ["pending_approval", "queued"].includes(t.state), 409);
-			const approval = this.#approvals.get(t.id);
-			requireThat(approval && t.state === "queued" && approval.revision === t.revision && approval.requestHash === requestHash(t) && approval.policyHash === this.#policyHash, 403);
-			this.#assertPolicy();
-			requireThat(this.#adapter?.actions.includes(t.action), 503);
-			await this.#adapter.validate(t);
-			this.#assertPolicy();
-			const started = await this.#store.transition(t.id, "queued", this.#adapter.waitForIdle ? "waiting_idle" : "running", { expectedRevision: t.revision });
-			this.#approvals.delete(t.id);
-			const operation = this.#execute(started);
-			this.#running.add(operation);
-			operation.finally(() => this.#running.delete(operation));
-			return view(started);
-		}
-		throw new ManagerError(400);
-	}
-	async #execute(task) {
-		let executionStarted = false;
-		try {
-			if (task.state === "waiting_idle") {
-				await this.#waitForIdle(task);
-				this.#shutdown.signal.throwIfAborted();
-				this.#assertPolicy();
-				await this.#adapter.validate(structuredClone(task));
-				this.#shutdown.signal.throwIfAborted();
-				this.#assertPolicy();
-				task = await this.#store.transition(task.id, "waiting_idle", "running", { expectedRevision: task.revision });
-			}
-			this.#shutdown.signal.throwIfAborted();
-			executionStarted = true;
-			const result = await this.#adapter.execute(structuredClone(task));
-			await this.#store.transition(task.id, "running", "succeeded", {
-				expectedRevision: task.revision,
-				result
-			});
-		} catch (error) {
-			const unknown = error instanceof DockerOutcomeUnknownError || error instanceof ExecutionOutcomeUnknownError;
-			const stopping = !executionStarted && this.#shutdown.signal.aborted && error === this.#shutdown.signal.reason;
-			await this.#store.transition(task.id, task.state, unknown ? "unknown" : stopping ? "cancelled" : "failed", {
-				expectedRevision: task.revision,
-				result: { status: unknown ? "execution-outcome-unknown" : stopping ? "executor-stopping" : "execution-failed" }
-			}).catch(() => {});
-		}
-	}
-	async #waitForIdle(task) {
-		const signal = this.#shutdown.signal;
-		signal.throwIfAborted();
-		let rejectAbort;
-		const aborted = new Promise((_resolve, reject) => {
-			rejectAbort = reject;
-		});
-		const onAbort = () => rejectAbort(signal.reason);
-		signal.addEventListener("abort", onAbort, { once: true });
-		try {
-			await Promise.race([this.#adapter.waitForIdle(structuredClone(task), signal), aborted]);
-		} finally {
-			signal.removeEventListener("abort", onAbort);
-		}
-	}
-	close() {
-		this.#closing = true;
-		this.#shutdown.abort();
-		return this.#closePromise ??= (async () => {
-			await this.#tail;
-			await Promise.all(this.#running);
-			await Promise.allSettled([...this.#catalogQueries]);
-			try {
-				await this.#adapter?.close();
-			} finally {
-				this.#approvals.clear();
-				await this.#store.close();
-			}
-		})();
-	}
-};
-//#endregion
-//#region manager/process-identity.ts
-/** Linux-only observation, never authority to adopt or signal a process. */
-function readProcessIdentity(pid) {
-	if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0) return null;
-	try {
-		const content = readFileSync(`/proc/${pid}/stat`, "utf8");
-		const end = content.lastIndexOf(")");
-		if (end < 0) return null;
-		const startTicks = content.slice(end + 2).trim().split(/\s+/)[19];
-		const identity = `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${startTicks}`;
-		return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$/.test(identity) ? identity : null;
-	} catch {
-		return null;
-	}
-}
-function matchesProcessIdentity(pid, identity) {
-	return identity !== null && readProcessIdentity(pid) === identity;
-}
-//#endregion
 //#region protocol/connection-config.ts
 /** Never include the supplied value in errors: it may contain a credential. */
 function validatedPublicUrl(value) {
@@ -2259,6 +2178,7 @@ function readHubConfig(file) {
 	if (runtimeDir === stateDir || runtimeDir.startsWith(`${stateDir}${path.sep}`) || stateDir.startsWith(`${runtimeDir}${path.sep}`)) throw new Error("Hub IPC and administrator state must be separate directories");
 	const publicUrl = value.publicUrl === void 0 ? void 0 : validatedPublicUrl(value.publicUrl);
 	if (publicUrl && new URL(publicUrl).pathname !== "/") throw new Error("Hub public URL must use the domain root");
+	const managerLinks = value.managerLinks === void 0 ? void 0 : managerLinksConfig(value.managerLinks, publicUrl);
 	if (process.platform === "win32") throw new Error("Bundled hub currently requires Unix IPC (Linux/macOS); standalone Pi Web still works");
 	const lifecycle = value.lifecycle === void 0 ? void 0 : lifecycleConfig(value.lifecycle);
 	const runtimeUpdates = value.runtimeUpdates === void 0 ? void 0 : lifecycleConfig(value.runtimeUpdates);
@@ -2272,10 +2192,33 @@ function readHubConfig(file) {
 		port,
 		leaseMs,
 		publicUrl,
+		...managerLinks ? { managerLinks } : {},
 		...lifecycle ? { lifecycle } : {},
 		...runtimeUpdates ? { runtimeUpdates } : {},
 		...gateManagement ? { gateManagement } : {},
 		...management ? { management } : {}
+	};
+}
+function managerLinksConfig(value, chatPublicUrl) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid manager links configuration");
+	const links = value;
+	if (Object.keys(links).some((key) => key !== "requester" && key !== "administrator") || !chatPublicUrl) throw new Error("Manager links require a canonical chat public URL");
+	const root = (url) => {
+		const canonical = validatedPublicUrl(url);
+		if (canonical !== `${new URL(canonical).origin}/`) throw new Error("Manager links must use canonical root URLs");
+		return canonical;
+	};
+	const requester = root(links.requester);
+	const administrator = links.administrator === void 0 ? void 0 : root(links.administrator);
+	const origins = [
+		new URL(chatPublicUrl).origin,
+		new URL(requester).origin,
+		...administrator ? [new URL(administrator).origin] : []
+	];
+	if (new Set(origins).size !== origins.length) throw new Error("Manager links must use separate origins");
+	return {
+		requester,
+		...administrator ? { administrator } : {}
 	};
 }
 function managementConfig(value, chatPort, chatPublicUrl) {
@@ -2309,14 +2252,36 @@ function hasControls(value) {
 function readGrant(config, runId) {
 	if (!/^[0-9a-f]{32}$/.test(runId)) throw new Error("Invalid session capability");
 	const grant = readPrivateJson(path.join(config.stateDir, "grants", `${runId}.json`));
-	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean") throw new Error("Invalid session capability");
+	if (grant.run_id !== runId || !/^[0-9a-f]{64}$/.test(grant.token) || typeof grant.label !== "string" || grant.label.length > 120 || hasControls(grant.label) || typeof grant.backendHost !== "string" || !validHost(grant.backendHost) || grant.revoked !== void 0 && typeof grant.revoked !== "boolean" || grant.provisionKey !== void 0 && !validProvisionKey(grant.provisionKey)) throw new Error("Invalid session capability");
 	return grant;
+}
+var validProvisionKey = (key) => typeof key === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(key);
+/** Local private-state lookup only. Caller holds the existing state writer lock. */
+function provisionGrant(config, key) {
+	if (!validProvisionKey(key)) throw new Error("Invalid provisioning key");
+	const dir = opendirSync(path.join(config.stateDir, "grants"));
+	let found;
+	let count = 0;
+	try {
+		for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+			if (++count > 32768) throw new Error("Hub grant scan limit exceeded");
+			if (!/^[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+			const grant = readGrant(config, entry.name.slice(0, -5));
+			if (grant.provisionKey !== key) continue;
+			if (found) throw new Error("Ambiguous provisioning key");
+			found = grant;
+		}
+	} finally {
+		dir.closeSync();
+	}
+	return found;
 }
 function issueSession(config, output, options) {
 	privateDirectory(config.stateDir);
 	privateDirectory(path.join(config.stateDir, "grants"));
 	const backendHost = options.backendHost ?? "127.0.0.1";
 	if (!validHost(backendHost) || !options.label.trim() || options.label.length > 120 || hasControls(options.label)) throw new Error("Invalid session label or backend host");
+	if (options.provisionKey !== void 0 && !validProvisionKey(options.provisionKey)) throw new Error("Invalid provisioning key");
 	const credential = {
 		run_id: randomBytes(16).toString("hex"),
 		token: randomBytes(32).toString("hex"),
@@ -2327,12 +2292,33 @@ function issueSession(config, output, options) {
 		label: options.label,
 		backendHost,
 		revoked: false,
-		exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`)
+		exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`),
+		...options.provisionKey ? { provisionKey: options.provisionKey } : {}
 	};
 	const resolvedOutput = path.join(realpathSync(path.dirname(path.resolve(output))), path.basename(output));
 	const stateRoot = realpathSync(config.stateDir);
 	if (resolvedOutput === config.socketPath || resolvedOutput === stateRoot || resolvedOutput.startsWith(`${stateRoot}${path.sep}`)) throw new Error("Session credential must be outside the administrator state directory");
-	withStateWriter(config, (writer) => {
+	return withStateWriter(config, (writer) => {
+		if (options.provisionKey) {
+			writer.assertAdmission();
+			const previous = provisionGrant(config, options.provisionKey);
+			if (previous) {
+				if (previous.revoked || previous.label !== options.label || previous.backendHost !== backendHost) throw new Error("Provisioning conflict");
+				const saved = {
+					run_id: previous.run_id,
+					token: previous.token,
+					...previous.interactions ? { interactions: previous.interactions } : {}
+				};
+				try {
+					lstatSync(resolvedOutput);
+					if (!isDeepStrictEqual(readPrivateJson(resolvedOutput), saved)) throw new Error("Provisioning export conflict");
+				} catch (error) {
+					if (error.code !== "ENOENT") throw error;
+					publishCredential(resolvedOutput, saved);
+				}
+				return saved;
+			}
+		}
 		try {
 			lstatSync(resolvedOutput);
 			throw new Error("Credential output already exists");
@@ -2341,8 +2327,8 @@ function issueSession(config, output, options) {
 		}
 		writer.write(`grants/${credential.run_id}.json`, grant, { exclusive: true });
 		publishCredential(resolvedOutput, credential);
+		return credential;
 	});
-	return credential;
 }
 function revokeSession(config, runId) {
 	withStateWriter(config, (writer) => {
@@ -2352,6 +2338,571 @@ function revokeSession(config, runId) {
 			revoked: true
 		}, { security: true });
 	});
+}
+//#endregion
+//#region manager/workspaces.ts
+var DIRECTORY_LIMIT = 200;
+function contains(root, value) {
+	const relative = path.relative(root, value);
+	return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+function overlaps$1(left, right) {
+	return contains(left, right) || contains(right, left);
+}
+function relativePath(value) {
+	requireThat(typeof value === "string" && value.length <= 4096 && !path.isAbsolute(value) && !value.includes("\\") && !value.includes("\0"));
+	if (value === "") return value;
+	requireThat(value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== ".."));
+	return value;
+}
+function configuredRelativePath(value) {
+	requireThat(typeof value === "string" && value.length <= 512 && !path.isAbsolute(value) && !value.includes("\\") && !value.includes("\0") && !value.split("/").includes(".."));
+	const normalized = path.posix.normalize(value);
+	return normalized === "." ? "" : normalized;
+}
+function workspaceSelection(value) {
+	const selection = record$1(value);
+	keys(selection, ["root", "path"]);
+	return {
+		root: identifier$1(selection.root),
+		path: relativePath(selection.path)
+	};
+}
+function browserQuery(value) {
+	return workspaceSelection(value);
+}
+async function canonicalFuturePath(value) {
+	let current = value;
+	const suffix = [];
+	while (true) try {
+		await lstat(current);
+		return path.join(await realpath(current), ...suffix);
+	} catch (error) {
+		if (error.code !== "ENOENT") throw error;
+		const parent = path.dirname(current);
+		if (parent === current) throw error;
+		suffix.unshift(path.basename(current));
+		current = parent;
+	}
+}
+function configuredRoots(config) {
+	return (config.docker ?? config.native)?.workspaceRoots ?? {};
+}
+function configuredProtectedPaths(config) {
+	const result = [
+		config.stateRoot,
+		path.dirname(config.submitSocket),
+		path.dirname(config.adminSocket),
+		fileURLToPath(new URL("..", import.meta.url))
+	];
+	if (config.docker) {
+		result.push(config.docker.stateRoot, config.docker.socketPath, ...config.docker.protectedRoots ?? []);
+		if (config.docker.web) {
+			result.push(config.docker.web.packageRoot);
+			if (config.docker.web.hubConfigFile) {
+				result.push(config.docker.web.hubConfigFile);
+				const hub = readHubConfig(config.docker.web.hubConfigFile);
+				result.push(hub.stateDir, hub.runtimeDir);
+			}
+			if (config.docker.web.enrollment) {
+				const e = enrollmentConfig(config.docker.web.enrollment);
+				result.push(path.dirname(e.socketPath), e.authorityFile);
+			}
+			if (config.docker.web.provider) result.push(config.docker.web.provider.packageRoot);
+		}
+		result.push(...runtimeProfileSources(config.docker.runtimeProfile));
+	}
+	if (config.native) {
+		result.push(config.native.stateRoot, config.native.agentRoot, config.native.piExecutable);
+		if (config.native.provider) result.push(config.native.provider.extensionPath);
+		if (config.native.web) {
+			result.push(config.native.web.extensionPath, config.native.web.hubConfigFile);
+			const hub = readHubConfig(config.native.web.hubConfigFile);
+			result.push(hub.stateDir, hub.runtimeDir);
+		}
+	}
+	return result;
+}
+/** Executor-owned filesystem policy. No requester path reaches an adapter without this resolver. */
+var WorkspacePolicy = class WorkspacePolicy {
+	#config;
+	#roots;
+	#protected;
+	#browser;
+	constructor(config, roots, protectedPaths) {
+		this.#config = structuredClone(config);
+		this.#roots = Object.freeze(roots);
+		this.#protected = Object.freeze(protectedPaths);
+		this.#browser = config.workspaceBrowser ? Object.freeze({
+			defaultRoot: config.workspaceBrowser.defaultRoot,
+			roots: Object.freeze(Object.keys(roots).map((id) => Object.freeze({
+				id,
+				label: id
+			})))
+		}) : null;
+	}
+	static async open(config) {
+		try {
+			const roots = {};
+			for (const [id, configured] of Object.entries(configuredRoots(config))) {
+				identifier$1(id);
+				const canonical = await realpath(configured);
+				requireThat(canonical === configured && (await stat(canonical)).isDirectory());
+				roots[id] = canonical;
+			}
+			const protectedPaths = await Promise.all(configuredProtectedPaths(config).map(canonicalFuturePath));
+			if (config.docker?.web?.enrollment) {
+				const e = enrollmentConfig(config.docker.web.enrollment);
+				protectedPaths.push(e.registryHostDirectory, e.exportHostDirectory);
+			}
+			if (config.workspaceBrowser) {
+				const home = await realpath(config.workspaceBrowser.home);
+				requireThat(home === config.workspaceBrowser.home && (await stat(home)).isDirectory());
+				for (const root of Object.values(roots)) requireThat(root !== home && contains(home, root));
+				requireThat(Object.hasOwn(roots, config.workspaceBrowser.defaultRoot));
+				for (const root of Object.values(roots)) requireThat(!protectedPaths.some((privatePath) => contains(privatePath, root)));
+			}
+			return new WorkspacePolicy(config, roots, [...new Set(protectedPaths)]);
+		} catch (error) {
+			if (error instanceof ManagerError) throw error;
+			throw new ManagerError(400);
+		}
+	}
+	browser() {
+		return this.#browser ? structuredClone(this.#browser) : null;
+	}
+	async #directory(selection, allowBrowserRoot) {
+		try {
+			requireThat(Object.hasOwn(this.#roots, selection.root));
+			const root = this.#roots[selection.root];
+			let current = root;
+			if (selection.path !== "") for (const segment of selection.path.split("/")) {
+				current = path.join(current, segment);
+				const metadata = await lstat(current);
+				requireThat(metadata.isDirectory() && !metadata.isSymbolicLink());
+			}
+			const canonical = await realpath(current);
+			requireThat(canonical === current && contains(root, canonical) && (await stat(canonical)).isDirectory());
+			if (!(allowBrowserRoot && selection.path === "")) requireThat(!this.#protected.some((privatePath) => overlaps$1(canonical, privatePath)));
+			return canonical;
+		} catch (error) {
+			if (error instanceof ManagerError) throw error;
+			throw new ManagerError(400);
+		}
+	}
+	async resolve(value) {
+		let selection;
+		if (typeof value === "string") {
+			const id = identifier$1(value);
+			requireThat(Object.hasOwn(this.#config.workspaces, id));
+			const configured = this.#config.workspaces[id];
+			selection = {
+				root: configured.root,
+				path: configuredRelativePath(configured.path)
+			};
+		} else {
+			requireThat(this.#browser !== null);
+			selection = workspaceSelection(value);
+		}
+		await this.#directory(selection, false);
+		return structuredClone(selection);
+	}
+	async browse(value) {
+		requireThat(this.#browser !== null);
+		const query = browserQuery(value);
+		const directory = await this.#directory(query, true);
+		const directories = [];
+		let truncated = false;
+		try {
+			const handle = await opendir(directory);
+			for await (const entry of handle) {
+				if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+				let childPath;
+				try {
+					relativePath(entry.name);
+					childPath = query.path ? `${query.path}/${entry.name}` : entry.name;
+				} catch {
+					continue;
+				}
+				const child = path.join(directory, entry.name);
+				try {
+					const metadata = await lstat(child);
+					if (!metadata.isDirectory() || metadata.isSymbolicLink() || await realpath(child) !== child || this.#protected.some((privatePath) => overlaps$1(child, privatePath))) continue;
+				} catch {
+					continue;
+				}
+				if (directories.length === DIRECTORY_LIMIT) {
+					truncated = true;
+					break;
+				}
+				directories.push({
+					name: entry.name,
+					path: childPath
+				});
+			}
+			return {
+				root: query.root,
+				path: query.path,
+				directories,
+				truncated
+			};
+		} catch (error) {
+			if (error instanceof ManagerError) throw error;
+			throw new ManagerError(400);
+		}
+	}
+};
+//#endregion
+//#region manager/executor/engine.ts
+var MAX_VERSION_QUERIES = 16;
+function requestHash(t) {
+	return digest(canonical({
+		key: t.key,
+		requester: t.requester,
+		target: t.target,
+		action: t.action,
+		payload: t.payload
+	}));
+}
+function view(t) {
+	const { result, ...rest } = t;
+	const r = result && typeof result === "object" && !Array.isArray(result) ? result : void 0;
+	return {
+		...rest,
+		...r && typeof r.status === "string" ? { result: {
+			status: r.status,
+			...typeof r.instanceId === "string" ? { instanceId: r.instanceId } : {}
+		} } : {}
+	};
+}
+var TaskEngine = class TaskEngine {
+	#config;
+	#store;
+	#adapter;
+	#policyHash;
+	#adapterPolicy;
+	#approvals = /* @__PURE__ */ new Map();
+	#running = /* @__PURE__ */ new Set();
+	#catalog;
+	#workspaces;
+	#catalogQueries = /* @__PURE__ */ new Set();
+	#shutdown = new AbortController();
+	#tail = Promise.resolve();
+	#closing = false;
+	#closePromise;
+	constructor(config, store, adapter, options) {
+		this.#config = structuredClone(config);
+		this.#store = store;
+		this.#adapter = adapter;
+		this.#catalog = options.catalog ?? new ReleaseCatalog({ metadataDeadlineMs: 2500 });
+		this.#workspaces = options.workspacePolicy;
+		this.#adapterPolicy = canonical({
+			policy: adapter?.policy ?? null,
+			actions: adapter?.actions ?? []
+		});
+		this.#policyHash = digest(canonical({
+			workspaces: config.workspaces,
+			workspaceBrowser: config.workspaceBrowser ?? null,
+			principals: config.principals.map((p) => ({
+				id: p.id,
+				role: p.role
+			})),
+			adapter: this.#adapterPolicy
+		}));
+	}
+	static async open(config, adapter, options = {}) {
+		const store = await TaskStore.open(config.stateRoot, { recoverStaleLock: config.recoverStaleLock });
+		try {
+			const workspacePolicy = options.workspacePolicy ?? (config.workspaceBrowser ? await WorkspacePolicy.open(config) : void 0);
+			const engine = new TaskEngine(config, store, adapter, {
+				...options,
+				workspacePolicy
+			});
+			for (const task of await store.list()) if (task.state === "running" || task.state === "waiting_idle") await store.transition(task.id, task.state, "unknown", { expectedRevision: task.revision });
+			await adapter?.restore?.(await store.list());
+			return engine;
+		} catch (error) {
+			await store.close();
+			throw error;
+		}
+	}
+	async dispatch(transport, credential, message) {
+		requireThat(!this.#closing, 503);
+		const h = digest(token(credential));
+		const principal = this.#config.principals.find((p) => equalHash(p.tokenHash, h));
+		requireThat(principal, 401);
+		requireThat(transport === "admin" ? principal.role === "admin" : principal.role === "submitter", 403);
+		const m = record$1(message);
+		const admin = transport === "admin";
+		if ([
+			"review",
+			"approve",
+			"execute"
+		].includes(m.op)) requireThat(admin, 403);
+		const copy = structuredClone(m);
+		if (copy.op === "versions") return await this.#versions(copy);
+		const pending = this.#tail.then(() => this.#handle(principal, admin, copy));
+		this.#tail = pending.catch(() => {});
+		try {
+			return await pending;
+		} catch (e) {
+			if (e instanceof TaskStoreConflictError) throw new ManagerError(409);
+			throw e;
+		}
+	}
+	async #versions(message) {
+		keys(message, ["op", "options"]);
+		const options = record$1(message.options);
+		keys(options, [], [
+			"query",
+			"cursor",
+			"limit"
+		]);
+		const copy = structuredClone(options);
+		requireThat(this.#catalogQueries.size < MAX_VERSION_QUERIES, 503);
+		const operation = this.#catalog.list(PI_PACKAGE, copy).catch((error) => {
+			if (error instanceof CatalogError && error.code === "invalid-query") throw new ManagerError(400);
+			throw new ManagerError(503);
+		});
+		this.#catalogQueries.add(operation);
+		try {
+			return await operation;
+		} finally {
+			this.#catalogQueries.delete(operation);
+		}
+	}
+	async #task(id, p, admin) {
+		const task = await this.#store.get(taskId(id));
+		requireThat(task && (admin || task.requester === p.id), 404);
+		return task;
+	}
+	#assertPolicy() {
+		requireThat(canonical({
+			policy: this.#adapter?.policy ?? null,
+			actions: this.#adapter?.actions ?? []
+		}) === this.#adapterPolicy, 409);
+	}
+	async #validateWorkspace(request) {
+		if (request.action !== "create") return;
+		const payload = record$1(request.payload);
+		keys(payload, ["workspace"]);
+		if (typeof payload.workspace === "string") {
+			const id = identifier$1(payload.workspace);
+			requireThat(Object.hasOwn(this.#config.workspaces, id));
+			if (this.#workspaces) await this.#workspaces.resolve(id);
+			return;
+		}
+		requireThat(this.#workspaces && this.#workspaces.browser());
+		await this.#workspaces.resolve(workspaceSelection(payload.workspace));
+	}
+	async #handle(p, admin, m) {
+		if (m.op === "capabilities") {
+			keys(m, ["op"]);
+			const capabilities = this.#adapter?.capabilities;
+			return {
+				native: capabilities?.native ?? false,
+				docker: capabilities?.docker ?? false,
+				isolation: capabilities?.isolation ?? "unavailable",
+				enrollment: capabilities?.enrollment ?? false,
+				updates: false,
+				approval: admin
+			};
+		}
+		if (m.op === "workspaces") {
+			keys(m, ["op"]);
+			return Object.entries(this.#config.workspaces).map(([id, w]) => ({
+				id,
+				label: w.label
+			}));
+		}
+		if (m.op === "workspace-browser") {
+			keys(m, ["op"]);
+			return this.#workspaces?.browser() ?? null;
+		}
+		if (m.op === "browse-workspaces") {
+			keys(m, ["op", "query"]);
+			requireThat(this.#workspaces);
+			return await this.#workspaces.browse(m.query);
+		}
+		if (m.op === "resources") {
+			keys(m, ["op"]);
+			return await this.#adapter?.resources(p.id) ?? [];
+		}
+		if (m.op === "list") {
+			keys(m, ["op"]);
+			return (await this.#store.list()).filter((t) => !!t && (admin || t.requester === p.id)).map(view);
+		}
+		if (m.op === "submit") {
+			keys(m, ["op", "request"]);
+			const r = record$1(m.request);
+			requireThat(r.action === "create" || r.action === "stop" || r.action === "start", 503);
+			keys(r, r.action === "create" ? [
+				"key",
+				"action",
+				"target",
+				"workspace"
+			] : [
+				"key",
+				"action",
+				"target"
+			]);
+			const workspace = r.action !== "create" ? void 0 : typeof r.workspace === "string" ? identifier$1(r.workspace) : workspaceSelection(r.workspace);
+			const request = {
+				key: identifier$1(r.key),
+				requester: p.id,
+				target: identifier$1(r.target),
+				action: r.action,
+				payload: r.action === "create" ? structuredClone({ workspace }) : {}
+			};
+			requireThat(this.#adapter?.actions.includes(r.action), 503);
+			if (!(await this.#store.list()).find((t) => t.requester === p.id && t.key === r.key)) {
+				await this.#validateWorkspace(request);
+				await this.#adapter.validate(request);
+			}
+			return view(await this.#store.submit(request));
+		}
+		if (m.op === "get" || m.op === "review") {
+			keys(m, ["op", "taskId"]);
+			const t = await this.#task(m.taskId, p, admin);
+			if (m.op === "get") return view(t);
+			return {
+				task: view(t),
+				binding: {
+					taskId: t.id,
+					revision: t.revision,
+					requestHash: requestHash(t),
+					policyHash: this.#policyHash
+				},
+				requiresFreshApproval: !this.#approvals.has(t.id)
+			};
+		}
+		if (m.op === "approve") {
+			keys(m, [
+				"op",
+				"taskId",
+				"revision",
+				"requestHash",
+				"policyHash"
+			]);
+			const t = await this.#task(m.taskId, p, admin);
+			requireThat(t.requester !== p.id, 403);
+			requireThat(t.revision === revision(m.revision) && ["pending_approval", "queued"].includes(t.state) && !this.#approvals.has(t.id), 409);
+			requireThat(m.requestHash === requestHash(t) && m.policyHash === this.#policyHash, 409);
+			this.#assertPolicy();
+			await this.#validateWorkspace(t);
+			requireThat(this.#adapter?.actions.includes(t.action), 503);
+			await this.#adapter.validate(t);
+			this.#assertPolicy();
+			const approved = t.state === "pending_approval" ? await this.#store.transition(t.id, "pending_approval", "queued", { expectedRevision: t.revision }) : t;
+			this.#approvals.set(t.id, {
+				taskId: t.id,
+				revision: approved.revision,
+				requestHash: requestHash(t),
+				policyHash: this.#policyHash
+			});
+			return view(approved);
+		}
+		if (m.op === "execute") {
+			keys(m, [
+				"op",
+				"taskId",
+				"revision"
+			]);
+			const t = await this.#task(m.taskId, p, admin);
+			requireThat(t.revision === revision(m.revision) && ["pending_approval", "queued"].includes(t.state), 409);
+			const approval = this.#approvals.get(t.id);
+			requireThat(approval && t.state === "queued" && approval.revision === t.revision && approval.requestHash === requestHash(t) && approval.policyHash === this.#policyHash, 403);
+			this.#assertPolicy();
+			await this.#validateWorkspace(t);
+			requireThat(this.#adapter?.actions.includes(t.action), 503);
+			await this.#adapter.validate(t);
+			this.#assertPolicy();
+			const started = await this.#store.transition(t.id, "queued", this.#adapter.waitForIdle ? "waiting_idle" : "running", { expectedRevision: t.revision });
+			this.#approvals.delete(t.id);
+			const operation = this.#execute(started);
+			this.#running.add(operation);
+			operation.finally(() => this.#running.delete(operation));
+			return view(started);
+		}
+		throw new ManagerError(400);
+	}
+	async #execute(task) {
+		let executionStarted = false;
+		try {
+			if (task.state === "waiting_idle") {
+				await this.#waitForIdle(task);
+				this.#shutdown.signal.throwIfAborted();
+				this.#assertPolicy();
+				await this.#adapter.validate(structuredClone(task));
+				this.#shutdown.signal.throwIfAborted();
+				this.#assertPolicy();
+				task = await this.#store.transition(task.id, "waiting_idle", "running", { expectedRevision: task.revision });
+			}
+			this.#shutdown.signal.throwIfAborted();
+			executionStarted = true;
+			const result = await this.#adapter.execute(structuredClone(task));
+			await this.#store.transition(task.id, "running", "succeeded", {
+				expectedRevision: task.revision,
+				result
+			});
+		} catch (error) {
+			const unknown = error instanceof DockerOutcomeUnknownError || error instanceof ExecutionOutcomeUnknownError;
+			const stopping = !executionStarted && this.#shutdown.signal.aborted && error === this.#shutdown.signal.reason;
+			await this.#store.transition(task.id, task.state, unknown ? "unknown" : stopping ? "cancelled" : "failed", {
+				expectedRevision: task.revision,
+				result: { status: unknown ? "execution-outcome-unknown" : stopping ? "executor-stopping" : "execution-failed" }
+			}).catch(() => {});
+		}
+	}
+	async #waitForIdle(task) {
+		const signal = this.#shutdown.signal;
+		signal.throwIfAborted();
+		let rejectAbort;
+		const aborted = new Promise((_resolve, reject) => {
+			rejectAbort = reject;
+		});
+		const onAbort = () => rejectAbort(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+		try {
+			await Promise.race([this.#adapter.waitForIdle(structuredClone(task), signal), aborted]);
+		} finally {
+			signal.removeEventListener("abort", onAbort);
+		}
+	}
+	close() {
+		this.#closing = true;
+		this.#shutdown.abort();
+		return this.#closePromise ??= (async () => {
+			await this.#tail;
+			await Promise.all(this.#running);
+			await Promise.allSettled([...this.#catalogQueries]);
+			try {
+				await this.#adapter?.close();
+			} finally {
+				this.#approvals.clear();
+				await this.#store.close();
+			}
+		})();
+	}
+};
+//#endregion
+//#region manager/process-identity.ts
+/** Linux-only observation, never authority to adopt or signal a process. */
+function readProcessIdentity(pid) {
+	if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0) return null;
+	try {
+		const content = readFileSync(`/proc/${pid}/stat`, "utf8");
+		const end = content.lastIndexOf(")");
+		if (end < 0) return null;
+		const startTicks = content.slice(end + 2).trim().split(/\s+/)[19];
+		const identity = `${readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim()}:${startTicks}`;
+		return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:(0|[1-9][0-9]*)$/.test(identity) ? identity : null;
+	} catch {
+		return null;
+	}
+}
+function matchesProcessIdentity(pid, identity) {
+	return identity !== null && readProcessIdentity(pid) === identity;
 }
 //#endregion
 //#region manager/backends/runtime-client.ts
@@ -3437,13 +3988,15 @@ var NativeTaskAdapter = class {
 	policy;
 	#backend;
 	#config;
+	#workspaces;
 	#owners = /* @__PURE__ */ new Map();
 	#starting = /* @__PURE__ */ new Map();
 	#saved = /* @__PURE__ */ new Map();
 	#blocked = /* @__PURE__ */ new Set();
-	constructor(config) {
+	constructor(config, workspaces) {
 		requireThat(config.trustedLocalNative && config.native, 503);
 		this.#config = structuredClone(config);
+		this.#workspaces = workspaces;
 		this.#backend = new NativeBackend(this.#config.native);
 		this.actions = Object.freeze(config.native.web ? [
 			"create",
@@ -3479,7 +4032,10 @@ var NativeTaskAdapter = class {
 		await this.#workspace(request);
 	}
 	async #workspace(request) {
-		const selection = record$1(request.payload).workspace;
+		const payload = record$1(request.payload);
+		keys(payload, ["workspace"]);
+		const selection = payload.workspace;
+		if (this.#workspaces) return await this.#workspaces.resolve(selection);
 		requireThat(typeof selection === "string" && Object.hasOwn(this.#config.workspaces, selection));
 		const w = this.#config.workspaces[selection];
 		try {
@@ -3490,6 +4046,10 @@ var NativeTaskAdapter = class {
 		} catch {
 			requireThat(false);
 		}
+		return {
+			root: w.root,
+			path: w.path
+		};
 	}
 	async execute(task) {
 		if (task.action === "create") {
@@ -3498,18 +4058,14 @@ var NativeTaskAdapter = class {
 			const controller = new AbortController();
 			this.#starting.set(task.target, controller);
 			try {
-				await this.#workspace(task);
+				const resolved = await this.#workspace(task);
 				controller.signal.throwIfAborted();
-				const w = this.#config.workspaces[record$1(task.payload).workspace];
 				const identity = await this.#backend.create({
 					instanceId: task.target,
-					workspace: {
-						root: w.root,
-						path: w.path
-					}
+					workspace: resolved
 				}, { signal: controller.signal });
 				const saved = {
-					workspace: record$1(task.payload).workspace,
+					workspace: structuredClone(record$1(task.payload).workspace),
 					identity
 				};
 				this.#saved.set(task.target, saved);
@@ -3532,14 +4088,17 @@ var NativeTaskAdapter = class {
 				requireThat(await this.#backend.inspect(task.target) === null, 409);
 				controller.signal.throwIfAborted();
 				const saved = this.#saved.get(task.target);
-				const w = this.#config.workspaces[saved.workspace];
-				requireThat(w, 409);
-				const identity = await this.#backend.resume({
-					instanceId: task.target,
-					workspace: {
+				const resolved = this.#workspaces ? await this.#workspaces.resolve(saved.workspace) : (() => {
+					requireThat(typeof saved.workspace === "string" && Object.hasOwn(this.#config.workspaces, saved.workspace), 409);
+					const w = this.#config.workspaces[saved.workspace];
+					return {
 						root: w.root,
 						path: w.path
-					}
+					};
+				})();
+				const identity = await this.#backend.resume({
+					instanceId: task.target,
+					workspace: resolved
 				}, saved.identity, { signal: controller.signal });
 				const next = {
 					workspace: saved.workspace,
@@ -3592,7 +4151,10 @@ var NativeTaskAdapter = class {
 			const result = record$1(task.result);
 			if (result.saved === void 0) continue;
 			const saved = record$1(result.saved), identity = record$1(saved.identity);
-			requireThat(typeof saved.workspace === "string" && Object.hasOwn(this.#config.workspaces, saved.workspace) && identity.instanceId === task.target && Number.isSafeInteger(identity.generation), 409);
+			const workspace = saved.workspace;
+			const dynamic = workspace !== null && typeof workspace === "object" && !Array.isArray(workspace) ? workspace : void 0;
+			requireThat(typeof workspace === "string" && Object.hasOwn(this.#config.workspaces, workspace) || this.#config.workspaceBrowser !== void 0 && dynamic !== void 0 && Object.keys(dynamic).length === 2 && typeof dynamic.root === "string" && typeof dynamic.path === "string", 409);
+			requireThat(identity.instanceId === task.target && Number.isSafeInteger(identity.generation), 409);
 			const prior = this.#saved.get(task.target);
 			if (!prior || identity.generation > (prior.identity.generation ?? 0)) this.#saved.set(task.target, structuredClone(saved));
 		}
@@ -3615,6 +4177,7 @@ var object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 var exact = (v, keys) => object(v) && Object.keys(v).length === keys.length && keys.every((k) => Object.hasOwn(v, k));
 var hash = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 var overlaps = (a, b) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+var inside = (root, value) => value === root || value.startsWith(root + path.sep);
 function absolute(v) {
 	if (typeof v !== "string" || !path.isAbsolute(v) || v === "/" || path.resolve(v) !== v || v.includes("\0")) throw new DockerOperationError("Invalid administrator path");
 	return v;
@@ -3636,6 +4199,7 @@ var DockerBackend = class DockerBackend {
 	#owner;
 	#protected;
 	#hub;
+	#enrollment;
 	#tail = Promise.resolve();
 	#closed = false;
 	constructor(config, journal, owner, protectedPaths, hub) {
@@ -3644,9 +4208,10 @@ var DockerBackend = class DockerBackend {
 		this.#owner = owner;
 		this.#protected = protectedPaths;
 		this.#hub = hub;
+		this.#enrollment = config.web?.enrollment ? new EnrollmentClient(config.web.enrollment) : void 0;
 		this.#engine = new DockerEngine(config.socketPath, { timeoutMs: config.timeoutMs });
 	}
-	static async open(input) {
+	static async open(input, options = {}) {
 		if (!object(input) || Object.keys(input).some((k) => ![
 			"socketPath",
 			"daemonId",
@@ -3656,10 +4221,15 @@ var DockerBackend = class DockerBackend {
 			"workspaceRoots",
 			"protectedRoots",
 			"timeoutMs",
+			"startupTimeoutMs",
+			"runtimeProfile",
 			"entrypoint",
 			"command",
 			"web"
 		].includes(k))) throw new DockerOperationError("Invalid Docker configuration");
+		if (input.startupTimeoutMs !== void 0 && (!Number.isInteger(input.startupTimeoutMs) || input.startupTimeoutMs < 100 || input.startupTimeoutMs > 12e4)) throw new DockerOperationError("Invalid startup limit");
+		if (input.runtimeProfile !== void 0 && input.web === void 0) throw new DockerOperationError("Runtime profile requires Web");
+		const profile = input.runtimeProfile === void 0 ? void 0 : runtimeProfile(input.runtimeProfile);
 		if (input.pathCoordinates !== "host" || typeof input.daemonId !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(input.daemonId) || typeof input.image !== "string" || !/^sha256:[a-f0-9]{64}$/.test(input.image)) throw new DockerOperationError("Pinned daemon and image identities required");
 		const socketPath = absolute(input.socketPath);
 		const stateRoot = absolute(input.stateRoot);
@@ -3669,7 +4239,7 @@ var DockerBackend = class DockerBackend {
 			if (!ID.test(name) || name === "__proto__") throw new DockerOperationError("Invalid workspace policy");
 			const source = absolute(root);
 			if (await realpath(source) !== source || !(await stat(source)).isDirectory()) throw new DockerOperationError("Canonical workspace roots required");
-			if (overlaps(source, stateRoot) || overlaps(source, socketPath)) throw new DockerOperationError("Workspace overlaps private authority");
+			if (options.allowProtectedDescendants ? inside(stateRoot, source) || inside(socketPath, source) : overlaps(source, stateRoot) || overlaps(source, socketPath)) throw new DockerOperationError("Workspace overlaps private authority");
 			roots[name] = source;
 		}
 		if (input.protectedRoots !== void 0 && (!Array.isArray(input.protectedRoots) || input.protectedRoots.length > 64)) throw new DockerOperationError("Invalid protected paths");
@@ -3681,13 +4251,23 @@ var DockerBackend = class DockerBackend {
 			if (!object(w) || Object.keys(w).some((k) => ![
 				"packageRoot",
 				"hubConfigFile",
+				"enrollment",
 				"port",
 				"provider"
-			].includes(k)) || !Number.isInteger(w.port) || w.port < 1 || w.port > 65535 || input.command !== void 0 || input.entrypoint !== void 0) throw new DockerOperationError("Invalid explicit Web profile");
-			for (const p of [absolute(w.packageRoot), absolute(w.hubConfigFile)]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical Web paths required");
+			].includes(k)) || w.hubConfigFile === void 0 === (w.enrollment === void 0) || !Number.isInteger(w.port) || w.port < 1 || w.port > 65535 || input.command !== void 0 || input.entrypoint !== void 0) throw new DockerOperationError("Invalid explicit Web profile");
+			for (const p of [absolute(w.packageRoot), ...w.hubConfigFile === void 0 ? [] : [absolute(w.hubConfigFile)]]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical Web paths required");
 			if (!(await stat(path.join(w.packageRoot, "extensions/mirror-server.ts"))).isFile() || !(await stat(path.join(w.packageRoot, "dist/index.html"))).isFile()) throw new DockerOperationError("Installed Web package required");
-			const h = hub = readHubConfig(w.hubConfigFile);
-			webProtected.push(w.packageRoot, w.hubConfigFile, h.stateDir, h.runtimeDir);
+			webProtected.push(w.packageRoot);
+			if (w.hubConfigFile !== void 0) {
+				const h = hub = readHubConfig(w.hubConfigFile);
+				webProtected.push(w.hubConfigFile, h.stateDir, h.runtimeDir);
+			}
+			if (w.enrollment !== void 0) {
+				const e = enrollmentConfig(w.enrollment);
+				for (const p of [path.dirname(e.socketPath), e.authorityFile]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical enrollment paths required");
+				await readEnrollmentAuthority(e.authorityFile);
+				webProtected.push(path.dirname(e.socketPath), e.authorityFile, e.registryHostDirectory, e.exportHostDirectory);
+			}
 			if (w.provider !== void 0) {
 				const p = w.provider;
 				if (!exact(p, [
@@ -3699,16 +4279,40 @@ var DockerBackend = class DockerBackend {
 			}
 			web = Object.freeze({
 				...w,
+				...w.enrollment ? { enrollment: enrollmentConfig(w.enrollment) } : {},
 				...w.provider ? { provider: Object.freeze({ ...w.provider }) } : {}
 			});
+		}
+		const authorityPaths = [
+			stateRoot,
+			socketPath,
+			...(input.protectedRoots ?? []).map(absolute),
+			...hub ? [
+				hub.stateDir,
+				hub.runtimeDir,
+				input.web.hubConfigFile
+			] : [],
+			...web?.enrollment ? [
+				path.dirname(web.enrollment.socketPath),
+				web.enrollment.authorityFile,
+				web.enrollment.registryHostDirectory,
+				web.enrollment.exportHostDirectory
+			] : []
+		];
+		if (web && [web.packageRoot, ...web.provider ? [web.provider.packageRoot] : []].some((source) => authorityPaths.some((p) => overlaps(source, p)))) throw new DockerOperationError("Web source overlaps private authority");
+		if (profile) {
+			if (runtimeProfileSources(profile).some((source) => authorityPaths.some((p) => overlaps(source, p)))) throw new DockerOperationError("Runtime source overlaps private authority");
+			await validateRuntimeSources(profile);
 		}
 		const protectedPaths = [
 			stateRoot,
 			socketPath,
 			fileURLToPath(new URL("../..", import.meta.url)),
 			...webProtected,
-			...(input.protectedRoots ?? []).map(absolute)
+			...(input.protectedRoots ?? []).map(absolute),
+			...runtimeProfileSources(profile)
 		];
+		for (const root of Object.values(roots)) if (protectedPaths.some((p) => options.allowProtectedDescendants ? inside(p, root) : overlaps(root, p))) throw new DockerOperationError("Workspace overlaps private authority");
 		const config = Object.freeze({
 			...input,
 			socketPath,
@@ -3716,18 +4320,19 @@ var DockerBackend = class DockerBackend {
 			workspaceRoots: Object.freeze(roots),
 			protectedRoots: Object.freeze(protectedPaths),
 			entrypoint: fixedArgs(input.entrypoint, ["/usr/local/bin/pi-entrypoint"]),
+			runtimeProfile: profile,
 			web,
 			command: fixedArgs(input.command, web ? [
 				"--mode",
 				"rpc",
 				"--continue",
-				"--offline",
+				...profile ? [] : ["--offline"],
 				"--no-extensions",
 				"--no-skills",
 				"--no-prompt-templates",
 				"--no-themes",
 				"--no-context-files",
-				"--no-tools",
+				...profile ? [] : ["--no-tools"],
 				"--no-mcp",
 				"--no-approve",
 				"--session-dir",
@@ -3741,7 +4346,8 @@ var DockerBackend = class DockerBackend {
 					web.provider.name,
 					"--model",
 					web.provider.model
-				] : []
+				] : [],
+				...(profile?.extensions ?? []).flatMap((e, i) => ["--extension", `/opt/pi-profile/extensions/${i}/${e.entry}`])
 			] : [
 				"--mode",
 				"rpc",
@@ -3757,7 +4363,9 @@ var DockerBackend = class DockerBackend {
 			protectedPaths,
 			entrypoint: config.entrypoint,
 			command: config.command,
-			web
+			web,
+			...profile ? { runtimeProfile: profile } : {},
+			...input.startupTimeoutMs === void 0 ? {} : { startupTimeoutMs: input.startupTimeoutMs }
 		});
 		const journal = await TaskStore.open(stateRoot);
 		try {
@@ -3784,10 +4392,43 @@ var DockerBackend = class DockerBackend {
 		if (typeof key !== "string" || !Object.hasOwn(this.#config.workspaceRoots, key) || typeof selection !== "string" || path.isAbsolute(selection) || selection.includes("\0") || selection.includes("\\") || selection.split("/").includes("..")) throw new DockerOperationError("Invalid workspace selection");
 		const root = this.#config.workspaceRoots[key];
 		if (await realpath(root) !== root) throw new DockerOperationError("Workspace root changed");
-		const workspace = await realpath(path.resolve(root, selection));
+		const selected = path.resolve(root, selection);
+		let current = root;
+		for (const segment of path.relative(root, selected).split(path.sep).filter(Boolean)) {
+			current = path.join(current, segment);
+			const metadata = await lstat(current);
+			if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new DockerOperationError("Workspace directory changed");
+		}
+		const workspace = await realpath(selected);
 		const relative = path.relative(root, workspace);
-		if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !(await stat(workspace)).isDirectory() || this.#protected.some((p) => overlaps(workspace, p))) throw new DockerOperationError("Workspace escapes policy or overlaps private authority");
+		if (workspace !== selected || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !(await stat(workspace)).isDirectory() || this.#protected.some((p) => overlaps(workspace, p))) throw new DockerOperationError("Workspace escapes policy or overlaps private authority");
 		return workspace;
+	}
+	async #savedWorkspace(task) {
+		try {
+			const payload = task.payload;
+			const saved = object(payload) ? payload.workspace : void 0;
+			if (typeof saved !== "string" || absolute(saved) !== saved) throw new Error();
+			const root = Object.entries(this.#config.workspaceRoots).find(([, directory]) => inside(directory, saved));
+			if (!root || await this.#workspace({
+				instanceId: task.target,
+				workspace: {
+					root: root[0],
+					path: path.relative(root[1], saved)
+				}
+			}) !== saved) throw new Error();
+		} catch {
+			throw new DockerOperationError("Saved workspace no longer satisfies the approved policy");
+		}
+	}
+	/** Approval/execution preflight; inspection and stop deliberately stay independent. */
+	validateStart(instanceId) {
+		return this.#serial(async () => {
+			const task = await this.#record(instanceId);
+			if (!task) throw new DockerOperationError("Instance not owned");
+			this.#identity(task);
+			await this.#savedWorkspace(task);
+		});
 	}
 	#labels(task) {
 		return {
@@ -3822,13 +4463,13 @@ var DockerBackend = class DockerBackend {
 			},
 			{
 				Type: "bind",
-				Source: h.runtimeDir,
+				Source: w.enrollment?.registryHostDirectory ?? h.runtimeDir,
 				Target: "/run/pi-registry",
 				ReadOnly: true
 			},
 			{
 				Type: "bind",
-				Source: path.join(this.#config.stateRoot, `registration-${task.id}.json`),
+				Source: path.join(w.enrollment?.exportHostDirectory ?? this.#config.stateRoot, `registration-${task.id}.json`),
 				Target: "/run/pi-web/credential.json",
 				ReadOnly: true
 			},
@@ -3839,6 +4480,56 @@ var DockerBackend = class DockerBackend {
 				ReadOnly: true
 			}] : []
 		];
+	}
+	#environment() {
+		const web = this.#config.web;
+		return [
+			"HOME=/home/node",
+			"PATH=/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin",
+			...web ? [
+				"PI_AGENT_DIR=/home/node/.pi/manager-agent",
+				"PI_CODING_AGENT_DIR=/home/node/.pi/manager-agent",
+				...this.#config.runtimeProfile ? [] : ["PI_OFFLINE=1"],
+				"PI_SKIP_VERSION_CHECK=1",
+				"PI_WEB_UI_HOST=127.0.0.1",
+				`PI_WEB_UI_PORT=${web.port}`,
+				"PI_WEB_UI_DISABLED=false",
+				"PI_WEB_UI_REGISTRY_SOCKET=/run/pi-registry/registry.sock",
+				"PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/pi-web/credential.json"
+			] : [],
+			...Object.entries(this.#config.runtimeProfile?.environment ?? {}).map(([key, value]) => `${key}=${value}`)
+		];
+	}
+	async #image() {
+		const image = await this.#engine.call("GET", `/images/${encodeURIComponent(this.#config.image)}/json`);
+		if (!object(image) || image.Id !== this.#config.image || !object(image.Config) || image.Config.Volumes && Object.keys(image.Config.Volumes).length) throw new DockerOperationError("Pinned Docker image contract unavailable");
+		if (this.#config.runtimeProfile && Array.isArray(image.Config.Env) && image.Config.Env.some((e) => typeof e === "string" && (e === "PI_OFFLINE" || e.startsWith("PI_OFFLINE=")))) throw new DockerOperationError("Pinned Docker image contract unavailable");
+		if (this.#config.runtimeProfile?.modelsFile && image.Config.Labels?.["cn.swordfate.pi-manager.profile-home"] !== "uid1000-v1") throw new DockerOperationError("Pinned Docker image contract unavailable");
+		return image;
+	}
+	async #runtime() {
+		const p = this.#config.runtimeProfile;
+		if (!p) return;
+		await validateRuntimeSources(p);
+		if (p.runtimeVolume) {
+			const v = await this.#engine.call("GET", `/volumes/${p.runtimeVolume}`, void 0, { allowMissing: true });
+			if (!object(v) || v.Name !== p.runtimeVolume || v.Driver !== "local" || v.Options && Object.keys(v.Options).length) throw new DockerOperationError("Existing local runtime volume required");
+		}
+	}
+	async #ready(task) {
+		if (!this.#enrollment) return;
+		if ((await this.#owned(task))?.State?.Running !== true) throw new DockerOperationError("Pi is not running; retained identity requires approved start");
+		const deadline = Date.now() + (this.#config.startupTimeoutMs ?? 2e4);
+		while (Date.now() < deadline) {
+			let ready = false;
+			try {
+				ready = await this.#enrollment.status(task.id, task.target, deadline - Date.now());
+			} catch {}
+			if (ready) return;
+			const remaining = deadline - Date.now();
+			if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+		}
+		throw new DockerOperationError("Pi registration readiness timed out; retained identity requires approved start");
 	}
 	async #record(instanceId) {
 		if (typeof instanceId !== "string" || !ID.test(instanceId)) throw new DockerOperationError("Invalid instance ID");
@@ -3851,12 +4542,32 @@ var DockerBackend = class DockerBackend {
 		const expected = this.#labels(task);
 		const cfg = object(info) && object(info.Config) ? info.Config : void 0;
 		const host = object(info) && object(info.HostConfig) ? info.HostConfig : void 0;
-		const webMounts = this.#webMounts(task);
+		const webMounts = [...this.#webMounts(task), ...runtimeProfileMounts(this.#config.runtimeProfile)];
 		if (!object(info) || info.Id !== identity.containerId || info.Image !== identity.image || !cfg || !object(cfg.Labels) || Object.entries(expected).some(([k, v]) => cfg.Labels[k] !== v) || cfg.User !== "1000:1000" || !host || host.Privileged !== false || host.ReadonlyRootfs !== true || JSON.stringify(host.CapDrop) !== "[\"ALL\"]" || !Array.isArray(host.SecurityOpt) || !host.SecurityOpt.includes("no-new-privileges:true") || host.NetworkMode !== (this.#config.web ? "host" : "none") || !Array.isArray(info.Mounts) || info.Mounts.length !== 2 + webMounts.length) throw new DockerOperationError("Container ownership or safety contract mismatch");
 		for (const expected of webMounts) {
 			const mount = info.Mounts.find((m) => m.Destination === expected.Target);
-			if (!mount || mount.Type !== "bind" || mount.Source !== expected.Source || mount.RW !== false) throw new DockerOperationError("Container enrollment mount mismatch");
+			if (!mount || mount.Type !== expected.Type || (expected.Type === "volume" ? mount.Name : mount.Source) !== expected.Source || mount.RW !== false) throw new DockerOperationError("Container enrollment/profile mount mismatch");
+			if (expected.Type === "volume") {
+				const configured = host.Mounts?.find((m) => m.Target === expected.Target);
+				if (configured?.VolumeOptions?.NoCopy !== true || configured?.ReadOnly !== true) throw new DockerOperationError("Container runtime volume safety contract mismatch");
+			}
 		}
+		const image = await this.#image();
+		const environment = (entries) => {
+			if (!Array.isArray(entries)) throw new DockerOperationError("Container environment contract mismatch");
+			const result = /* @__PURE__ */ new Map();
+			for (const entry of entries) {
+				if (typeof entry !== "string" || !entry.includes("=") || entry.includes("\0")) throw new DockerOperationError("Container environment contract mismatch");
+				const name = entry.slice(0, entry.indexOf("="));
+				if (!name || result.has(name)) throw new DockerOperationError("Container environment contract mismatch");
+				result.set(name, entry.slice(entry.indexOf("=") + 1));
+			}
+			return result;
+		};
+		const merged = environment(image.Config.Env ?? []);
+		for (const [k, v] of environment(this.#environment())) merged.set(k, v);
+		const actual = environment(cfg.Env);
+		if (actual.size !== merged.size || [...merged].some(([k, v]) => actual.get(k) !== v) || JSON.stringify(cfg.Entrypoint) !== JSON.stringify(this.#config.entrypoint) || JSON.stringify(cfg.Cmd) !== JSON.stringify(this.#config.command) || cfg.WorkingDir !== "/workspace") throw new DockerOperationError("Container execution contract mismatch");
 		const payload = task.payload;
 		const workspace = object(payload) ? payload.workspace : void 0;
 		const bind = info.Mounts.find((m) => m.Destination === "/workspace");
@@ -3890,18 +4601,20 @@ var DockerBackend = class DockerBackend {
 			});
 			if (task.state === "succeeded") {
 				if (!await this.#owned(task)) throw new DockerOperationError("Owned container missing; reconciliation required");
+				await this.#ready(task);
 				return this.#identity(task);
 			}
 			if (task.state !== "pending_approval") throw new DockerOperationError("Prior Docker operation requires reconciliation");
-			const image = await this.#engine.call("GET", `/images/${encodeURIComponent(this.#config.image)}/json`);
-			if (!object(image) || image.Id !== this.#config.image || !object(image.Config) || image.Config.Volumes && Object.keys(image.Config.Volumes).length) throw new DockerOperationError("Pinned Docker image contract unavailable");
+			await this.#image();
+			await this.#runtime();
 			task = await this.#journal.transition(task.id, "pending_approval", "queued", { expectedRevision: task.revision });
 			task = await this.#journal.transition(task.id, "queued", "running", { expectedRevision: task.revision });
 			try {
 				const labels = this.#labels(task);
 				const web = this.#config.web;
-				const webMounts = this.#webMounts(task);
-				if (web) {
+				const webMounts = [...this.#webMounts(task), ...runtimeProfileMounts(this.#config.runtimeProfile)];
+				if (this.#enrollment) await this.#enrollment.issue(task.id, task.target);
+				else if (web) {
 					const h = this.#hub;
 					const credential = webMounts.find((m) => m.Target === "/run/pi-web/credential.json").Source;
 					issueSession(h, credential, { label: task.target });
@@ -3921,21 +4634,7 @@ var DockerBackend = class DockerBackend {
 					WorkingDir: "/workspace",
 					Entrypoint: [...this.#config.entrypoint],
 					Cmd: [...this.#config.command],
-					Env: [
-						"HOME=/home/node",
-						"PATH=/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin",
-						...web ? [
-							"PI_AGENT_DIR=/home/node/.pi/manager-agent",
-							"PI_CODING_AGENT_DIR=/home/node/.pi/manager-agent",
-							"PI_OFFLINE=1",
-							"PI_SKIP_VERSION_CHECK=1",
-							"PI_WEB_UI_HOST=127.0.0.1",
-							`PI_WEB_UI_PORT=${web.port}`,
-							"PI_WEB_UI_DISABLED=false",
-							"PI_WEB_UI_REGISTRY_SOCKET=/run/pi-registry/registry.sock",
-							"PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/pi-web/credential.json"
-						] : []
-					],
+					Env: this.#environment(),
 					Labels: labels,
 					AttachStdin: true,
 					OpenStdin: true,
@@ -3991,7 +4690,9 @@ var DockerBackend = class DockerBackend {
 					}
 				});
 				if (!await this.#owned(task)) throw new DockerOutcomeUnknownError();
+				await this.#savedWorkspace(task);
 				await this.#engine.call("POST", `/containers/${created.Id}/start`);
+				await this.#ready(task);
 				return this.#identity(task);
 			} catch (error) {
 				if (task.state === "running") await this.#journal.transition(task.id, "running", "unknown", {
@@ -4041,9 +4742,16 @@ var DockerBackend = class DockerBackend {
 			const info = await this.#owned(task);
 			if (!info) throw new DockerOperationError("Owned container missing");
 			const running = info.State?.Running === true;
+			if (action === "start") {
+				await this.#savedWorkspace(task);
+				await this.#runtime();
+				if (this.#enrollment) await this.#enrollment.issue(task.id, task.target);
+				await this.#savedWorkspace(task);
+			}
 			if (action === "start" !== running) await this.#engine.call("POST", `/containers/${this.#identity(task).containerId}/${action}${action === "stop" ? "?t=10" : ""}`);
 			const after = await this.#owned(task);
 			if (!after || after.State?.Running === true !== (action === "start")) throw new DockerOutcomeUnknownError();
+			if (action === "start") await this.#ready(task);
 			return {
 				...this.#identity(task),
 				status: action === "start" ? "running" : "stopped"
@@ -4055,6 +4763,7 @@ var DockerBackend = class DockerBackend {
 		this.#closed = true;
 		await this.#tail;
 		this.#engine.close();
+		this.#enrollment?.close();
 		await this.#journal.close();
 	}
 };
@@ -4071,10 +4780,12 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 	policy;
 	#config;
 	#backend;
+	#workspaces;
 	#owners = /* @__PURE__ */ new Map();
-	constructor(config, backend) {
+	constructor(config, backend, workspaces) {
 		this.#config = config;
 		this.#backend = backend;
+		this.#workspaces = workspaces;
 		this.capabilities = {
 			native: false,
 			docker: true,
@@ -4086,7 +4797,7 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 			workspaces: config.workspaces
 		}));
 	}
-	static async open(value) {
+	static async open(value, workspacePolicy) {
 		const config = executorConfig(value);
 		requireThat(config.docker, 503);
 		config.docker = {
@@ -4104,7 +4815,8 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 				path.dirname(config.adminSocket)
 			]
 		};
-		return new DockerTaskAdapter(config, await DockerBackend.open(config.docker));
+		const workspaces = workspacePolicy ?? await WorkspacePolicy.open(config);
+		return new DockerTaskAdapter(config, await DockerBackend.open(config.docker, { allowProtectedDescendants: config.workspaceBrowser !== void 0 }), workspaces);
 	}
 	async restore(records) {
 		for (const task of records) {
@@ -4124,18 +4836,7 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 	async #workspace(request) {
 		const payload = record$1(request.payload);
 		keys(payload, ["workspace"]);
-		requireThat(typeof payload.workspace === "string" && Object.hasOwn(this.#config.workspaces, payload.workspace));
-		const w = this.#config.workspaces[payload.workspace];
-		const root = this.#config.docker.workspaceRoots[w.root];
-		try {
-			requireThat(await realpath(root) === root);
-			const selected = await realpath(path.resolve(root, w.path));
-			const relative = path.relative(root, selected);
-			requireThat(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && (await stat(selected)).isDirectory());
-		} catch {
-			requireThat(false);
-		}
-		return w;
+		return await this.#workspaces.resolve(payload.workspace);
 	}
 	async validate(request) {
 		if (request.action === "create") {
@@ -4149,6 +4850,7 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 		requireThat(this.#owners.get(request.target) === request.requester, 403);
 		const owned = await this.#backend.inspect(request.target);
 		requireThat(owned && owned.status !== "missing", 409);
+		if (request.action === "start") await this.#backend.validateStart(request.target);
 	}
 	async execute(task) {
 		if (task.action === "create") {
@@ -4187,6 +4889,7 @@ var DockerTaskAdapter = class DockerTaskAdapter {
 //#region manager/executor/main.ts
 async function startExecutor(value) {
 	const config = executorConfig(value);
+	const workspacePolicy = await WorkspacePolicy.open(config);
 	await privateDirectory$1(config.stateRoot);
 	for (const socket of [config.submitSocket, config.adminSocket]) {
 		requireThat(Buffer.byteLength(socket) <= 100);
@@ -4200,10 +4903,10 @@ async function startExecutor(value) {
 		}
 		requireThat(!exists, 409);
 	}
-	const adapter = config.docker ? await DockerTaskAdapter.open(config) : config.native ? new NativeTaskAdapter(config) : void 0;
+	const adapter = config.docker ? await DockerTaskAdapter.open(config, workspacePolicy) : config.native ? new NativeTaskAdapter(config, workspacePolicy) : void 0;
 	let engine;
 	try {
-		engine = await TaskEngine.open(config, adapter);
+		engine = await TaskEngine.open(config, adapter, { workspacePolicy });
 	} catch (error) {
 		await adapter?.close();
 		throw error;

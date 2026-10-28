@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, opendirSync, realpathSync, writeFileSync } from "node:fs";
+import { isDeepStrictEqual } from "node:util";
 import { isIP } from "node:net";
 import path from "node:path";
 import { validatedPublicUrl } from "../protocol/connection-config.ts";
@@ -15,11 +16,13 @@ export type HubConfig = {
   port: number;
   leaseMs: number;
   publicUrl?: string;
+  managerLinks?: ManagerLinks;
   lifecycle?: LifecycleConfig;
   runtimeUpdates?: LifecycleConfig;
   gateManagement?: LifecycleConfig;
   management?: { port: number; publicUrl?: string; gateway?: { credentialFile: string } };
 };
+export type ManagerLinks = { requester: string; administrator?: string };
 export type Grant = {
   run_id: string;
   token: string;
@@ -27,6 +30,8 @@ export type Grant = {
   backendHost: string;
   revoked?: boolean;
   exportBytes?: number;
+  provisionKey?: string;
+  interactions?: ReturnType<typeof interactionSigning>["pin"];
 };
 
 export function privateDirectory(directory: string) {
@@ -39,7 +44,7 @@ export function readPrivateJson(file: string) {
 
 export function initializeHub(
   file: string,
-  options: Partial<Pick<HubConfig, "port" | "publicUrl" | "leaseMs" | "management">> = {},
+  options: Partial<Pick<HubConfig, "port" | "publicUrl" | "leaseMs" | "management" | "managerLinks">> = {},
 ) {
   // The config parent may be an existing project; only hub state must be private.
   mkdirSync(path.dirname(path.resolve(file)), { recursive: true, mode: 0o700 });
@@ -78,6 +83,7 @@ export function readHubConfig(file: string): HubConfig {
     throw new Error("Hub IPC and administrator state must be separate directories");
   const publicUrl = value.publicUrl === undefined ? undefined : validatedPublicUrl(value.publicUrl);
   if (publicUrl && new URL(publicUrl).pathname !== "/") throw new Error("Hub public URL must use the domain root");
+  const managerLinks = value.managerLinks === undefined ? undefined : managerLinksConfig(value.managerLinks, publicUrl);
   // Unix sockets can be shared with ordinary containers. No host PID/Docker API required.
   if (process.platform === "win32")
     throw new Error("Bundled hub currently requires Unix IPC (Linux/macOS); standalone Pi Web still works");
@@ -93,11 +99,32 @@ export function readHubConfig(file: string): HubConfig {
     port,
     leaseMs,
     publicUrl,
+    ...(managerLinks ? { managerLinks } : {}),
     ...(lifecycle ? { lifecycle } : {}),
     ...(runtimeUpdates ? { runtimeUpdates } : {}),
     ...(gateManagement ? { gateManagement } : {}),
     ...(management ? { management } : {}),
   };
+}
+
+export function managerLinksConfig(value: unknown, chatPublicUrl?: string): ManagerLinks {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid manager links configuration");
+  const links = value as Record<string, unknown>;
+  if (
+    Object.keys(links).some((key) => key !== "requester" && key !== "administrator") ||
+    !chatPublicUrl
+  )
+    throw new Error("Manager links require a canonical chat public URL");
+  const root = (url: unknown) => {
+    const canonical = validatedPublicUrl(url);
+    if (canonical !== `${new URL(canonical).origin}/`) throw new Error("Manager links must use canonical root URLs");
+    return canonical;
+  };
+  const requester = root(links.requester);
+  const administrator = links.administrator === undefined ? undefined : root(links.administrator);
+  const origins = [new URL(chatPublicUrl).origin, new URL(requester).origin, ...(administrator ? [new URL(administrator).origin] : [])];
+  if (new Set(origins).size !== origins.length) throw new Error("Manager links must use separate origins");
+  return { requester, ...(administrator ? { administrator } : {}) };
 }
 
 export function managementConfig(
@@ -160,18 +187,40 @@ export function readGrant(config: HubConfig, runId: string): Grant {
     hasControls(grant.label) ||
     typeof grant.backendHost !== "string" ||
     !validHost(grant.backendHost) ||
-    (grant.revoked !== undefined && typeof grant.revoked !== "boolean")
+    (grant.revoked !== undefined && typeof grant.revoked !== "boolean") ||
+    (grant.provisionKey !== undefined && !validProvisionKey(grant.provisionKey))
   )
     throw new Error("Invalid session capability");
   return grant;
 }
 
-export function issueSession(config: HubConfig, output: string, options: { label: string; backendHost?: string }) {
+const validProvisionKey = (key: unknown): key is string => typeof key === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(key);
+
+/** Local private-state lookup only. Caller holds the existing state writer lock. */
+export function provisionGrant(config: HubConfig, key: string): Grant | undefined {
+  if (!validProvisionKey(key)) throw new Error("Invalid provisioning key");
+  const dir = opendirSync(path.join(config.stateDir, "grants"));
+  let found: Grant | undefined; let count = 0;
+  try {
+    for (let entry = dir.readSync(); entry; entry = dir.readSync()) {
+      if (++count > 32768) throw new Error("Hub grant scan limit exceeded");
+      if (!/^[a-f0-9]{32}\.json$/.test(entry.name)) continue;
+      const grant = readGrant(config, entry.name.slice(0, -5));
+      if (grant.provisionKey !== key) continue;
+      if (found) throw new Error("Ambiguous provisioning key");
+      found = grant;
+    }
+  } finally { dir.closeSync(); }
+  return found;
+}
+
+export function issueSession(config: HubConfig, output: string, options: { label: string; backendHost?: string; provisionKey?: string }) {
   privateDirectory(config.stateDir);
   privateDirectory(path.join(config.stateDir, "grants"));
   const backendHost = options.backendHost ?? "127.0.0.1";
   if (!validHost(backendHost) || !options.label.trim() || options.label.length > 120 || hasControls(options.label))
     throw new Error("Invalid session label or backend host");
+  if (options.provisionKey !== undefined && !validProvisionKey(options.provisionKey)) throw new Error("Invalid provisioning key");
   const credential = {
     run_id: randomBytes(16).toString("hex"),
     token: randomBytes(32).toString("hex"),
@@ -183,6 +232,7 @@ export function issueSession(config: HubConfig, output: string, options: { label
     backendHost,
     revoked: false,
     exportBytes: Buffer.byteLength(`${JSON.stringify(credential)}\n`),
+    ...(options.provisionKey ? { provisionKey: options.provisionKey } : {}),
   };
   // Never overwrite an existing credential/config. The private grant directory is admin-only.
   const resolvedOutput = path.join(realpathSync(path.dirname(path.resolve(output))), path.basename(output));
@@ -194,7 +244,23 @@ export function issueSession(config: HubConfig, output: string, options: { label
   ) {
     throw new Error("Session credential must be outside the administrator state directory");
   }
-  withStateWriter(config, (writer) => {
+  return withStateWriter(config, (writer) => {
+    if (options.provisionKey) {
+      writer.assertAdmission();
+      const previous = provisionGrant(config, options.provisionKey);
+      if (previous) {
+        if (previous.revoked || previous.label !== options.label || previous.backendHost !== backendHost) throw new Error("Provisioning conflict");
+        const saved = { run_id: previous.run_id, token: previous.token, ...(previous.interactions ? { interactions: previous.interactions } : {}) };
+        try {
+          lstatSync(resolvedOutput);
+          if (!isDeepStrictEqual(readPrivateJson(resolvedOutput), saved)) throw new Error("Provisioning export conflict");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          publishCredential(resolvedOutput, saved);
+        }
+        return saved;
+      }
+    }
     try {
       lstatSync(resolvedOutput);
       throw new Error("Credential output already exists");
@@ -205,8 +271,8 @@ export function issueSession(config: HubConfig, output: string, options: { label
     // Do not delete this grant on failed/ambiguous export publication. It may
     // already have escaped to a caller; its reservation remains charged.
     publishCredential(resolvedOutput, credential);
+    return credential;
   });
-  return credential;
 }
 
 export function revokeSession(config: HubConfig, runId: string) {

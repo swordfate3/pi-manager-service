@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmod, realpath, stat } from "node:fs/promises";
+import { chmod, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { JsonValue, TaskRecord } from "../contracts.ts";
 import { TaskStore } from "../task-store.ts";
 import { DockerEngine, DockerOperationError, DockerOutcomeUnknownError } from "./docker-engine.ts";
 import { issueSession, readHubConfig, type HubConfig } from "../../hub/config.ts";
+import { enrollmentConfig, EnrollmentClient, readEnrollmentAuthority, type EnrollmentConfig } from "../enrollment/client.ts";
+import { runtimeProfile, runtimeProfileMounts, runtimeProfileSources, validateRuntimeSources, type RuntimeProfile } from "./runtime-profile.ts";
 
 export interface DockerBackendConfig {
   readonly socketPath: string;
@@ -17,11 +19,13 @@ export interface DockerBackendConfig {
   readonly workspaceRoots: Readonly<Record<string, string>>;
   readonly protectedRoots?: readonly string[];
   readonly timeoutMs?: number;
+  readonly startupTimeoutMs?: number;
+  readonly runtimeProfile?: RuntimeProfile;
   /** Administrator-fixed image entry contract, never accepted in create requests. */
   readonly entrypoint?: readonly string[];
   readonly command?: readonly string[];
   /** Explicit opt-in host network and narrow Web enrollment mounts. */
-  readonly web?: { readonly packageRoot: string; readonly hubConfigFile: string; readonly port: number;
+  readonly web?: { readonly packageRoot: string; readonly hubConfigFile?: string; readonly enrollment?: EnrollmentConfig; readonly port: number;
     readonly provider?: { readonly packageRoot: string; readonly name: string; readonly model: string } };
 }
 
@@ -51,6 +55,7 @@ const object = (v: unknown): v is RecordValue => v !== null && typeof v === "obj
 const exact = (v: unknown, keys: string[]): v is RecordValue => object(v) && Object.keys(v).length === keys.length && keys.every(k => Object.hasOwn(v, k));
 const hash = (v: unknown) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 const overlaps = (a: string, b: string) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+const inside = (root: string, value: string) => value === root || value.startsWith(root + path.sep);
 function absolute(v: string): string {
   if (typeof v !== "string" || !path.isAbsolute(v) || v === "/" || path.resolve(v) !== v || v.includes("\0")) throw new DockerOperationError("Invalid administrator path");
   return v;
@@ -73,6 +78,7 @@ export class DockerBackend {
   readonly #owner: string;
   readonly #protected: readonly string[];
   readonly #hub: HubConfig | undefined;
+  readonly #enrollment: EnrollmentClient | undefined;
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
 
@@ -82,11 +88,15 @@ export class DockerBackend {
     this.#owner = owner;
     this.#protected = protectedPaths;
     this.#hub = hub;
+    this.#enrollment = config.web?.enrollment ? new EnrollmentClient(config.web.enrollment) : undefined;
     this.#engine = new DockerEngine(config.socketPath, { timeoutMs: config.timeoutMs });
   }
 
-  static async open(input: DockerBackendConfig): Promise<DockerBackend> {
-    if (!object(input) || Object.keys(input).some(k => !["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots", "protectedRoots", "timeoutMs", "entrypoint", "command", "web"].includes(k))) throw new DockerOperationError("Invalid Docker configuration");
+  static async open(input: DockerBackendConfig, options: { allowProtectedDescendants?: boolean } = {}): Promise<DockerBackend> {
+    if (!object(input) || Object.keys(input).some(k => !["socketPath", "daemonId", "image", "pathCoordinates", "stateRoot", "workspaceRoots", "protectedRoots", "timeoutMs", "startupTimeoutMs", "runtimeProfile", "entrypoint", "command", "web"].includes(k))) throw new DockerOperationError("Invalid Docker configuration");
+    if (input.startupTimeoutMs !== undefined && (!Number.isInteger(input.startupTimeoutMs) || input.startupTimeoutMs < 100 || input.startupTimeoutMs > 120000)) throw new DockerOperationError("Invalid startup limit");
+    if (input.runtimeProfile !== undefined && input.web === undefined) throw new DockerOperationError("Runtime profile requires Web");
+    const profile = input.runtimeProfile === undefined ? undefined : runtimeProfile(input.runtimeProfile);
     if (input.pathCoordinates !== "host" || typeof input.daemonId !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(input.daemonId) || typeof input.image !== "string" || !/^sha256:[a-f0-9]{64}$/.test(input.image)) throw new DockerOperationError("Pinned daemon and image identities required");
     const socketPath = absolute(input.socketPath);
     const stateRoot = absolute(input.stateRoot);
@@ -96,7 +106,10 @@ export class DockerBackend {
       if (!ID.test(name) || name === "__proto__") throw new DockerOperationError("Invalid workspace policy");
       const source = absolute(root);
       if (await realpath(source) !== source || !(await stat(source)).isDirectory()) throw new DockerOperationError("Canonical workspace roots required");
-      if (overlaps(source, stateRoot) || overlaps(source, socketPath)) throw new DockerOperationError("Workspace overlaps private authority");
+      const unsafe = options.allowProtectedDescendants
+        ? inside(stateRoot, source) || inside(socketPath, source)
+        : overlaps(source, stateRoot) || overlaps(source, socketPath);
+      if (unsafe) throw new DockerOperationError("Workspace overlaps private authority");
       roots[name] = source;
     }
     if (input.protectedRoots !== undefined && (!Array.isArray(input.protectedRoots) || input.protectedRoots.length > 64)) throw new DockerOperationError("Invalid protected paths");
@@ -105,24 +118,45 @@ export class DockerBackend {
     const webProtected: string[] = [];
     if (input.web !== undefined) {
       const w = input.web;
-      if (!object(w) || Object.keys(w).some(k => !["packageRoot", "hubConfigFile", "port", "provider"].includes(k)) || !Number.isInteger(w.port) || w.port < 1 || w.port > 65535 || input.command !== undefined || input.entrypoint !== undefined) throw new DockerOperationError("Invalid explicit Web profile");
-      for (const p of [absolute(w.packageRoot), absolute(w.hubConfigFile)]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical Web paths required");
+      if (!object(w) || Object.keys(w).some(k => !["packageRoot", "hubConfigFile", "enrollment", "port", "provider"].includes(k)) || (w.hubConfigFile === undefined) === (w.enrollment === undefined) || !Number.isInteger(w.port) || w.port < 1 || w.port > 65535 || input.command !== undefined || input.entrypoint !== undefined) throw new DockerOperationError("Invalid explicit Web profile");
+      for (const p of [absolute(w.packageRoot), ...(w.hubConfigFile === undefined ? [] : [absolute(w.hubConfigFile)])]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical Web paths required");
       if (!(await stat(path.join(w.packageRoot, "extensions/mirror-server.ts"))).isFile() || !(await stat(path.join(w.packageRoot, "dist/index.html"))).isFile()) throw new DockerOperationError("Installed Web package required");
-      const h = hub = readHubConfig(w.hubConfigFile);
-      webProtected.push(w.packageRoot, w.hubConfigFile, h.stateDir, h.runtimeDir);
+      webProtected.push(w.packageRoot);
+      if (w.hubConfigFile !== undefined) {
+        const h = hub = readHubConfig(w.hubConfigFile);
+        webProtected.push(w.hubConfigFile, h.stateDir, h.runtimeDir);
+      }
+      if (w.enrollment !== undefined) {
+        const e = enrollmentConfig(w.enrollment);
+        for (const p of [path.dirname(e.socketPath), e.authorityFile]) if (await realpath(p) !== p) throw new DockerOperationError("Canonical enrollment paths required");
+        await readEnrollmentAuthority(e.authorityFile);
+        // Registry/export belong to chat UID1000, and are intentionally not
+        // traversed by a split-identity executor. Docker resolves host sources.
+        webProtected.push(path.dirname(e.socketPath), e.authorityFile, e.registryHostDirectory, e.exportHostDirectory);
+      }
       if (w.provider !== undefined) {
         const p = w.provider;
         if (!exact(p, ["packageRoot", "name", "model"]) || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(p.name) || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(p.model) || await realpath(absolute(p.packageRoot)) !== p.packageRoot || !(await stat(path.join(p.packageRoot, "index.ts"))).isFile()) throw new DockerOperationError("Invalid explicit provider profile");
         webProtected.push(p.packageRoot);
       }
-      web = Object.freeze({ ...w, ...(w.provider ? { provider: Object.freeze({ ...w.provider }) } : {}) });
+      web = Object.freeze({ ...w, ...(w.enrollment ? { enrollment: enrollmentConfig(w.enrollment) } : {}), ...(w.provider ? { provider: Object.freeze({ ...w.provider }) } : {}) });
     }
-    const protectedPaths = [stateRoot, socketPath, fileURLToPath(new URL("../..", import.meta.url)), ...webProtected, ...(input.protectedRoots ?? []).map(absolute)];
+    const authorityPaths = [stateRoot, socketPath, ...(input.protectedRoots ?? []).map(absolute), ...(hub ? [hub.stateDir, hub.runtimeDir, input.web!.hubConfigFile!] : []),
+      ...(web?.enrollment ? [path.dirname(web.enrollment.socketPath), web.enrollment.authorityFile, web.enrollment.registryHostDirectory, web.enrollment.exportHostDirectory] : [])];
+    if (web && [web.packageRoot, ...(web.provider ? [web.provider.packageRoot] : [])].some(source => authorityPaths.some(p => overlaps(source, p)))) throw new DockerOperationError("Web source overlaps private authority");
+    if (profile) {
+      if (runtimeProfileSources(profile).some(source => authorityPaths.some(p => overlaps(source, p)))) throw new DockerOperationError("Runtime source overlaps private authority");
+      await validateRuntimeSources(profile);
+    }
+    const protectedPaths = [stateRoot, socketPath, fileURLToPath(new URL("../..", import.meta.url)), ...webProtected, ...(input.protectedRoots ?? []).map(absolute), ...runtimeProfileSources(profile)];
+    for (const root of Object.values(roots)) if (protectedPaths.some(p => options.allowProtectedDescendants ? inside(p, root) : overlaps(root, p))) throw new DockerOperationError("Workspace overlaps private authority");
     const config = Object.freeze({ ...input, socketPath, stateRoot, workspaceRoots: Object.freeze(roots),
       protectedRoots: Object.freeze(protectedPaths), entrypoint: fixedArgs(input.entrypoint, ["/usr/local/bin/pi-entrypoint"]),
-      web, command: fixedArgs(input.command, web ? ["--mode", "rpc", "--continue", "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-tools", "--no-mcp", "--no-approve", "--session-dir", "/home/node/.pi/manager-sessions", "--extension", "/opt/pi-web/extensions/mirror-server.ts",
-        ...(web.provider ? ["--extension", "/opt/pi-provider/index.ts", "--provider", web.provider.name, "--model", web.provider.model] : [])] : ["--mode", "rpc", "--no-session", "--offline"]) });
-    const owner = hash({ daemonId: config.daemonId, image: config.image, stateRoot, roots, protectedPaths, entrypoint: config.entrypoint, command: config.command, web });
+      runtimeProfile: profile, web, command: fixedArgs(input.command, web ? ["--mode", "rpc", "--continue", ...(profile ? [] : ["--offline"]), "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", ...(profile ? [] : ["--no-tools"]), "--no-mcp", "--no-approve", "--session-dir", "/home/node/.pi/manager-sessions", "--extension", "/opt/pi-web/extensions/mirror-server.ts",
+        ...(web.provider ? ["--extension", "/opt/pi-provider/index.ts", "--provider", web.provider.name, "--model", web.provider.model] : []),
+        ...(profile?.extensions ?? []).flatMap((e, i) => ["--extension", `/opt/pi-profile/extensions/${i}/${e.entry}`])] : ["--mode", "rpc", "--no-session", "--offline"]) });
+    const owner = hash({ daemonId: config.daemonId, image: config.image, stateRoot, roots, protectedPaths, entrypoint: config.entrypoint, command: config.command, web,
+      ...(profile ? { runtimeProfile: profile } : {}), ...(input.startupTimeoutMs === undefined ? {} : { startupTimeoutMs: input.startupTimeoutMs }) });
     const journal = await TaskStore.open(stateRoot);
     try {
       for (const record of await journal.list()) {
@@ -151,10 +185,40 @@ export class DockerBackend {
     const root = this.#config.workspaceRoots[key];
     // Revalidate root every time: a replaced symlink cannot silently change policy.
     if (await realpath(root) !== root) throw new DockerOperationError("Workspace root changed");
-    const workspace = await realpath(path.resolve(root, selection));
+    const selected = path.resolve(root, selection);
+    let current = root;
+    for (const segment of path.relative(root, selected).split(path.sep).filter(Boolean)) {
+      current = path.join(current, segment);
+      const metadata = await lstat(current);
+      if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new DockerOperationError("Workspace directory changed");
+    }
+    const workspace = await realpath(selected);
     const relative = path.relative(root, workspace);
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !(await stat(workspace)).isDirectory() || this.#protected.some(p => overlaps(workspace, p))) throw new DockerOperationError("Workspace escapes policy or overlaps private authority");
+    if (workspace !== selected || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !(await stat(workspace)).isDirectory() || this.#protected.some(p => overlaps(workspace, p))) throw new DockerOperationError("Workspace escapes policy or overlaps private authority");
     return workspace;
+  }
+
+  async #savedWorkspace(task: TaskRecord): Promise<void> {
+    try {
+      const payload: unknown = task.payload;
+      const saved = object(payload) ? payload.workspace : undefined;
+      if (typeof saved !== "string" || absolute(saved) !== saved) throw new Error();
+      // Existing journals already pin the approved canonical mount source and
+      // the policy hash pins these root coordinates. Recover its root+relative
+      // selector without changing journal schemas or consulting a mutable alias.
+      const root = Object.entries(this.#config.workspaceRoots).find(([, directory]) => inside(directory, saved));
+      if (!root || await this.#workspace({ instanceId: task.target, workspace: { root: root[0], path: path.relative(root[1], saved) } }) !== saved) throw new Error();
+    } catch { throw new DockerOperationError("Saved workspace no longer satisfies the approved policy"); }
+  }
+
+  /** Approval/execution preflight; inspection and stop deliberately stay independent. */
+  validateStart(instanceId: string): Promise<void> {
+    return this.#serial(async () => {
+      const task = await this.#record(instanceId);
+      if (!task) throw new DockerOperationError("Instance not owned");
+      this.#identity(task);
+      await this.#savedWorkspace(task);
+    });
   }
 
   #labels(task: TaskRecord) {
@@ -174,9 +238,54 @@ export class DockerBackend {
     if (!w) return [];
     const h = this.#hub!;
     return [{ Type: "bind", Source: w.packageRoot, Target: "/opt/pi-web", ReadOnly: true },
-      { Type: "bind", Source: h.runtimeDir, Target: "/run/pi-registry", ReadOnly: true },
-      { Type: "bind", Source: path.join(this.#config.stateRoot, `registration-${task.id}.json`), Target: "/run/pi-web/credential.json", ReadOnly: true },
+      { Type: "bind", Source: w.enrollment?.registryHostDirectory ?? h.runtimeDir, Target: "/run/pi-registry", ReadOnly: true },
+      { Type: "bind", Source: path.join(w.enrollment?.exportHostDirectory ?? this.#config.stateRoot, `registration-${task.id}.json`), Target: "/run/pi-web/credential.json", ReadOnly: true },
       ...(w.provider ? [{ Type: "bind", Source: w.provider.packageRoot, Target: "/opt/pi-provider", ReadOnly: true }] : [])];
+  }
+
+  #environment(): string[] {
+    const web = this.#config.web;
+    return ["HOME=/home/node", "PATH=/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin", ...(web ? ["PI_AGENT_DIR=/home/node/.pi/manager-agent", "PI_CODING_AGENT_DIR=/home/node/.pi/manager-agent", ...(this.#config.runtimeProfile ? [] : ["PI_OFFLINE=1"]), "PI_SKIP_VERSION_CHECK=1", "PI_WEB_UI_HOST=127.0.0.1", `PI_WEB_UI_PORT=${web.port}`, "PI_WEB_UI_DISABLED=false", "PI_WEB_UI_REGISTRY_SOCKET=/run/pi-registry/registry.sock", "PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/pi-web/credential.json"] : []),
+      ...Object.entries(this.#config.runtimeProfile?.environment ?? {}).map(([key, value]) => `${key}=${value}`)];
+  }
+
+  async #image(): Promise<RecordValue> {
+    const image = await this.#engine.call("GET", `/images/${encodeURIComponent(this.#config.image)}/json`);
+    if (!object(image) || image.Id !== this.#config.image || !object(image.Config) || (image.Config.Volumes && Object.keys(image.Config.Volumes).length)) throw new DockerOperationError("Pinned Docker image contract unavailable");
+    // Docker merges image Env; neither "0" nor "" removes a key. Pi's online
+    // model loader requires PI_OFFLINE to be genuinely undefined.
+    if (this.#config.runtimeProfile && Array.isArray(image.Config.Env) && image.Config.Env.some((e: unknown) => typeof e === "string" && (e === "PI_OFFLINE" || e.startsWith("PI_OFFLINE=")))) throw new DockerOperationError("Pinned Docker image contract unavailable");
+    // A nested file bind on a fresh /home/node volume can cause Docker to
+    // create root-owned destination parents. Require an administrator-prepared
+    // pinned image whose home copy-up already supplies UID1000 writable parents.
+    // This label is an image-author contract, not filesystem proof from inspect.
+    if (this.#config.runtimeProfile?.modelsFile && image.Config.Labels?.["cn.swordfate.pi-manager.profile-home"] !== "uid1000-v1") throw new DockerOperationError("Pinned Docker image contract unavailable");
+    return image;
+  }
+
+  async #runtime(): Promise<void> {
+    const p = this.#config.runtimeProfile;
+    if (!p) return;
+    await validateRuntimeSources(p);
+    if (p.runtimeVolume) {
+      const v = await this.#engine.call("GET", `/volumes/${p.runtimeVolume}`, undefined, { allowMissing: true });
+      if (!object(v) || v.Name !== p.runtimeVolume || v.Driver !== "local" || (v.Options && Object.keys(v.Options).length)) throw new DockerOperationError("Existing local runtime volume required");
+    }
+  }
+
+  async #ready(task: TaskRecord): Promise<void> {
+    if (!this.#enrollment) return;
+    const container = await this.#owned(task);
+    if (container?.State?.Running !== true) throw new DockerOperationError("Pi is not running; retained identity requires approved start");
+    const deadline = Date.now() + (this.#config.startupTimeoutMs ?? 20000);
+    while (Date.now() < deadline) {
+      let ready = false;
+      try { ready = await this.#enrollment.status(task.id, task.target, deadline - Date.now()); } catch { /* bounded readiness retries, never reissue a grant */ }
+      if (ready) return;
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await new Promise(resolve => setTimeout(resolve, Math.min(100, remaining)));
+    }
+    throw new DockerOperationError("Pi registration readiness timed out; retained identity requires approved start");
   }
 
   async #record(instanceId: string): Promise<TaskRecord | undefined> {
@@ -191,12 +300,32 @@ export class DockerBackend {
     const expected = this.#labels(task);
     const cfg = object(info) && object(info.Config) ? info.Config : undefined;
     const host = object(info) && object(info.HostConfig) ? info.HostConfig : undefined;
-    const webMounts = this.#webMounts(task);
+    const webMounts = [...this.#webMounts(task), ...runtimeProfileMounts(this.#config.runtimeProfile)];
     if (!object(info) || info.Id !== identity.containerId || info.Image !== identity.image || !cfg || !object(cfg.Labels) || Object.entries(expected).some(([k, v]) => cfg.Labels[k] !== v) || cfg.User !== "1000:1000" || !host || host.Privileged !== false || host.ReadonlyRootfs !== true || JSON.stringify(host.CapDrop) !== '["ALL"]' || !Array.isArray(host.SecurityOpt) || !host.SecurityOpt.includes("no-new-privileges:true") || host.NetworkMode !== (this.#config.web ? "host" : "none") || !Array.isArray(info.Mounts) || info.Mounts.length !== 2 + webMounts.length) throw new DockerOperationError("Container ownership or safety contract mismatch");
     for (const expected of webMounts) {
       const mount = info.Mounts.find((m: any) => m.Destination === expected.Target);
-      if (!mount || mount.Type !== "bind" || mount.Source !== expected.Source || mount.RW !== false) throw new DockerOperationError("Container enrollment mount mismatch");
+      if (!mount || mount.Type !== expected.Type || (expected.Type === "volume" ? mount.Name : mount.Source) !== expected.Source || mount.RW !== false) throw new DockerOperationError("Container enrollment/profile mount mismatch");
+      if (expected.Type === "volume") {
+        const configured = host.Mounts?.find((m: any) => m.Target === expected.Target);
+        if (configured?.VolumeOptions?.NoCopy !== true || configured?.ReadOnly !== true) throw new DockerOperationError("Container runtime volume safety contract mismatch");
+      }
     }
+    const image = await this.#image();
+    const environment = (entries: unknown): Map<string, string> => {
+      if (!Array.isArray(entries)) throw new DockerOperationError("Container environment contract mismatch");
+      const result = new Map<string, string>();
+      for (const entry of entries) {
+        if (typeof entry !== "string" || !entry.includes("=") || entry.includes("\0")) throw new DockerOperationError("Container environment contract mismatch");
+        const name = entry.slice(0, entry.indexOf("="));
+        if (!name || result.has(name)) throw new DockerOperationError("Container environment contract mismatch");
+        result.set(name, entry.slice(entry.indexOf("=") + 1));
+      }
+      return result;
+    };
+    const merged = environment(image.Config.Env ?? []);
+    for (const [k, v] of environment(this.#environment())) merged.set(k, v);
+    const actual = environment(cfg.Env);
+    if (actual.size !== merged.size || [...merged].some(([k, v]) => actual.get(k) !== v) || JSON.stringify(cfg.Entrypoint) !== JSON.stringify(this.#config.entrypoint) || JSON.stringify(cfg.Cmd) !== JSON.stringify(this.#config.command) || cfg.WorkingDir !== "/workspace") throw new DockerOperationError("Container execution contract mismatch");
     const payload: unknown = task.payload;
     const workspace = object(payload) ? payload.workspace : undefined;
     const bind = info.Mounts.find((m: any) => m.Destination === "/workspace");
@@ -219,18 +348,18 @@ export class DockerBackend {
       let task = await this.#journal.submit({ key: copy.instanceId, requester: this.#owner, target: copy.instanceId, action: "docker.create", payload });
       if (task.state === "succeeded") {
         if (!(await this.#owned(task))) throw new DockerOperationError("Owned container missing; reconciliation required");
-        return this.#identity(task);
+        await this.#ready(task); return this.#identity(task);
       }
       if (task.state !== "pending_approval") throw new DockerOperationError("Prior Docker operation requires reconciliation");
-      const image = await this.#engine.call("GET", `/images/${encodeURIComponent(this.#config.image)}/json`);
-      if (!object(image) || image.Id !== this.#config.image || !object(image.Config) || (image.Config.Volumes && Object.keys(image.Config.Volumes).length)) throw new DockerOperationError("Pinned Docker image contract unavailable");
+      await this.#image(); await this.#runtime();
       task = await this.#journal.transition(task.id, "pending_approval", "queued", { expectedRevision: task.revision });
       task = await this.#journal.transition(task.id, "queued", "running", { expectedRevision: task.revision });
       try {
         const labels = this.#labels(task);
         const web = this.#config.web;
-        const webMounts = this.#webMounts(task);
-        if (web) {
+        const webMounts = [...this.#webMounts(task), ...runtimeProfileMounts(this.#config.runtimeProfile)];
+        if (this.#enrollment) await this.#enrollment.issue(task.id, task.target);
+        else if (web) {
           const h = this.#hub!;
           const credential = webMounts.find(m => m.Target === "/run/pi-web/credential.json")!.Source;
           issueSession(h, credential, { label: task.target });
@@ -245,7 +374,7 @@ export class DockerBackend {
         if (!object(volume) || volume.Name !== homeVolume || volume.Driver !== "local" || (volume.Options && Object.keys(volume.Options).length) || !object(volume.Labels) || Object.entries(labels).some(([k,v]) => volume.Labels[k] !== v)) throw new DockerOutcomeUnknownError();
         const definition = {
           Image: this.#config.image, User: "1000:1000", WorkingDir: "/workspace", Entrypoint: [...this.#config.entrypoint!], Cmd: [...this.#config.command!],
-          Env: ["HOME=/home/node", "PATH=/home/node/.local/bin:/usr/local/bin:/usr/bin:/bin", ...(web ? ["PI_AGENT_DIR=/home/node/.pi/manager-agent", "PI_CODING_AGENT_DIR=/home/node/.pi/manager-agent", "PI_OFFLINE=1", "PI_SKIP_VERSION_CHECK=1", "PI_WEB_UI_HOST=127.0.0.1", `PI_WEB_UI_PORT=${web.port}`, "PI_WEB_UI_DISABLED=false", "PI_WEB_UI_REGISTRY_SOCKET=/run/pi-registry/registry.sock", "PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/pi-web/credential.json"] : [])], Labels: labels,
+          Env: this.#environment(), Labels: labels,
           AttachStdin: true, OpenStdin: true, StdinOnce: false, Tty: false,
           HostConfig: { Privileged: false, ReadonlyRootfs: true, NetworkMode: web ? "host" : "none", CapDrop: ["ALL"], SecurityOpt: ["no-new-privileges:true"],
             Memory: 1024 * 1024 * 1024, MemorySwap: 1024 * 1024 * 1024, NanoCpus: 1_000_000_000, PidsLimit: 256, RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
@@ -260,7 +389,9 @@ export class DockerBackend {
         task = await this.#journal.transition(task.id, "running", "succeeded", { expectedRevision: task.revision, result: { containerId: created.Id, homeVolume } });
         const info = await this.#owned(task);
         if (!info) throw new DockerOutcomeUnknownError();
+        await this.#savedWorkspace(task);
         await this.#engine.call("POST", `/containers/${created.Id}/start`);
+        await this.#ready(task);
         return this.#identity(task);
       } catch (error) {
         if (task.state === "running") {
@@ -306,9 +437,19 @@ export class DockerBackend {
       const info = await this.#owned(task);
       if (!info) throw new DockerOperationError("Owned container missing");
       const running = info.State?.Running === true;
+      if (action === "start") {
+        await this.#savedWorkspace(task);
+        await this.#runtime();
+        // Recover a missing export using the same durable key, never a new run.
+        if (this.#enrollment) await this.#enrollment.issue(task.id, task.target);
+        // Runtime/enrollment checks cross awaits. Recheck after them, directly
+        // before the start mutation, not just at approval or initial inspection.
+        await this.#savedWorkspace(task);
+      }
       if ((action === "start") !== running) await this.#engine.call("POST", `/containers/${this.#identity(task).containerId}/${action}${action === "stop" ? "?t=10" : ""}`);
       const after = await this.#owned(task);
       if (!after || (after.State?.Running === true) !== (action === "start")) throw new DockerOutcomeUnknownError();
+      if (action === "start") await this.#ready(task);
       return { ...this.#identity(task), status: action === "start" ? "running" : "stopped" };
     });
   }
@@ -318,6 +459,7 @@ export class DockerBackend {
     this.#closed = true;
     await this.#tail;
     this.#engine.close();
+    this.#enrollment?.close();
     await this.#journal.close();
   }
 }

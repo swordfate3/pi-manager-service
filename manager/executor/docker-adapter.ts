@@ -1,10 +1,12 @@
-import { realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { DockerBackend } from "../backends/docker.ts";
 import { executorConfig, privateDirectory, type ExecutorConfig } from "../config.ts";
 import type { JsonValue, TaskRecord, TaskRequest } from "../contracts.ts";
 import { keys, record, requireThat } from "../validation.ts";
 import type { TaskBackendAdapter } from "./adapter.ts";
+import { WorkspacePolicy } from "../workspaces.ts";
+import type { WorkspaceSelection } from "../api.ts";
 
 /** Requester authority belongs to TaskStore; exact container identity belongs to DockerBackend. */
 export class DockerTaskAdapter implements TaskBackendAdapter {
@@ -13,15 +15,16 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
   readonly policy: JsonValue;
   readonly #config: ExecutorConfig;
   readonly #backend: DockerBackend;
+  readonly #workspaces: WorkspacePolicy;
   readonly #owners = new Map<string, string>();
 
-  private constructor(config: ExecutorConfig, backend: DockerBackend) {
-    this.#config = config; this.#backend = backend;
+  private constructor(config: ExecutorConfig, backend: DockerBackend, workspaces: WorkspacePolicy) {
+    this.#config = config; this.#backend = backend; this.#workspaces = workspaces;
     this.capabilities = { native: false, docker: true, isolation: "fixed-container" as const, enrollment: !!config.docker?.web };
     this.policy = JSON.parse(JSON.stringify({ docker: config.docker, workspaces: config.workspaces }));
   }
 
-  static async open(value: ExecutorConfig): Promise<DockerTaskAdapter> {
+  static async open(value: ExecutorConfig, workspacePolicy?: WorkspacePolicy): Promise<DockerTaskAdapter> {
     const config = executorConfig(value);
     requireThat(config.docker, 503);
     // Pin the filesystem-resolved socket path, and check both alias and destination against the roots.
@@ -31,7 +34,8 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
     await privateDirectory(config.docker.stateRoot);
     config.docker = { ...config.docker, protectedRoots: [...(config.docker.protectedRoots ?? []),
       config.stateRoot, path.dirname(config.submitSocket), path.dirname(config.adminSocket)] };
-    return new DockerTaskAdapter(config, await DockerBackend.open(config.docker));
+    const workspaces = workspacePolicy ?? await WorkspacePolicy.open(config);
+    return new DockerTaskAdapter(config, await DockerBackend.open(config.docker, { allowProtectedDescendants: config.workspaceBrowser !== undefined }), workspaces);
   }
 
   async restore(records: readonly TaskRecord[]) {
@@ -50,17 +54,9 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
     }
   }
 
-  async #workspace(request: TaskRequest) {
+  async #workspace(request: TaskRequest): Promise<WorkspaceSelection> {
     const payload = record(request.payload); keys(payload, ["workspace"]);
-    requireThat(typeof payload.workspace === "string" && Object.hasOwn(this.#config.workspaces, payload.workspace));
-    const w = this.#config.workspaces[payload.workspace];
-    const root = this.#config.docker!.workspaceRoots[w.root];
-    try {
-      requireThat(await realpath(root) === root);
-      const selected = await realpath(path.resolve(root, w.path)); const relative = path.relative(root, selected);
-      requireThat(relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) && (await stat(selected)).isDirectory());
-    } catch { requireThat(false); }
-    return w;
+    return await this.#workspaces.resolve(payload.workspace);
   }
 
   async validate(request: TaskRequest) {
@@ -75,6 +71,7 @@ export class DockerTaskAdapter implements TaskBackendAdapter {
     requireThat(this.#owners.get(request.target) === request.requester, 403);
     const owned = await this.#backend.inspect(request.target);
     requireThat(owned && owned.status !== "missing", 409);
+    if (request.action === "start") await this.#backend.validateStart(request.target);
   }
 
   async execute(task: TaskRecord) {

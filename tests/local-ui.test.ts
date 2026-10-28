@@ -545,6 +545,78 @@ test("existing runs open explicitly and stop requires confirmation for that exac
   assert.match(f.get("local-runs").textContent, /正在停止/);
 });
 
+// Break caught: container IDs or directory-based matching hide or mix up the current Pi session names.
+test("web instances use their exact registered session names while retaining distinct instance IDs", async () => {
+  const state = initialState();
+  state.runs = [
+    run({ id: "pi-local-first", state: "ready", path: "/s/first/" }),
+    run({ id: "pi-local-second", state: "ready", path: "/s/second/" }),
+  ];
+  state.sessions = [
+    { label: "same-directory", sessionName: "第二个会话", generation: "second", path: "/s/second/", since: 1 },
+    { label: "same-directory", sessionName: "Pi Web 弹窗开发 <b>纯文本</b>", generation: "first", path: "/s/first/", since: 1 },
+  ];
+  const f = await fixture(state);
+  const cards = f.get("local-runs").children;
+  assert.equal(cards.length, 2, "registered web sessions must not also appear as terminal cards");
+  assert.equal(cards[0].children[0].textContent, "Pi Web 弹窗开发 <b>纯文本</b>");
+  assert.equal(cards[1].children[0].textContent, "第二个会话");
+  assert.match(cards[0].textContent, /实例：pi-local-first/);
+  assert.match(cards[1].textContent, /实例：pi-local-second/);
+  await f.button("打开", cards[1]).fire();
+  assert.deepEqual(f.navigations, ["/s/second/"]);
+});
+
+// Break caught: names captured on launch remain stale after rename, resume, or registration loss.
+test("web titles follow refreshed session metadata and never retain a stale session name", async () => {
+  const state = initialState();
+  state.runs = [run({ id: "pi-local-existing", state: "ready", path: "/s/existing/" })];
+  state.sessions = [{ label: "project", sessionName: "旧会话", generation: "existing", path: "/s/existing/", since: 1 }];
+  const f = await fixture(state);
+  assert.equal(f.get("local-runs").children[0].children[0].textContent, "旧会话");
+  state.sessions[0].sessionName = "重命名后的会话";
+  await f.poll();
+  assert.equal(f.get("local-runs").children[0].children[0].textContent, "重命名后的会话");
+  state.runs[0].path = "/s/resumed/";
+  state.sessions = [{ label: "project", sessionName: "恢复的另一个会话", generation: "resumed", path: "/s/resumed/", since: 2 }];
+  await f.poll();
+  assert.equal(f.get("local-runs").children[0].children[0].textContent, "恢复的另一个会话");
+  state.sessions = [];
+  await f.poll();
+  assert.equal(f.get("local-runs").children[0].children[0].textContent, "未命名会话 · pi_projects");
+  assert.doesNotMatch(f.get("local-runs").textContent, /旧会话|重命名后的会话|恢复的另一个会话/);
+});
+
+for (const sessionName of [undefined, null, "", "   "]) {
+  test(`an unnamed web session falls back to its project folder, not its ID or launch label: ${JSON.stringify(sessionName)}`, async () => {
+    const state = initialState();
+    state.runs = [run({ id: "pi-local-unnamed", state: "ready", workspace: { root: "projects", path: "parent/项目 A" }, path: "/s/unnamed/" })];
+    state.sessions = [{ label: "pi-local-launch-label", sessionName, generation: "unnamed", path: "/s/unnamed/", since: 1 }];
+    const f = await fixture(state);
+    assert.equal(f.get("local-runs").children[0].children[0].textContent, "未命名会话 · 项目 A");
+    assert.match(f.get("local-runs").textContent, /实例：pi-local-unnamed/);
+    assert.match(f.get("local-runs").textContent, /parent\/项目 A/);
+  });
+}
+
+// Break caught: displaying the right name while stopping a different same-folder instance.
+test("stop confirmation includes the refreshed session name and submits only the original instance ID", async () => {
+  const state = initialState();
+  state.runs = [run({ id: "pi-local-stop-me", state: "ready", path: "/s/stop-me/" })];
+  state.sessions = [{ label: "project", sessionName: "旧标题", generation: "stop-me", path: "/s/stop-me/", since: 1 }];
+  const f = await fixture(state);
+  state.sessions[0].sessionName = "请停止这个会话";
+  await f.poll();
+  f.setConfirm(false);
+  await f.button("停止").fire();
+  assert.match(f.confirmations.at(-1)!, /请停止这个会话/);
+  assert.match(f.confirmations.at(-1)!, /pi-local-stop-me/);
+  assert.equal(f.calls.filter(call => call.route.endsWith("/stop")).length, 0);
+  f.setConfirm(true);
+  await f.button("停止").fire();
+  assert.deepEqual(f.calls.filter(call => call.route.endsWith("/stop")).map(call => call.body), [{ id: "pi-local-stop-me" }]);
+});
+
 // Break caught: exposing a stop control for an unmanaged terminal, duplicating a managed path, or retaining vanished terminal sessions.
 test("validated terminal sessions are deduplicated, open-only, and reconcile on polling", async () => {
   const state = initialState();
@@ -597,8 +669,8 @@ test("only confirmed stopped cards disappear while failures and uncertain instan
     run({ id: "needs-repair", state: "failed", error: "启动失败原因" }),
   ];
   const f = await fixture(state);
-  assert.deepEqual(f.get("local-runs").children.map(item => item.children[0].textContent),
-    ["idle-ready", "still-starting", "still-stopping", "needs-inspection", "needs-repair"]);
+  assert.deepEqual(f.get("local-runs").children.map(item => item.children.find(child => child.className.includes("run-identity"))?.textContent),
+    ["实例：idle-ready", "实例：still-starting", "实例：still-stopping", "实例：needs-inspection", "实例：needs-repair"]);
   assert.match(f.get("local-runs").textContent, /待核对容器|启动失败原因/);
   await f.poll();
   assert.equal(f.get("local-runs").children.length, 5, "idle ready instances are not treated as finished");
@@ -610,7 +682,9 @@ test("stopping stays visible until polling confirms stopped, then only that inst
     run({ id: "other-run", state: "ready", path: "/s/other-run/" })];
   const f = await fixture(state);
   await f.button("停止", f.get("local-runs").children[0]).fire();
-  assert.match(f.get("local-runs").textContent, /selected-run.*正在停止/);
+  const stoppingCard = f.get("local-runs").children.find(card => card.textContent.includes("selected-run"));
+  assert.ok(stoppingCard);
+  assert.match(stoppingCard.textContent, /正在停止/);
   state.runs[0].state = "stopped";
   delete state.runs[0].path;
   await f.poll();
@@ -652,6 +726,75 @@ for (const path of ["https://evil.test/s/session/", "//evil.test/s/session/", "/
     assert.match(f.get("local-status").textContent, /会话|地址/);
   });
 }
+
+// A visual/DOM fixture for this workbench renderer, not a real-Pi end-to-end test.
+test("Chromium renders web session names and exact-instance controls on desktop and mobile", {
+  skip: !process.env.PI_LOCAL_UI_TEST_BROWSER,
+  timeout: 30000,
+}, async (t) => {
+  const { mkdir } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const { chromium } = await import("@playwright/test");
+  const output = await rendered(), state = initialState();
+  const title = "Pi Web 弹窗开发 <b>纯文本</b> · " + "会话名称较长也要完整显示".repeat(3);
+  state.runs = [
+    run({ id: "pi-local-111111111111111111111111", state: "ready", path: "/s/visual-first/" }),
+    run({ id: "pi-local-222222222222222222222222", state: "ready", path: "/s/visual-second/" }),
+  ];
+  state.sessions = [
+    { label: "same-project", sessionName: title, generation: "visual-first", path: "/s/visual-first/", since: 1 },
+    { label: "same-project", sessionName: null, generation: "visual-second", path: "/s/visual-second/", since: 1 },
+  ];
+  const browser = await chromium.launch({ executablePath: process.env.PI_LOCAL_UI_TEST_BROWSER, headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  await context.route("**/*", async route => {
+    const url = new URL(route.request().url());
+    if (url.origin !== "http://localhost") return route.abort();
+    if (url.pathname === "/") return route.fulfill({ status: output.html.status, headers: output.html.headers, body: output.html.body });
+    if (url.pathname === "/local.js") return route.fulfill({ status: output.script.status, headers: output.script.headers, body: output.script.body });
+    if (url.pathname === "/api/local/state") return route.fulfill({ json: state });
+    if (url.pathname === "/api/local/browse") return route.fulfill({ json: {
+      ...route.request().postDataJSON(), directories: [], entries: [], total: 0, nextOffset: null, truncated: false,
+    } });
+    if (url.pathname === "/s/resumed-visual/") return route.fulfill({ contentType: "text/html", body: "<h1>Synthetic session</h1>" });
+    return route.abort();
+  });
+  const page = await context.newPage(), errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto("http://localhost/");
+  const cards = page.locator("#local-runs > li");
+  await page.getByRole("heading", { name: title, exact: true }).waitFor();
+  assert.equal(await cards.count(), 2);
+  assert.equal(await cards.nth(1).locator("h3").textContent(), "未命名会话 · pi_projects");
+  assert.equal(await cards.nth(0).locator(".run-identity").innerText(), "实例：pi-local-111111111111111111111111");
+  assert.equal(await cards.nth(0).locator("b").count(), 0, "session names must not become markup");
+  const screenshots = path.resolve(".tmp/local-session-names");
+  await mkdir(screenshots, { recursive: true });
+  for (const width of [1280, 390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const box = await cards.nth(0).locator("h3").boundingBox();
+    assert.ok(box && box.x >= 0 && box.x + box.width <= width);
+    if (width !== 320) await page.locator("#local-runs").screenshot({ path: path.join(screenshots, `${width}.png`) });
+  }
+  state.sessions[0].sessionName = "重命名后的当前会话";
+  await page.locator("#local-refresh").click();
+  await page.getByRole("heading", { name: "重命名后的当前会话", exact: true }).waitFor();
+  state.runs[0].path = "/s/resumed-visual/";
+  state.sessions[0] = { label: "same-project", sessionName: "恢复后的会话", generation: "resumed-visual", path: "/s/resumed-visual/", since: 2 };
+  await page.locator("#local-refresh").click();
+  await page.getByRole("heading", { name: "恢复后的会话", exact: true }).waitFor();
+  page.once("dialog", async dialog => {
+    assert.match(dialog.message(), /恢复后的会话/);
+    assert.match(dialog.message(), /pi-local-111111111111111111111111/);
+    await dialog.dismiss();
+  });
+  await cards.nth(0).getByRole("button", { name: "停止", exact: true }).click();
+  await cards.nth(0).getByRole("button", { name: "打开", exact: true }).click();
+  await page.waitForURL("http://localhost/s/resumed-visual/");
+  assert.deepEqual(errors, []);
+});
 
 test("local Chromium verifies real DOM, CSP, mobile layout and matching-run redirect (opt-in)", {
   skip: !process.env.PI_LOCAL_UI_TEST_BROWSER,

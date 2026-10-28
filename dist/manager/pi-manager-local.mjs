@@ -6684,7 +6684,7 @@ button,select,input{font:inherit;max-width:100%;border:1px solid #c8d7d2;border-
 <div class="page-controls"><button id="local-prev-page" type="button" disabled>上一页</button><button id="local-next-page" type="button" disabled>下一页</button></div>
 <button id="local-browse-retry" type="button" hidden>重试读取目录</button>
 <button id="local-start" class="primary" type="button" disabled>启动并进入会话</button>
-<p class="footer">实例名称自动生成，无需填写。工作区会在启动时再次由本机服务校验。</p>
+<p class="footer">会话名自动同步，未命名时显示项目目录。工作区会在启动时再次由本机服务校验。</p>
 </section>
 <section aria-labelledby="runs-heading"><div class="section-head"><h2 id="runs-heading"><span class="step" aria-hidden="true">2</span>本机实例</h2><button id="local-refresh" type="button">刷新状态</button></div>
 <p class="muted">已有会话可手动打开；停止前会再次确认，确认停止后自动移出列表。</p><ul id="local-runs" aria-label="本机实例"></ul></section>
@@ -6713,7 +6713,7 @@ var localScript = String.raw`"use strict";
 (() => {
   const el = id => document.getElementById(id);
   const states = {starting:'正在启动',ready:'可进入',failed:'启动失败',stopping:'正在停止',stopped:'已停止',unknown:'状态未确认'};
-  let csrf = '', roots = [], runs = [], terminalSessions = [], selected = null, requested = null;
+  let csrf = '', roots = [], runs = [], registeredSessions = [], selected = null, requested = null;
   let configured = false, healthy = false, browsing = false, browseGeneration = 0, browseQuery = '', browseSort = 'name-asc', browseOffset = 0, browseNextOffset = null, browseTimer = null;
   let pending = null, posting = false, refreshing = false, pollTimer = null, navigated = false;
   const stopping = new Set();
@@ -6741,6 +6741,12 @@ var localScript = String.raw`"use strict";
   const workspaceText = value => {
     const root = roots.find(item => item.id === value.root);
     return (root ? root.label : value.root) + ' / ' + (value.path || '（根目录）');
+  };
+  const runTitle = value => {
+    // Resolve from the current registration, never a same-folder instance or a cached launch name.
+    const session = sessionPath(value.path) ? registeredSessions.find(item => item.path === value.path) : undefined;
+    const directory = value.workspace.path.split('/').pop() || roots.find(item => item.id === value.workspace.root)?.label || value.workspace.root;
+    return session?.sessionName?.trim() || '未命名会话 · ' + directory;
   };
   function controls() {
     const locked = !!pending || posting;
@@ -6886,16 +6892,17 @@ var localScript = String.raw`"use strict";
     const visibleRuns = runs.filter(value => value.state !== 'stopped');
     const managedPaths = new Set(runs.map(value => sessionPath(value.path) ? value.path : null).filter(Boolean));
     const seenTerminalPaths = new Set();
-    const visibleTerminalSessions = terminalSessions.filter(value => !managedPaths.has(value.path) && !seenTerminalPaths.has(value.path) && (seenTerminalPaths.add(value.path), true));
+    const visibleTerminalSessions = registeredSessions.filter(value => !managedPaths.has(value.path) && !seenTerminalPaths.has(value.path) && (seenTerminalPaths.add(value.path), true));
     if (!visibleRuns.length && !visibleTerminalSessions.length) {
       const empty = document.createElement('li'); empty.textContent = '暂无运行中的本机实例，选择工作区即可启动。'; list.append(empty); return;
     }
     for (const value of visibleRuns) {
       const item = document.createElement('li'), name = document.createElement('h3'), badge = document.createElement('span');
-      name.textContent = value.id; badge.className = 'badge'; badge.textContent = states[value.state];
+      name.textContent = runTitle(value); badge.className = 'badge'; badge.textContent = states[value.state];
       const source = document.createElement('span'); source.className = 'badge'; source.textContent = '网页启动';
       const folder = document.createElement('p'); folder.className = 'run-workspace'; folder.textContent = workspaceText(value.workspace);
-      item.append(name, badge, source, folder);
+      const identity = document.createElement('p'); identity.className = 'run-workspace run-identity'; identity.textContent = '实例：' + value.id;
+      item.append(name, badge, source, folder, identity);
       if (value.error || value.state === 'unknown' || value.state === 'failed') {
         const note = document.createElement('p'); note.className = 'notice';
         note.textContent = (value.error ? value.error + ' ' : '') +
@@ -6927,7 +6934,7 @@ var localScript = String.raw`"use strict";
     }
   }
   async function stopRun(value) {
-    if (!healthy || stopping.has(value.id) || !window.confirm('确认停止实例「' + value.id + '」？这会结束该实例的运行。')) return;
+    if (!healthy || stopping.has(value.id) || !window.confirm('确认停止会话「' + runTitle(value) + '」？\n实例：' + value.id + '\n这会结束该实例的运行。')) return;
     stopping.add(value.id); renderRuns();
     try {
       const result = await api('stop', {id:value.id});
@@ -6970,7 +6977,7 @@ var localScript = String.raw`"use strict";
       if (!validState(value)) throw Error('本机状态响应无效。');
       const recovered = configured && !healthy;
       csrf = value.csrfToken; healthy = true; roots = value.browser.roots; runs = value.runs;
-      terminalSessions = (value.sessions || []).filter(validTerminalSession);
+      registeredSessions = (value.sessions || []).filter(validTerminalSession);
       const rootSelect = el('local-root'), previousRoot = requested ? requested.root : value.defaultWorkspace.root;
       rootSelect.replaceChildren();
       for (const root of roots) {

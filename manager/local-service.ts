@@ -6,7 +6,7 @@ import { readHubConfig } from "../hub/config.ts";
 import { privateDirectory } from "./config.ts";
 import { localConfig } from "./local-config.ts";
 import { LocalLauncher } from "./local-launcher.ts";
-import { WorkspacePolicy } from "./workspaces.ts";
+import { localBrowseQuery, WorkspacePolicy } from "./workspaces.ts";
 import { header, jsonBody, reply } from "./http.ts";
 import { ManagerError, requireThat } from "./validation.ts";
 import { renderLocalPage, renderLocalScript } from "./local-ui.ts";
@@ -14,7 +14,6 @@ import { renderAuthPage, renderAuthScript, renderAccountPage } from "./local-aut
 import { LocalStore } from "./local-store.ts";
 import { LocalAuth } from "./local-auth.ts";
 import { readSessionCookie } from "./local-security.ts";
-import { workspaceSelection } from "./workspaces.ts";
 import { canonical } from "./validation.ts";
 import { proxyLocalUpgrade } from "./local-websocket.ts";
 
@@ -65,7 +64,7 @@ export async function startLocalService(value: unknown) {
   const websockets=new Map<import("node:stream").Duplex,string>();
   const revalidateSockets=()=> {for(const [socket,hash] of websockets) if(!store.session(hash)) socket.destroy();};
   const expiry=setInterval(()=>{try{store.cleanup();revalidateSockets();}catch{for(const socket of websockets.keys()) socket.destroy();}},1000);expiry.unref();
-  const directories=new Map<string,{expires:number;page:Awaited<ReturnType<typeof policy.browse>>}>();
+  const directories=new Map<string,{expires:number;page:Awaited<ReturnType<typeof policy.browseEntries>>}>();
   function boundary(req: IncomingMessage, mutation = false) {
     requireThat(header(req, "host") === new URL(origin).host, 403);
     requireThat(req.url && req.url.length<=8192 && req.url.startsWith("/") && !req.url.startsWith("//") && !req.url.includes("\\"),400);
@@ -110,16 +109,15 @@ export async function startLocalService(value: unknown) {
     if (req.method === "GET" && req.url === "/local.js") { renderLocalScript(res,header(req,"if-none-match")); return; }
     if (req.method === "GET" && req.url === "/sessions/") { res.writeHead(302, { Location: "/", "Cache-Control": "no-store" }).end(); return; }
     if (req.url === "/api/local/state" && req.method === "GET") {
-      reply(res, 200, { defaultWorkspace: config.defaultWorkspace, lastWorkspace:store.preference("workspace"),browser: policy.browser(), runs: launcher.list(), csrfToken:session.csrf }); return;
+      const sessions = hub.listSessions().map(({ label, sessionName, generation, path, since }) => ({ label, sessionName, generation, path, since }));
+      reply(res, 200, { defaultWorkspace: config.defaultWorkspace, lastWorkspace:store.preference("workspace"),browser: policy.browser(), runs: launcher.list(), sessions, csrfToken:session.csrf }); return;
     }
     if (req.url?.startsWith("/api/local/")) {
       requireThat(req.method === "POST", 404); boundary(req, true);auth.checkCsrf(header(req,"x-pi-local-csrf"),session); const body = await jsonBody(req);auth.revalidate(session);
       if (req.url === "/api/local/browse") {
-        const selection=workspaceSelection(body),key=canonical(selection),cached=directories.get(key);
+        const selection=localBrowseQuery(body),key=canonical(selection),cached=directories.get(key);
         const hit=!!cached && cached.expires>Date.now();
-        const page = hit ? structuredClone(cached.page) : await policy.browse(body);
-        if (page.path !== "") requireThat(!denied(page));
-        page.directories = page.directories.filter(directory => !denied({ root: page.root, path: directory.path }));
+        const page = hit ? structuredClone(cached.page) : await policy.browseEntries(selection, config.protectedRoots);
         if(!hit) {directories.delete(key);if(directories.size>=64) directories.delete(directories.keys().next().value!);directories.set(key,{expires:Date.now()+2000,page:structuredClone(page)});}
         res.setHeader("Server-Timing",`directory;desc="${hit?"hit":"miss"}"`);
         reply(res, 200, page);

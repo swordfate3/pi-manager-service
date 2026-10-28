@@ -130,6 +130,60 @@ test("local browse hides private and symlink paths and refuses outside-home sele
   assert.equal(denied.status, 400); assert.deepEqual((await f.call("/api/local/state")).value.runs, []);
 });
 
+test("Chromium searches real file names, sorts and pages without changing the selected workspace", {
+  skip: !process.env.PI_LOCAL_UI_TEST_BROWSER,
+  timeout: 30000,
+}, async t => {
+  const f = await fixture(t);
+  const directory = path.join(f.projects, "默认项目");
+  for (let index = 0; index < 202; index++) await mkdir(path.join(directory, `folder-${index}`));
+  await writeFile(path.join(directory, "Target-Notes.PDF"), "never read or rendered");
+  const { chromium } = await import("@playwright/test");
+  const browser = await chromium.launch({ executablePath: process.env.PI_LOCAL_UI_TEST_BROWSER, headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  page.setDefaultTimeout(10000);
+  await page.context().addCookies([{ name: "pi_local_session", value: f.cookie.split("=")[1], url: f.service.url, httpOnly: true, sameSite: "Lax" }]);
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.goto(f.service.url);
+  await page.locator("#local-start:not([disabled])").waitFor();
+  assert.match((await page.locator("#local-browser-count").textContent())!, /203/);
+  assert.equal(await page.locator("#local-truncated").isVisible(), true);
+  await page.locator("#local-next-page").click();
+  await page.getByRole("button", { name: "folder-201", exact: true }).waitFor();
+  await page.locator("#local-search").fill("target-notes.pdf");
+  await page.locator("#local-directories .file-entry").waitFor();
+  assert.equal(await page.locator("#local-directories li").count(), 1);
+  assert.equal(await page.locator("#local-directories button").count(), 0);
+  assert.match((await page.locator("#local-directories").textContent())!, /Target-Notes.PDF/);
+  assert.doesNotMatch((await page.locator("body").textContent())!, /never read or rendered/);
+  await page.locator("#local-search-clear").click();
+  await page.getByRole("button", { name: "folder-0", exact: true }).waitFor();
+  await page.locator("#local-sort").selectOption("name-desc");
+  await page.getByRole("button", { name: "folder-201", exact: true }).waitFor();
+  assert.equal(await page.locator("#local-directories button").first().textContent(), "folder-201");
+  assert.match((await page.locator("#local-workspace").textContent())!, /默认项目/);
+  await page.locator("#local-start:not([disabled])").waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.deepEqual(errors, []);
+  assert.deepEqual((await f.call("/api/local/state")).value.runs, []);
+});
+
+test("authenticated local browse searches full directory before paging and separates cached query/sort requests", async t => {
+  const f = await fixture(t);
+  await writeFile(path.join(f.projects, "Project-notes.PDF"), "not returned as content");
+  const request = { root: "projects", path: "", query: "notes", sort: "name-desc", offset: 0 };
+  const first = await f.call("/api/local/browse", request);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.value.entries.map((entry: any) => [entry.name, entry.kind]), [["Project-notes.PDF", "file"]]);
+  assert.equal(first.value.total, 1);
+  assert.equal((await f.call("/api/local/browse", request)).headers["server-timing"].includes('directory;desc="hit"'), true);
+  const all = await f.call("/api/local/browse", { root: "projects", path: "", sort: "name-asc" });
+  assert.equal(all.status, 200); assert.equal(all.value.total, 3);
+  assert.ok(!JSON.stringify(all.value).includes("private"));
+  assert.ok(!JSON.stringify(first.value).includes("not returned as content"));
+});
+
 test("start generates the name, deduplicates delivery and reports child failure without exposing logs", async t => {
   const f = await fixture(t);
   const payload = { key: "start-1", workspace: { root: "projects", path: "默认项目" } };

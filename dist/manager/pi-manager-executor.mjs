@@ -2371,6 +2371,36 @@ function workspaceSelection(value) {
 function browserQuery(value) {
 	return workspaceSelection(value);
 }
+/** Separate from launch selection: search/sort parameters can never become a workspace. */
+function localBrowseQuery(value) {
+	const input = record$1(value);
+	keys(input, ["root", "path"], [
+		"query",
+		"sort",
+		"offset"
+	]);
+	const selection = workspaceSelection({
+		root: input.root,
+		path: input.path
+	});
+	const query = input.query === void 0 ? "" : input.query;
+	const sort = input.sort === void 0 ? "name-asc" : input.sort;
+	const offset = input.offset === void 0 ? 0 : input.offset;
+	requireThat(typeof query === "string" && query.length <= 200 && !/[\x00-\x1f\x7f]/u.test(query));
+	requireThat([
+		"name-asc",
+		"name-desc",
+		"modified-desc",
+		"modified-asc"
+	].includes(sort));
+	requireThat(Number.isSafeInteger(offset) && Number(offset) >= 0 && Number(offset) <= 1e6);
+	return {
+		...selection,
+		query,
+		sort,
+		offset
+	};
+}
 async function canonicalFuturePath(value) {
 	let current = value;
 	const suffix = [];
@@ -2550,6 +2580,71 @@ var WorkspacePolicy = class WorkspacePolicy {
 			if (error instanceof ManagerError) throw error;
 			throw new ManagerError(400);
 		}
+	}
+	/** Current-directory metadata only; no recursion, file reads, or symlink following. */
+	async browseEntries(value, extraProtectedRoots = []) {
+		requireThat(this.#browser !== null);
+		const query = localBrowseQuery(value);
+		const directory = await this.#directory(query, true);
+		const excluded = [...this.#protected, ...extraProtectedRoots];
+		if (query.path !== "") requireThat(!excluded.some((root) => overlaps$1(directory, root)));
+		const search = query.query.normalize("NFKC").toLocaleLowerCase();
+		const entries = [];
+		try {
+			let scanned = 0;
+			const handle = await opendir(directory);
+			for await (const entry of handle) {
+				requireThat(++scanned <= 2e4, 413);
+				if (entry.isSymbolicLink() || !entry.isDirectory() && !entry.isFile() || /[\x00-\x1f\x7f]/u.test(entry.name)) continue;
+				if (!entry.name.normalize("NFKC").toLocaleLowerCase().includes(search)) continue;
+				const childPath = query.path ? `${query.path}/${entry.name}` : entry.name;
+				try {
+					relativePath(childPath);
+				} catch {
+					continue;
+				}
+				const child = path.join(directory, entry.name);
+				if (excluded.some((root) => overlaps$1(child, root))) continue;
+				try {
+					const metadata = await lstat(child);
+					if (metadata.isSymbolicLink() || !metadata.isDirectory() && !metadata.isFile() || await realpath(child) !== child) continue;
+					entries.push({
+						name: entry.name,
+						path: childPath,
+						kind: metadata.isDirectory() ? "directory" : "file",
+						modifiedAt: metadata.mtimeMs
+					});
+				} catch {}
+			}
+		} catch (error) {
+			if (error instanceof ManagerError) throw error;
+			throw new ManagerError(400);
+		}
+		const collator = new Intl.Collator("zh-CN", {
+			numeric: true,
+			sensitivity: "base"
+		});
+		const byName = (left, right) => collator.compare(left.name, right.name) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+		entries.sort((left, right) => {
+			if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+			if (query.sort === "name-desc") return -byName(left, right);
+			if (query.sort === "modified-desc") return right.modifiedAt - left.modifiedAt || byName(left, right);
+			if (query.sort === "modified-asc") return left.modifiedAt - right.modifiedAt || byName(left, right);
+			return byName(left, right);
+		});
+		const page = entries.slice(query.offset, query.offset + DIRECTORY_LIMIT);
+		const nextOffset = query.offset + page.length < entries.length ? query.offset + page.length : null;
+		return {
+			...query,
+			entries: page,
+			total: entries.length,
+			nextOffset,
+			truncated: nextOffset !== null,
+			directories: page.filter((entry) => entry.kind === "directory").map(({ name, path }) => ({
+				name,
+				path
+			}))
+		};
 	}
 };
 //#endregion

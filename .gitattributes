@@ -1,0 +1,2 @@
+# Unified diff context records may consist of a single space; preserve them.
+deploy/local/*.patch whitespace=-blank-at-eol,-blank-at-eof

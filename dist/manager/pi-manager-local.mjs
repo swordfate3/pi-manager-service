@@ -4388,6 +4388,18 @@ async function startLockedHub(config, options) {
 		}
 		return session;
 	};
+	const listSessions = () => [...sessions.keys()].map(current).filter((session) => Boolean(session)).map((session) => ({
+		label: session.grant.label,
+		sessionName: session.sessionName,
+		generation: session.generation,
+		path: `/s/${session.generation}/`,
+		since: session.since,
+		...session.runtime ? { runtime: {
+			version: session.runtime.version,
+			managed: session.runtime.managed
+		} } : {},
+		...session.software ? { software: session.software } : {}
+	}));
 	const granted = (runId) => {
 		try {
 			return !readGrant(config, runId).revoked;
@@ -4897,17 +4909,9 @@ async function startLockedHub(config, options) {
 			}
 			if (pathname === "/api/sessions") {
 				versionStatus.ensureStarted();
-				const items = [...sessions.keys()].map(current).filter((s) => Boolean(s)).map((s) => ({
-					label: s.grant.label,
-					sessionName: s.sessionName,
-					generation: s.generation,
-					path: admin ? `${config.publicUrl ?? url}s/${s.generation}/` : `/s/${s.generation}/`,
-					since: s.since,
-					...s.runtime ? { runtime: {
-						version: s.runtime.version,
-						managed: s.runtime.managed
-					} } : {},
-					...s.software ? { software: s.software } : {}
+				const items = listSessions().map((session) => ({
+					...session,
+					path: admin ? `${config.publicUrl ?? url}s/${session.generation}/` : session.path
 				}));
 				response.writeHead(200, {
 					"Content-Type": "application/json",
@@ -5169,6 +5173,7 @@ async function startLockedHub(config, options) {
 		url,
 		...managementUrl ? { managementUrl } : {},
 		socketPath: config.socketPath,
+		listSessions,
 		/** Host-local launcher lookup only; never exposes a registration token. */
 		sessionPath(runId) {
 			const matches = [...sessions.values()].filter((session) => session.grant.run_id === runId && session.expires > Date.now());
@@ -5333,6 +5338,36 @@ function workspaceSelection(value) {
 }
 function browserQuery(value) {
 	return workspaceSelection(value);
+}
+/** Separate from launch selection: search/sort parameters can never become a workspace. */
+function localBrowseQuery(value) {
+	const input = record(value);
+	keys(input, ["root", "path"], [
+		"query",
+		"sort",
+		"offset"
+	]);
+	const selection = workspaceSelection({
+		root: input.root,
+		path: input.path
+	});
+	const query = input.query === void 0 ? "" : input.query;
+	const sort = input.sort === void 0 ? "name-asc" : input.sort;
+	const offset = input.offset === void 0 ? 0 : input.offset;
+	requireThat(typeof query === "string" && query.length <= 200 && !/[\x00-\x1f\x7f]/u.test(query));
+	requireThat([
+		"name-asc",
+		"name-desc",
+		"modified-desc",
+		"modified-asc"
+	].includes(sort));
+	requireThat(Number.isSafeInteger(offset) && Number(offset) >= 0 && Number(offset) <= 1e6);
+	return {
+		...selection,
+		query,
+		sort,
+		offset
+	};
 }
 async function canonicalFuturePath(value) {
 	let current = value;
@@ -5513,6 +5548,71 @@ var WorkspacePolicy = class WorkspacePolicy {
 			if (error instanceof ManagerError) throw error;
 			throw new ManagerError(400);
 		}
+	}
+	/** Current-directory metadata only; no recursion, file reads, or symlink following. */
+	async browseEntries(value, extraProtectedRoots = []) {
+		requireThat(this.#browser !== null);
+		const query = localBrowseQuery(value);
+		const directory = await this.#directory(query, true);
+		const excluded = [...this.#protected, ...extraProtectedRoots];
+		if (query.path !== "") requireThat(!excluded.some((root) => overlaps(directory, root)));
+		const search = query.query.normalize("NFKC").toLocaleLowerCase();
+		const entries = [];
+		try {
+			let scanned = 0;
+			const handle = await opendir(directory);
+			for await (const entry of handle) {
+				requireThat(++scanned <= 2e4, 413);
+				if (entry.isSymbolicLink() || !entry.isDirectory() && !entry.isFile() || /[\x00-\x1f\x7f]/u.test(entry.name)) continue;
+				if (!entry.name.normalize("NFKC").toLocaleLowerCase().includes(search)) continue;
+				const childPath = query.path ? `${query.path}/${entry.name}` : entry.name;
+				try {
+					relativePath(childPath);
+				} catch {
+					continue;
+				}
+				const child = path.join(directory, entry.name);
+				if (excluded.some((root) => overlaps(child, root))) continue;
+				try {
+					const metadata = await lstat(child);
+					if (metadata.isSymbolicLink() || !metadata.isDirectory() && !metadata.isFile() || await realpath(child) !== child) continue;
+					entries.push({
+						name: entry.name,
+						path: childPath,
+						kind: metadata.isDirectory() ? "directory" : "file",
+						modifiedAt: metadata.mtimeMs
+					});
+				} catch {}
+			}
+		} catch (error) {
+			if (error instanceof ManagerError) throw error;
+			throw new ManagerError(400);
+		}
+		const collator = new Intl.Collator("zh-CN", {
+			numeric: true,
+			sensitivity: "base"
+		});
+		const byName = (left, right) => collator.compare(left.name, right.name) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+		entries.sort((left, right) => {
+			if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+			if (query.sort === "name-desc") return -byName(left, right);
+			if (query.sort === "modified-desc") return right.modifiedAt - left.modifiedAt || byName(left, right);
+			if (query.sort === "modified-asc") return left.modifiedAt - right.modifiedAt || byName(left, right);
+			return byName(left, right);
+		});
+		const page = entries.slice(query.offset, query.offset + DIRECTORY_LIMIT);
+		const nextOffset = query.offset + page.length < entries.length ? query.offset + page.length : null;
+		return {
+			...query,
+			entries: page,
+			total: entries.length,
+			nextOffset,
+			truncated: nextOffset !== null,
+			directories: page.filter((entry) => entry.kind === "directory").map(({ name, path }) => ({
+				name,
+				path
+			}))
+		};
 	}
 };
 //#endregion
@@ -5738,6 +5838,8 @@ var LocalLauncher = class LocalLauncher {
 	#ready;
 	#runs = /* @__PURE__ */ new Map();
 	#live = /* @__PURE__ */ new Map();
+	#inspectAfter = /* @__PURE__ */ new Map();
+	#unverifiedContainers = /* @__PURE__ */ new Set();
 	#stops = /* @__PURE__ */ new Set();
 	#tail = Promise.resolve();
 	#poll;
@@ -5895,11 +5997,14 @@ var LocalLauncher = class LocalLauncher {
 			const [container] = JSON.parse(stdout);
 			const expectedWorkspace = path.join(this.#config.workspaceRoots[run.workspace.root], run.workspace.path);
 			requireThat(container.Name === "/" + run.id && container.Config?.Labels?.["cn.swordfate.pi.local-id"] === run.id && container.Mounts?.some((mount) => mount.Destination === "/workspace" && mount.Source === expectedWorkspace), 403);
+			requireThat(typeof container.State?.Running === "boolean", 503);
 			if (run.containerId) requireThat(container.Id === run.containerId, 403);
 			else run.containerId = container.Id;
 			return container;
 		} catch (error) {
-			if (error.code === 1 && String(error.stderr ?? "").includes("No such")) return void 0;
+			const failure = error;
+			const missing = String(failure.stderr ?? "").match(/\bno such (?:object|container):\s*(\S+)\s*$/i);
+			if (failure.code === 1 && missing?.[1] === run.id) return void 0;
 			throw error;
 		}
 	}
@@ -5907,11 +6012,7 @@ var LocalLauncher = class LocalLauncher {
 		let changed = false;
 		const directories = await readdir(path.join(this.#config.stateRoot, "launches"), { withFileTypes: true });
 		for (const run of this.#runs.values()) {
-			if ([
-				"stopped",
-				"failed",
-				"stopping"
-			].includes(run.state)) continue;
+			if (["stopped", "stopping"].includes(run.state)) continue;
 			const before = JSON.stringify(run);
 			if (!run.runId && run.pid) for (const directory of directories) {
 				if (!directory.isDirectory() || !/^[a-f0-9]{32}$/.test(directory.name)) continue;
@@ -5920,7 +6021,7 @@ var LocalLauncher = class LocalLauncher {
 					if (launch.pid === run.pid && launch.workspace === path.join(this.#config.workspaceRoots[run.workspace.root], run.workspace.path) && launch.run_id === directory.name) run.runId = directory.name;
 				} catch {}
 			}
-			if (run.runId) {
+			if (run.containerId && run.runId && run.state !== "failed" && !this.#unverifiedContainers.has(run.id)) {
 				const target = await this.#ready.sessionPath(run.runId);
 				if (target) {
 					run.state = "ready";
@@ -5936,13 +6037,44 @@ var LocalLauncher = class LocalLauncher {
 				run.error = "启动等待超时，原申请已保留；请先核对状态，不要重复创建。";
 				delete run.path;
 			}
-			if (run.state === "unknown") try {
-				const container = await this.#inspect(run);
-				if (container && !container.State.Running) {
-					run.state = "stopped";
-					delete run.error;
+			if ([
+				"starting",
+				"failed",
+				"unknown",
+				"ready"
+			].includes(run.state) && Date.now() >= (this.#inspectAfter.get(run.id) ?? 0)) {
+				this.#inspectAfter.set(run.id, Date.now() + 2e3);
+				try {
+					const container = await this.#inspect(run);
+					this.#unverifiedContainers.delete(run.id);
+					let mayStillLaunch = !run.containerId && run.state !== "failed" && this.#live.has(run.id);
+					if (!run.containerId && run.state !== "failed" && run.pid && !mayStillLaunch) try {
+						process.kill(run.pid, 0);
+						mayStillLaunch = true;
+					} catch (error) {
+						mayStillLaunch = error.code !== "ESRCH";
+					}
+					if (container?.State.Running === false || !container && !mayStillLaunch) {
+						run.state = "stopped";
+						delete run.path;
+						delete run.error;
+					} else if (!container) {
+						this.#unverifiedContainers.add(run.id);
+						run.state = "unknown";
+						delete run.path;
+						run.error = "启动器仍在运行，正在等待 Docker 确认容器；请勿重复创建。";
+					} else if (container && run.state === "failed") {
+						run.state = "unknown";
+						delete run.path;
+						run.error = "启动器已退出，但容器仍在运行；请刷新核对或停止该实例。";
+					}
+				} catch {
+					this.#unverifiedContainers.add(run.id);
+					run.state = "unknown";
+					delete run.path;
+					run.error = "暂时无法核对原容器状态，请检查 Docker 后刷新；不会接管或停止替代容器。";
 				}
-			} catch {}
+			}
 			if (JSON.stringify(run) !== before) changed = true;
 		}
 		if (changed) await this.#save();
@@ -6064,10 +6196,10 @@ function renderLocalPage(res) {
 <style>
 :root{color-scheme:light;--ink:#192b30;--muted:#52666b;--line:#dce5e3;--accent:#146557;--soft:#eef6f2}
 *{box-sizing:border-box}body{margin:0;background:#f5f7f4;color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1040px;margin:auto;padding:36px 24px 56px}
-a{color:var(--accent);text-underline-offset:4px}header,.section-head,.actions,.folder-nav{display:flex;align-items:center;gap:12px;flex-wrap:wrap}header{justify-content:space-between;margin-bottom:26px}.brand{display:flex;align-items:center;gap:12px}.mark{display:grid;place-items:center;background:var(--accent);color:white;width:44px;height:44px;border-radius:14px;font-weight:750}.eyebrow{margin:0;color:var(--muted);font-size:13px;letter-spacing:.08em}h1{font-size:24px;line-height:1.3;margin:0}h2{font-size:19px;margin:0}p{margin:10px 0}.intro{color:var(--muted);margin-bottom:24px}.layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:22px;align-items:start}
+a{color:var(--accent);text-underline-offset:4px}header,.section-head,.actions,.folder-nav,.browse-tools,.page-controls{display:flex;align-items:center;gap:12px;flex-wrap:wrap}header{justify-content:space-between;margin-bottom:26px}.brand{display:flex;align-items:center;gap:12px}.mark{display:grid;place-items:center;background:var(--accent);color:white;width:44px;height:44px;border-radius:14px;font-weight:750}.eyebrow{margin:0;color:var(--muted);font-size:13px;letter-spacing:.08em}h1{font-size:24px;line-height:1.3;margin:0}h2{font-size:19px;margin:0}p{margin:10px 0}.intro{color:var(--muted);margin-bottom:24px}.layout{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:22px;align-items:start}
 section{background:#fff;border:1px solid var(--line);border-radius:18px;padding:24px;min-width:0;box-shadow:0 5px 20px #182d2610}.section-head{justify-content:space-between;margin-bottom:18px}.step{display:inline-grid;place-items:center;width:25px;height:25px;border-radius:50%;background:var(--soft);color:var(--accent);font-size:13px;margin-right:8px}.muted,small{color:var(--muted)}small{font-size:13px}label{display:block;font-size:14px;color:var(--muted);margin:14px 0 6px}
-button,select{font:inherit;max-width:100%;border:1px solid #c8d7d2;border-radius:10px;padding:9px 13px;background:white;color:var(--ink)}button{cursor:pointer;min-height:44px}button:hover:not(:disabled){background:var(--soft);border-color:var(--accent)}button:focus-visible,select:focus-visible,a:focus-visible{outline:3px solid #68aa98;outline-offset:3px}button:disabled,select:disabled{opacity:.5;cursor:default}select{width:100%;min-height:44px}button.primary{background:var(--accent);color:white;border-color:var(--accent);width:100%;margin-top:16px;font-weight:650}button.primary:hover:not(:disabled){background:#0b5145}button.danger{color:#9d3530}.folder-nav{margin-top:12px}.workspace{display:block;background:var(--soft);border:1px solid #d6e7df;border-radius:10px;padding:12px;overflow-wrap:anywhere;white-space:pre-wrap;font:14px/1.6 ui-monospace,monospace;min-height:48px}
-#local-directories,#local-runs{list-style:none;margin:14px 0 0;padding:0}#local-directories{max-height:300px;overflow:auto}#local-directories li{margin:6px 0}#local-directories button{width:100%;text-align:left;overflow-wrap:anywhere;white-space:pre-wrap}#local-runs li{border-top:1px solid var(--line);padding:17px 0;overflow-wrap:anywhere}#local-runs li:first-child{border-top:0;padding-top:0}#local-runs h3{font-size:15px;margin:0 0 6px}.badge{display:inline-block;background:var(--soft);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:13px}.run-workspace{font-size:13px;color:var(--muted);white-space:pre-wrap}.actions{margin-top:12px}.notice{color:#8b5117;font-size:14px}#local-status,#local-browser-status{overflow-wrap:anywhere;white-space:pre-wrap;font-size:14px}#local-status{min-height:28px;margin:18px 0}.footer{margin-top:20px;color:var(--muted);font-size:13px}[hidden]{display:none!important}
+button,select,input{font:inherit;max-width:100%;border:1px solid #c8d7d2;border-radius:10px;padding:9px 13px;background:white;color:var(--ink)}button{cursor:pointer;min-height:44px}button:hover:not(:disabled){background:var(--soft);border-color:var(--accent)}button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #68aa98;outline-offset:3px}button:disabled,select:disabled,input:disabled{opacity:.5;cursor:default}select,input{width:100%;min-height:44px}button.primary{background:var(--accent);color:white;border-color:var(--accent);width:100%;margin-top:16px;font-weight:650}button.primary:hover:not(:disabled){background:#0b5145}button.danger{color:#9d3530}.folder-nav{margin-top:12px}.browse-tools{align-items:stretch}.browse-tools input{flex:1 1 180px}.browse-tools button{flex:0 0 auto}.workspace{display:block;background:var(--soft);border:1px solid #d6e7df;border-radius:10px;padding:12px;overflow-wrap:anywhere;white-space:pre-wrap;font:14px/1.6 ui-monospace,monospace;min-height:48px}
+#local-directories,#local-runs{list-style:none;margin:14px 0 0;padding:0}#local-directories{max-height:300px;overflow:auto}#local-directories li{margin:6px 0;padding:8px 10px;border:1px solid var(--line);border-radius:10px;overflow-wrap:anywhere;white-space:pre-wrap}#local-directories button{width:100%;text-align:left;border:0;padding:0;min-height:28px}.file-entry{color:var(--muted)}.entry-meta{display:block;font-size:12px;color:var(--muted)}#local-runs li{border-top:1px solid var(--line);padding:17px 0;overflow-wrap:anywhere}#local-runs li:first-child{border-top:0;padding-top:0}#local-runs h3{font-size:15px;margin:0 0 6px}.badge{display:inline-block;background:var(--soft);color:var(--accent);border-radius:6px;padding:2px 8px;font-size:13px}.run-workspace{font-size:13px;color:var(--muted);white-space:pre-wrap}.actions{margin-top:12px}.notice{color:#8b5117;font-size:14px}#local-status,#local-browser-status,#local-browser-count{overflow-wrap:anywhere;white-space:pre-wrap;font-size:14px}#local-status{min-height:28px;margin:18px 0}.footer{margin-top:20px;color:var(--muted);font-size:13px}[hidden]{display:none!important}
 @media(max-width:720px){main{padding:22px 16px 36px}.layout{grid-template-columns:minmax(0,1fr)}section{padding:20px}.intro{font-size:14px}header{gap:16px}h1{font-size:21px}}
 @media(prefers-reduced-motion:no-preference){button{transition:background .15s,border-color .15s}}
 </style></head>
@@ -6079,9 +6211,13 @@ button,select{font:inherit;max-width:100%;border:1px solid #c8d7d2;border-radius
 <label for="local-root">项目根目录</label><select id="local-root" disabled aria-label="项目根目录"></select>
 <label for="local-workspace">当前文件夹 · 进入即选中</label><output id="local-workspace" class="workspace">正在读取默认工作区…</output>
 <div class="folder-nav"><button id="local-parent" type="button" disabled>上一级</button><button id="local-home" type="button" disabled>根目录</button></div>
+<label for="local-search">在当前文件夹中搜索</label><div class="browse-tools"><input id="local-search" type="search" maxlength="200" autocomplete="off" placeholder="按名称筛选文件夹和文件"><button id="local-search-clear" type="button" disabled>清除</button></div>
+<label for="local-sort">排序方式</label><select id="local-sort" disabled><option value="name-asc">名称（A → Z）</option><option value="name-desc">名称（Z → A）</option><option value="modified-desc">最近修改</option><option value="modified-asc">最早修改</option></select>
 <p id="local-browser-status" role="status" aria-live="polite">正在读取工作区…</p>
-<ul id="local-directories" aria-label="子文件夹"></ul>
-<p id="local-truncated" class="notice" hidden>子目录较多，仅显示部分结果。可继续进入已列出的文件夹。</p>
+<p id="local-browser-count" class="muted" aria-live="polite"></p>
+<ul id="local-directories" aria-label="文件夹和文件"></ul>
+<p id="local-truncated" class="notice" hidden>结果已分页显示。可使用上一页和下一页浏览更多文件夹和文件。</p>
+<div class="page-controls"><button id="local-prev-page" type="button" disabled>上一页</button><button id="local-next-page" type="button" disabled>下一页</button></div>
 <button id="local-browse-retry" type="button" hidden>重试读取目录</button>
 <button id="local-start" class="primary" type="button" disabled>启动并进入会话</button>
 <p class="footer">实例名称自动生成，无需填写。工作区会在启动时再次由本机服务校验。</p>
@@ -6113,8 +6249,8 @@ var localScript = String.raw`"use strict";
 (() => {
   const el = id => document.getElementById(id);
   const states = {starting:'正在启动',ready:'可进入',failed:'启动失败',stopping:'正在停止',stopped:'已停止',unknown:'状态未确认'};
-  let csrf = '', roots = [], runs = [], selected = null, requested = null;
-  let configured = false, healthy = false, browsing = false, browseGeneration = 0;
+  let csrf = '', roots = [], runs = [], terminalSessions = [], selected = null, requested = null;
+  let configured = false, healthy = false, browsing = false, browseGeneration = 0, browseQuery = '', browseSort = 'name-asc', browseOffset = 0, browseNextOffset = null, browseTimer = null;
   let pending = null, posting = false, refreshing = false, pollTimer = null, navigated = false;
   const stopping = new Set();
   const status = text => { el('local-status').textContent = text; };
@@ -6122,17 +6258,22 @@ var localScript = String.raw`"use strict";
     (path === '' || path.split('/').every(part => part !== '' && part !== '.' && part !== '..'));
   const validWorkspace = value => value && typeof value.root === 'string' && value.root !== '' && validPath(value.path);
   const allowed = value => validWorkspace(value) && roots.some(root => root.id === value.root);
+  // Never accept an absolute URL, dot traversal, query, fragment, or encoded separator.
+  const sessionPath = path => typeof path === 'string' && /^\/s\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*\/$/.test(path);
   const validRun = value => value && typeof value.id === 'string' && value.id !== '' && validWorkspace(value.workspace) &&
     Object.hasOwn(states, value.state) && (value.path === undefined || typeof value.path === 'string') &&
     (value.error === undefined || typeof value.error === 'string');
+  const validTerminalSession = value => value && typeof value.label === 'string' && value.label !== '' &&
+    (value.sessionName === undefined || value.sessionName === null || typeof value.sessionName === 'string') &&
+    typeof value.generation === 'string' && value.generation !== '' && sessionPath(value.path) &&
+    typeof value.since === 'number' && Number.isFinite(value.since) && value.since >= 0;
   const validState = value => value && typeof value.csrfToken === 'string' && value.csrfToken !== '' && value.browser &&
     Array.isArray(value.browser.roots) && value.browser.roots.length > 0 && value.browser.roots.every(root => root &&
       typeof root.id === 'string' && root.id !== '' && typeof root.label === 'string') &&
     new Set(value.browser.roots.map(root => root.id)).size === value.browser.roots.length &&
     value.browser.roots.some(root => root.id === value.browser.defaultRoot) && validWorkspace(value.defaultWorkspace) &&
-    value.browser.roots.some(root => root.id === value.defaultWorkspace.root) && Array.isArray(value.runs) && value.runs.every(validRun);
-  // Never accept an absolute URL, dot traversal, query, fragment, or encoded separator.
-  const sessionPath = path => typeof path === 'string' && /^\/s\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*\/$/.test(path);
+    value.browser.roots.some(root => root.id === value.defaultWorkspace.root) && Array.isArray(value.runs) && value.runs.every(validRun) &&
+    (value.sessions === undefined || Array.isArray(value.sessions));
   const workspaceText = value => {
     const root = roots.find(item => item.id === value.root);
     return (root ? root.label : value.root) + ' / ' + (value.path || '（根目录）');
@@ -6144,6 +6285,11 @@ var localScript = String.raw`"use strict";
     el('local-parent').disabled = !configured || !healthy || locked || !requested || requested.path === '';
     el('local-start').disabled = !healthy || !allowed(selected) || browsing || posting || !!(pending && pending.id);
     el('local-start').textContent = posting ? '正在提交启动…' : pending ? (pending.id ? '等待会话就绪…' : '重试启动（不会重复创建）') : '启动并进入会话';
+    el('local-search').disabled = !configured || !healthy || locked;
+    el('local-search-clear').disabled = !configured || !healthy || locked || browseQuery === '';
+    el('local-sort').disabled = !configured || !healthy || locked;
+    el('local-prev-page').disabled = !configured || !healthy || locked || browsing || browseOffset === 0;
+    el('local-next-page').disabled = !configured || !healthy || locked || browsing || browseNextOffset === null;
     for (const item of el('local-directories').children) {
       for (const button of item.children) button.disabled = locked || !healthy || browsing;
     }
@@ -6173,41 +6319,68 @@ var localScript = String.raw`"use strict";
     } finally { clearTimeout(timeout); }
   }
   const explanation = (error, fallback) => error && error.status && error.message ? error.message : fallback;
-  function validDirectory(page, root, path) {
-    return page && page.root === root && page.path === path && typeof page.truncated === 'boolean' && Array.isArray(page.directories) &&
-      page.directories.every(item => item && typeof item.name === 'string' && item.name !== '' && item.name !== '.' && item.name !== '..' &&
-        !/[\/\\\u0000-\u001f\u007f]/.test(item.name) && item.path === (path ? path + '/' : '') + item.name && validPath(item.path));
+  const validDirectory = (item, path) => item && typeof item.name === 'string' && item.name !== '' && item.name !== '.' && item.name !== '..' &&
+    !/[\/\\\u0000-\u001f\u007f]/.test(item.name) && item.path === (path ? path + '/' : '') + item.name && validPath(item.path);
+  const validEntry = (item, path) => validDirectory(item, path) && (item.kind === 'directory' || item.kind === 'file') &&
+    typeof item.modifiedAt === 'number' && Number.isFinite(item.modifiedAt);
+  function browsePage(page, root, path, query, sort, offset) {
+    if (!page || page.root !== root || page.path !== path || typeof page.truncated !== 'boolean' || !Array.isArray(page.directories) ||
+      !page.directories.every(item => validDirectory(item, path))) return null;
+    if (!Array.isArray(page.entries) || !page.entries.every(item => validEntry(item, path)) || page.query !== query || page.sort !== sort || page.offset !== offset ||
+      !Number.isInteger(page.total) || page.total < 0 || page.total < page.entries.length ||
+      !(page.nextOffset === null || (Number.isInteger(page.nextOffset) && page.nextOffset > offset && page.nextOffset <= page.total))) return null;
+    return { entries: page.entries, total: page.total, nextOffset: page.nextOffset, truncated: page.truncated };
   }
-  async function browse(root, path) {
+  function renderEntries(entries) {
+    const list = el('local-directories'); list.replaceChildren();
+    // The backend promises folders first; preserving its within-kind order retains the selected sort.
+    for (const entry of [...entries].sort((left, right) => left.kind === right.kind ? 0 : left.kind === 'directory' ? -1 : 1)) {
+      const item = document.createElement('li');
+      if (entry.kind === 'directory') {
+        const button = document.createElement('button'); button.type = 'button'; button.textContent = entry.name;
+        button.addEventListener('click', () => { browseOffset = 0; return browse(requested.root, entry.path); }); item.append(button);
+      } else {
+        item.className = 'file-entry';
+        const name = document.createElement('span'); name.textContent = entry.name;
+        const meta = document.createElement('small'); meta.className = 'entry-meta'; meta.textContent = '文件'; item.append(name, meta);
+      }
+      list.append(item);
+    }
+  }
+  async function browse(root, path, preserveSelection = false) {
     if (pending || posting) return;
+    if (browseTimer !== null) { clearTimeout(browseTimer); browseTimer = null; }
+    const changedFolder = !requested || requested.root !== root || requested.path !== path;
+    if (changedFolder) browseOffset = 0;
     const generation = ++browseGeneration;
-    requested = {root,path}; selected = null; browsing = true;
+    const preserve = preserveSelection && !changedFolder && selected && selected.root === root && selected.path === path;
+    requested = {root,path}; if (!preserve) selected = null; browsing = true;
     el('local-workspace').textContent = workspaceText(requested);
     el('local-root').value = root;
     el('local-directories').replaceChildren();
     el('local-truncated').hidden = true;
     el('local-browse-retry').hidden = true;
-    el('local-browser-status').textContent = '正在校验当前文件夹并读取子目录…';
+    el('local-browser-count').textContent = '正在读取列表…';
+    el('local-browser-status').textContent = '正在校验当前文件夹并读取文件列表…';
     controls();
+    const query = browseQuery, sort = browseSort, offset = browseOffset;
     try {
       if (!allowed(requested)) throw Error('目录信息无效，请重新选择根目录。');
-      const page = await api('browse', {root,path});
+      const page = browsePage(await api('browse', {root,path,query,sort,offset}), root, path, query, sort, offset);
       if (generation !== browseGeneration) return;
-      if (!validDirectory(page, root, path)) throw Error('目录响应无效或与当前文件夹不匹配，请重试。');
+      if (!page) throw Error('目录响应无效或与当前文件夹不匹配，请重试。');
       // Configured roots can contain protected children. Listing a root is not permission to launch there.
-      selected = path === '' ? null : {root,path};
-      for (const directory of page.directories) {
-        const item = document.createElement('li'), button = document.createElement('button');
-        button.type = 'button'; button.textContent = directory.name;
-        button.addEventListener('click', () => browse(root, directory.path));
-        item.append(button); el('local-directories').append(item);
-      }
+      selected = path === '' ? null : {root,path}; browseNextOffset = page.nextOffset;
+      renderEntries(page.entries);
+      const shown = page.entries.length, first = shown ? offset + 1 : 0, last = shown ? offset + shown : 0;
+      el('local-browser-count').textContent = '显示 ' + first + '–' + last + '，共 ' + page.total + ' 项。';
       el('local-browser-status').textContent = path === '' ? '根目录仅用于浏览，请进入允许的子文件夹后启动。' :
-        page.directories.length ? '当前文件夹已选中，也可继续进入子文件夹。' : '当前文件夹已选中，没有可显示的子文件夹。';
+        shown ? '当前文件夹已选中，也可继续进入子文件夹。' : (query ? '当前文件夹已选中，没有匹配的文件夹或文件。' : '当前文件夹已选中，没有可显示的文件夹或文件。');
       el('local-truncated').hidden = !page.truncated;
     } catch (error) {
       if (generation !== browseGeneration) return;
-      selected = null;
+      if (!preserve) selected = null;
+      browseNextOffset = null; el('local-browser-count').textContent = '';
       el('local-browser-status').textContent = error.status ? error.message :
         (/目录/.test(error.message) ? error.message : '无法读取目录，请检查本机连接后重试。');
       el('local-browse-retry').hidden = false;
@@ -6247,14 +6420,18 @@ var localScript = String.raw`"use strict";
     // Keep the full response for pending-start reconciliation and idempotent retries.
     // Only confirmed stopped instances leave the visible list; uncertain/failing runs need attention.
     const visibleRuns = runs.filter(value => value.state !== 'stopped');
-    if (!visibleRuns.length) {
+    const managedPaths = new Set(runs.map(value => sessionPath(value.path) ? value.path : null).filter(Boolean));
+    const seenTerminalPaths = new Set();
+    const visibleTerminalSessions = terminalSessions.filter(value => !managedPaths.has(value.path) && !seenTerminalPaths.has(value.path) && (seenTerminalPaths.add(value.path), true));
+    if (!visibleRuns.length && !visibleTerminalSessions.length) {
       const empty = document.createElement('li'); empty.textContent = '暂无运行中的本机实例，选择工作区即可启动。'; list.append(empty); return;
     }
     for (const value of visibleRuns) {
       const item = document.createElement('li'), name = document.createElement('h3'), badge = document.createElement('span');
       name.textContent = value.id; badge.className = 'badge'; badge.textContent = states[value.state];
+      const source = document.createElement('span'); source.className = 'badge'; source.textContent = '网页启动';
       const folder = document.createElement('p'); folder.className = 'run-workspace'; folder.textContent = workspaceText(value.workspace);
-      item.append(name, badge, folder);
+      item.append(name, badge, source, folder);
       if (value.error || value.state === 'unknown' || value.state === 'failed') {
         const note = document.createElement('p'); note.className = 'notice';
         note.textContent = (value.error ? value.error + ' ' : '') +
@@ -6273,6 +6450,16 @@ var localScript = String.raw`"use strict";
         stop.addEventListener('click', () => stopRun(value)); actions.append(stop);
       }
       item.append(actions); list.append(item);
+    }
+    for (const value of visibleTerminalSessions) {
+      const item = document.createElement('li'), name = document.createElement('h3'), badge = document.createElement('span');
+      name.textContent = value.sessionName || value.label; badge.className = 'badge'; badge.textContent = '终端启动';
+      const detail = document.createElement('p'); detail.className = 'run-workspace';
+      detail.textContent = value.sessionName && value.sessionName !== value.label ? value.label + ' · ' + value.path : value.path;
+      const actions = document.createElement('div'); actions.className = 'actions';
+      const open = document.createElement('button'); open.type = 'button'; open.textContent = '打开'; open.setAttribute('aria-label', '打开');
+      open.addEventListener('click', () => openRun(value)); actions.append(open);
+      item.append(name, badge, detail, actions); list.append(item);
     }
   }
   async function stopRun(value) {
@@ -6319,6 +6506,7 @@ var localScript = String.raw`"use strict";
       if (!validState(value)) throw Error('本机状态响应无效。');
       const recovered = configured && !healthy;
       csrf = value.csrfToken; healthy = true; roots = value.browser.roots; runs = value.runs;
+      terminalSessions = (value.sessions || []).filter(validTerminalSession);
       const rootSelect = el('local-root'), previousRoot = requested ? requested.root : value.defaultWorkspace.root;
       rootSelect.replaceChildren();
       for (const root of roots) {
@@ -6346,10 +6534,24 @@ var localScript = String.raw`"use strict";
       renderRuns();
     } finally { refreshing = false; el('local-refresh').disabled = false; controls(); schedulePoll(); }
   }
-  el('local-root').addEventListener('change', () => browse(el('local-root').value, ''));
-  el('local-home').addEventListener('click', () => requested && browse(requested.root, ''));
-  el('local-parent').addEventListener('click', () => requested && requested.path !== '' && browse(requested.root, requested.path.split('/').slice(0,-1).join('/')));
-  el('local-browse-retry').addEventListener('click', () => requested && browse(requested.root, requested.path));
+  function scheduleFilteredBrowse() {
+    if (!requested || pending || posting) return;
+    if (browseTimer !== null) clearTimeout(browseTimer);
+    ++browseGeneration; browsing = true; browseNextOffset = null;
+    el('local-directories').replaceChildren(); el('local-truncated').hidden = true;
+    el('local-browser-count').textContent = '正在筛选…';
+    el('local-browser-status').textContent = '正在筛选当前文件夹…'; controls();
+    browseTimer = setTimeout(() => { browseTimer = null; void browse(requested.root, requested.path, true); }, 250);
+  }
+  el('local-root').addEventListener('change', () => { browseOffset = 0; return browse(el('local-root').value, ''); });
+  el('local-home').addEventListener('click', () => { if (requested) { browseOffset = 0; return browse(requested.root, ''); } });
+  el('local-parent').addEventListener('click', () => { if (requested && requested.path !== '') { browseOffset = 0; return browse(requested.root, requested.path.split('/').slice(0,-1).join('/')); } });
+  el('local-browse-retry').addEventListener('click', () => requested && browse(requested.root, requested.path, !!selected));
+  el('local-search').addEventListener('input', () => { browseQuery = el('local-search').value.slice(0, 200); el('local-search').value = browseQuery; browseOffset = 0; scheduleFilteredBrowse(); });
+  el('local-search-clear').addEventListener('click', () => { if (browseQuery === '') return; el('local-search').value = ''; browseQuery = ''; browseOffset = 0; scheduleFilteredBrowse(); });
+  el('local-sort').addEventListener('change', () => { const value = el('local-sort').value; if (!['name-asc','name-desc','modified-desc','modified-asc'].includes(value)) return; browseSort = value; browseOffset = 0; return requested && browse(requested.root, requested.path, true); });
+  el('local-prev-page').addEventListener('click', () => { if (!requested || browseOffset === 0) return; browseOffset = Math.max(0, browseOffset - 200); return browse(requested.root, requested.path, true); });
+  el('local-next-page').addEventListener('click', () => { if (!requested || browseNextOffset === null) return; browseOffset = browseNextOffset; return browse(requested.root, requested.path, true); });
   el('local-start').addEventListener('click', start);
   el('local-refresh').addEventListener('click', refresh);
   void refresh();
@@ -7027,11 +7229,19 @@ async function startLocalService(value) {
 			return;
 		}
 		if (req.url === "/api/local/state" && req.method === "GET") {
+			const sessions = hub.listSessions().map(({ label, sessionName, generation, path, since }) => ({
+				label,
+				sessionName,
+				generation,
+				path,
+				since
+			}));
 			reply(res, 200, {
 				defaultWorkspace: config.defaultWorkspace,
 				lastWorkspace: store.preference("workspace"),
 				browser: policy.browser(),
 				runs: launcher.list(),
+				sessions,
 				csrfToken: session.csrf
 			});
 			return;
@@ -7043,14 +7253,9 @@ async function startLocalService(value) {
 			const body = await jsonBody(req);
 			auth.revalidate(session);
 			if (req.url === "/api/local/browse") {
-				const key = canonical(workspaceSelection(body)), cached = directories.get(key);
+				const selection = localBrowseQuery(body), key = canonical(selection), cached = directories.get(key);
 				const hit = !!cached && cached.expires > Date.now();
-				const page = hit ? structuredClone(cached.page) : await policy.browse(body);
-				if (page.path !== "") requireThat(!denied(page));
-				page.directories = page.directories.filter((directory) => !denied({
-					root: page.root,
-					path: directory.path
-				}));
+				const page = hit ? structuredClone(cached.page) : await policy.browseEntries(selection, config.protectedRoots);
 				if (!hit) {
 					directories.delete(key);
 					if (directories.size >= 64) directories.delete(directories.keys().next().value);

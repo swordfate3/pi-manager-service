@@ -23,6 +23,8 @@ export interface LocalReadiness { sessionPath(runId: string): Promise<string | u
 export class LocalLauncher {
   readonly #config: LocalConfig; readonly #policy: WorkspacePolicy; readonly #ready: LocalReadiness;
   readonly #runs = new Map<string, RunRecord>(); readonly #live = new Map<string, LiveRun>();
+  readonly #inspectAfter = new Map<string, number>();
+  readonly #unverifiedContainers = new Set<string>();
   readonly #stops = new Set<Promise<void>>();
   #tail: Promise<unknown> = Promise.resolve(); #poll?: ReturnType<typeof setInterval>; #closing = false;
   #polling = false;
@@ -103,10 +105,13 @@ export class LocalLauncher {
       const expectedWorkspace = path.join(this.#config.workspaceRoots[run.workspace.root], run.workspace.path);
       requireThat(container.Name === "/" + run.id && container.Config?.Labels?.["cn.swordfate.pi.local-id"] === run.id &&
         container.Mounts?.some((mount: any) => mount.Destination === "/workspace" && mount.Source === expectedWorkspace), 403);
+      requireThat(typeof container.State?.Running === "boolean", 503);
       if (run.containerId) requireThat(container.Id === run.containerId, 403); else run.containerId = container.Id;
       return container;
     } catch (error) {
-      if ((error as { code?: number }).code === 1 && String((error as { stderr?: string }).stderr ?? "").includes("No such")) return undefined;
+      const failure = error as { code?: number; stderr?: string };
+      const missing = String(failure.stderr ?? "").match(/\bno such (?:object|container):\s*(\S+)\s*$/i);
+      if (failure.code === 1 && missing?.[1] === run.id) return undefined;
       throw error;
     }
   }
@@ -114,7 +119,7 @@ export class LocalLauncher {
     let changed = false;
     const directories = await readdir(path.join(this.#config.stateRoot, "launches"), { withFileTypes: true });
     for (const run of this.#runs.values()) {
-      if (["stopped", "failed", "stopping"].includes(run.state)) continue;
+      if (["stopped", "stopping"].includes(run.state)) continue;
       const before = JSON.stringify(run);
       if (!run.runId && run.pid) for (const directory of directories) {
         if (!directory.isDirectory() || !/^[a-f0-9]{32}$/.test(directory.name)) continue;
@@ -123,7 +128,7 @@ export class LocalLauncher {
           if (launch.pid === run.pid && launch.workspace === path.join(this.#config.workspaceRoots[run.workspace.root], run.workspace.path) && launch.run_id === directory.name) run.runId = directory.name;
         } catch { /* Atomic launch publication may still be pending. */ }
       }
-      if (run.runId) {
+      if (run.containerId && run.runId && run.state !== "failed" && !this.#unverifiedContainers.has(run.id)) {
         const target = await this.#ready.sessionPath(run.runId);
         if (target) { run.state = "ready"; run.path = target; delete run.error; }
         else if (run.state === "ready") { run.state = "starting"; delete run.path; }
@@ -131,9 +136,36 @@ export class LocalLauncher {
       if (run.state === "starting" && Date.now() - run.created > (this.#config.startupTimeoutMs ?? 90000)) {
         run.state = "unknown"; run.error = "启动等待超时，原申请已保留；请先核对状态，不要重复创建。"; delete run.path;
       }
-      if (run.state === "unknown") {
-        try { const container = await this.#inspect(run); if (container && !container.State.Running) { run.state = "stopped"; delete run.error; } }
-        catch { /* Do not adopt or mutate a replacement container. */ }
+      // A launcher exit or stale registry lease is not a liveness oracle. Probe
+      // failed/uncertain/ready runs too, without spawning Docker on every tick.
+      if (["starting", "failed", "unknown", "ready"].includes(run.state) && Date.now() >= (this.#inspectAfter.get(run.id) ?? 0)) {
+        this.#inspectAfter.set(run.id, Date.now() + 2000);
+        try {
+          const container = await this.#inspect(run);
+          this.#unverifiedContainers.delete(run.id);
+          let mayStillLaunch = !run.containerId && run.state !== "failed" && this.#live.has(run.id);
+          if (!run.containerId && run.state !== "failed" && run.pid && !mayStillLaunch) {
+            try { process.kill(run.pid, 0); mayStillLaunch = true; }
+            catch (error) { mayStillLaunch = (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+          }
+          if (container?.State.Running === false || (!container && !mayStillLaunch)) {
+            run.state = "stopped"; delete run.path; delete run.error;
+          } else if (!container) {
+            // An early registration is not proof that Docker has finished creating
+            // this container. Keep the live launch visible, but not navigable yet.
+            this.#unverifiedContainers.add(run.id);
+            run.state = "unknown"; delete run.path;
+            run.error = "启动器仍在运行，正在等待 Docker 确认容器；请勿重复创建。";
+          } else if (container && run.state === "failed") {
+            run.state = "unknown"; delete run.path;
+            run.error = "启动器已退出，但容器仍在运行；请刷新核对或停止该实例。";
+          }
+        } catch {
+          // Daemon/permission/identity failures do not prove the container ended.
+          this.#unverifiedContainers.add(run.id);
+          run.state = "unknown"; delete run.path;
+          run.error = "暂时无法核对原容器状态，请检查 Docker 后刷新；不会接管或停止替代容器。";
+        }
       }
       if (JSON.stringify(run) !== before) changed = true;
     }

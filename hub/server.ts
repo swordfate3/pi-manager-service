@@ -322,6 +322,15 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
     }
     return session;
   };
+  // Host workbench and HTTP portal share exactly the same lease/revocation view.
+  // Only public metadata is returned: never grant tokens, backend ports or paths.
+  const listSessions = () => [...sessions.keys()]
+    .map(current)
+    .filter((session): session is Session => Boolean(session))
+    .map(session => ({ label: session.grant.label, sessionName: session.sessionName,
+      generation: session.generation, path: `/s/${session.generation}/`, since: session.since,
+      ...(session.runtime ? { runtime: { version: session.runtime.version, managed: session.runtime.managed } } : {}),
+      ...(session.software ? { software: session.software } : {}) }));
   const granted = (runId: string) => {
     try {
       return !readGrant(config, runId).revoked;
@@ -939,18 +948,8 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
       }
       if (pathname === "/api/sessions") {
         versionStatus.ensureStarted();
-        const items = [...sessions.keys()]
-          .map(current)
-          .filter((s): s is Session => Boolean(s))
-          .map((s) => ({
-            label: s.grant.label,
-            sessionName: s.sessionName,
-            generation: s.generation,
-            path: admin ? `${config.publicUrl ?? url}s/${s.generation}/` : `/s/${s.generation}/`,
-            since: s.since,
-            ...(s.runtime ? { runtime: { version: s.runtime.version, managed: s.runtime.managed } } : {}),
-            ...(s.software ? { software: s.software } : {}),
-          }));
+        const items = listSessions().map(session => ({ ...session,
+          path: admin ? `${config.publicUrl ?? url}s/${session.generation}/` : session.path }));
         response
           .writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
           .end(JSON.stringify({ sessions: items, versions: versionStatus.snapshot() }));
@@ -1259,6 +1258,7 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
     url,
     ...(managementUrl ? { managementUrl } : {}),
     socketPath: config.socketPath,
+    listSessions,
     /** Host-local launcher lookup only; never exposes a registration token. */
     sessionPath(runId: string): string | undefined {
       const matches = [...sessions.values()].filter(session => session.grant.run_id === runId && session.expires > Date.now());

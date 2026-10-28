@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { WebSocket, WebSocketServer } from "ws";
-import { issueSession, readHubConfig } from "../hub/config.ts";
+import { issueSession, readHubConfig, revokeSession } from "../hub/config.ts";
 import { startLocalService } from "../manager/local-service.ts";
 import { LocalStore } from "../manager/local-store.ts";
 
@@ -332,6 +332,7 @@ async function fixture(t: test.TestContext) {
     settleUpstreamWebSockets,
     lastWebSocketHeaders: () => lastWebSocketHeaders,
     holdNextIdentity,
+    revoke: () => revokeSession(hub, credential.run_id),
   };
 }
 
@@ -403,6 +404,26 @@ test("local login gates the real Hub transport and strips browser authority befo
   assert.equal(webSocketHeaders.authorization, undefined);
   assert.equal(webSocketHeaders["x-pi-hub-user"], undefined);
   assert.equal(webSocketHeaders["x-forwarded-for"], undefined);
+});
+
+test("workbench state includes terminal-origin registered sessions without adopting them as managed runs", async t => {
+  const f = await fixture(t);
+  const session = await f.authenticate(true);
+  const state = await f.authenticated(session, "/api/local/state");
+  assert.equal(state.status, 200);
+  const value = state.value as any;
+  assert.deepEqual(value.runs, []);
+  assert.ok(Array.isArray(value.sessions), "terminal sessions are missing from workbench state");
+  assert.equal(value.sessions.length, 1);
+  assert.equal(value.sessions[0].generation, f.generation);
+  assert.equal(value.sessions[0].path, `/s/${f.generation}/`);
+  assert.equal(value.sessions[0].label, "local transport fake Pi");
+  assert.deepEqual(Object.keys(value.sessions[0]).sort(), ["generation", "label", "path", "sessionName", "since"]);
+  assert.equal((await f.authenticated(session, "/api/local/stop", { id: f.generation })).status, 404);
+  assert.equal((await f.authenticated(session, `/s/${f.generation}/`)).status, 200);
+  f.revoke();
+  const after = await f.authenticated(session, "/api/local/state");
+  assert.equal(after.status, 200); assert.deepEqual((after.value as any).sessions, []);
 });
 
 test("logout, logout-all, and an external LocalStore revocation close authenticated tunnel sockets", { timeout: 10_000 }, async (t) => {

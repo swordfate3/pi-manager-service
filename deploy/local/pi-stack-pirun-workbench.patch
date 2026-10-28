@@ -1,0 +1,132 @@
+--- a/scripts/pi-pirun
++++ b/scripts/pi-pirun
+@@ -250,6 +250,27 @@
+     auto|on|off) ;;
+     *) printf 'pi-pirun: PI_PIRUN_WEB_HUB must be auto, on, or off\n' >&2; exit 2 ;;
+ esac
++
++# An explicit host-side setting is an all-or-nothing caller choice. In
++# particular, a runtime/runs-only setting must never accidentally select the
++# legacy manager Hub while leaving the requested local Hub unspecified.
++web_hub_host_override=0
++web_hub_host_override_invalid=0
++for variable_name in \
++    PI_PIRUN_WEB_HUB_HOST_CONFIG PI_PIRUN_WEB_HUB_HOST_CLI \
++    PI_PIRUN_WEB_HUB_RUNTIME_DIR PI_PIRUN_WEB_HUB_RUNS_DIR; do
++    if [[ -v "$variable_name" ]]; then
++        web_hub_host_override=1
++        if [[ -z "${!variable_name}" ]]; then
++            web_hub_host_override_invalid=1
++        fi
++    fi
++done
++if (( web_hub_host_override )) \
++    && { [[ ! -v PI_PIRUN_WEB_HUB_HOST_CONFIG ]] || [[ ! -v PI_PIRUN_WEB_HUB_HOST_CLI ]]; }; then
++    web_hub_host_override_invalid=1
++fi
++
+ agent_workspace_needed=1
+ case "${1:-}" in
+     install|remove|update|list|config|help|--help|-h|--version|-v) agent_workspace_needed=0 ;;
+@@ -258,7 +279,101 @@
+ for arg in "$@"; do
+     case "$arg" in --no-extensions|-ne) web_session_needed=0 ;; esac
+ done
++if (( agent_workspace_needed && web_hub_host_override_invalid )); then
++    printf 'pi-pirun: explicit local Hub overrides must be non-empty and include both PI_PIRUN_WEB_HUB_HOST_CONFIG and PI_PIRUN_WEB_HUB_HOST_CLI\n' >&2
++    exit 2
++fi
++
++# A regular pirun should join the current host workbench when it is installed.
++# Discover its private paths even with Web registration disabled: opting out of
++# a Web listener must never opt out of administrator-workspace exclusions.
++# config/config.json is private host configuration and, when present, is the
++# authority for nonstandard stateRoot and hubCli locations. The generated Hub
++# config/runtime/runs remain inside that state root. Only an absent primary
++# config uses the fixed stack-local fallback paths.
++web_hub_default_unavailable=0
++if (( agent_workspace_needed && ! web_hub_host_override )); then
++    PI_PIRUN_LOCAL_WORKBENCH_DIR="$PI_PIRUN_CONFIG_DIR/local-workbench"
++    PI_PIRUN_LOCAL_WORKBENCH_CONFIG="$PI_PIRUN_LOCAL_WORKBENCH_DIR/config/config.json"
++    if [[ -d "$PI_PIRUN_LOCAL_WORKBENCH_DIR" ]]; then
++        if [[ -e "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" || -L "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" ]]; then
++            web_hub_defaults=""
++            if web_hub_defaults="$(
++                /usr/bin/python3 - "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" "$PI_PIRUN_LOCAL_WORKBENCH_DIR" <<'PY'
++import json
++import os
++from pathlib import Path
++import stat
++import sys
++
++config = Path(sys.argv[1])
++workbench = Path(sys.argv[2]).resolve()
++flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
++
++try:
++    descriptor = os.open(config, flags)
++    with os.fdopen(descriptor, 'rb') as stream:
++        info = os.fstat(stream.fileno())
++        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
++                info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 8192):
++            raise ValueError('unsafe workbench config')
++        raw = stream.read(8193)
++    if len(raw) > 8192:
++        raise ValueError('oversized workbench config')
++    value = json.loads(raw)
++    if not isinstance(value, dict):
++        raise ValueError('invalid workbench config')
++
++    def configured_path(name):
++        candidate = value.get(name)
++        if not isinstance(candidate, str) or not candidate or '\x00' in candidate:
++            raise ValueError('invalid workbench path')
++        path = Path(candidate)
++        if not path.is_absolute():
++            path = workbench / path
++        path = path.resolve()
++        if any(character in str(path) for character in '\n\r'):
++            raise ValueError('unsafe workbench path')
++        return path
++
++    state_root = configured_path('stateRoot')
++    hub_cli = configured_path('hubCli')
++    print(state_root / 'chat.json')
++    print(hub_cli)
++    print(state_root / 'chat-runtime')
++    print(state_root / 'launches')
++except (OSError, ValueError, TypeError, json.JSONDecodeError):
++    raise SystemExit(1)
++PY
++            )"; then
++                mapfile -t web_hub_default_paths <<<"$web_hub_defaults"
++                if (( ${#web_hub_default_paths[@]} != 4 )) || \
++                    [[ -z "${web_hub_default_paths[0]}" || -z "${web_hub_default_paths[1]}" || \
++                       -z "${web_hub_default_paths[2]}" || -z "${web_hub_default_paths[3]}" ]]; then
++                    web_hub_default_unavailable=1
++                else
++                    export PI_PIRUN_WEB_HUB_HOST_CONFIG="${web_hub_default_paths[0]}"
++                    export PI_PIRUN_WEB_HUB_HOST_CLI="${web_hub_default_paths[1]}"
++                    export PI_PIRUN_WEB_HUB_RUNTIME_DIR="${web_hub_default_paths[2]}"
++                    export PI_PIRUN_WEB_HUB_RUNS_DIR="${web_hub_default_paths[3]}"
++                fi
++            else
++                web_hub_default_unavailable=1
++            fi
++        else
++            export PI_PIRUN_WEB_HUB_HOST_CONFIG="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/chat.json"
++            export PI_PIRUN_WEB_HUB_HOST_CLI="$PI_PIRUN_LOCAL_WORKBENCH_DIR/dist/hub/pi-web-hub.mjs"
++            export PI_PIRUN_WEB_HUB_RUNTIME_DIR="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/chat-runtime"
++            export PI_PIRUN_WEB_HUB_RUNS_DIR="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/launches"
++        fi
++    fi
++fi
++
+ if (( agent_workspace_needed )); then
++    if (( web_hub_default_unavailable )); then
++        printf 'pi-pirun: local workbench private-path configuration is invalid; no Pi started\n' >&2
++        exit 1
++    fi
+     if ! /usr/bin/python3 "$PI_PIRUN_SCRIPT_DIR/pi-web-hub-session" check-workspace \
+         --workspace "$PI_SCOPED_MEMORY_HOST_WORKSPACE" >/dev/null 2>&1; then
+         printf 'pi-pirun: workspace overlaps protected Pi stack, legacy deployment, or Hub credentials; start from a separate project directory\n' >&2

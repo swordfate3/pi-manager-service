@@ -2,7 +2,7 @@ import { lstat, opendir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readHubConfig } from "../hub/config.ts";
-import type { WorkspaceBrowseQuery, WorkspaceBrowserView, WorkspaceDirectoryPage, WorkspaceSelection } from "./api.ts";
+import type { LocalBrowseQuery, LocalWorkspaceEntry, LocalWorkspacePage, WorkspaceBrowseQuery, WorkspaceBrowserView, WorkspaceDirectoryPage, WorkspaceSelection } from "./api.ts";
 import type { ExecutorConfig } from "./config.ts";
 import { identifier, keys, ManagerError, record, requireThat } from "./validation.ts";
 import { enrollmentConfig } from "./enrollment/client.ts";
@@ -39,6 +39,19 @@ export function workspaceSelection(value: unknown): WorkspaceSelection {
 function browserQuery(value: unknown): WorkspaceBrowseQuery {
   const query = workspaceSelection(value);
   return query;
+}
+
+/** Separate from launch selection: search/sort parameters can never become a workspace. */
+export function localBrowseQuery(value: unknown): LocalBrowseQuery {
+  const input = record(value); keys(input, ["root", "path"], ["query", "sort", "offset"]);
+  const selection = workspaceSelection({ root: input.root, path: input.path });
+  const query = input.query === undefined ? "" : input.query;
+  const sort = input.sort === undefined ? "name-asc" : input.sort;
+  const offset = input.offset === undefined ? 0 : input.offset;
+  requireThat(typeof query === "string" && query.length <= 200 && !/[\x00-\x1f\x7f]/u.test(query));
+  requireThat(["name-asc", "name-desc", "modified-desc", "modified-asc"].includes(sort as string));
+  requireThat(Number.isSafeInteger(offset) && Number(offset) >= 0 && Number(offset) <= 1_000_000);
+  return { ...selection, query, sort: sort as LocalBrowseQuery["sort"], offset: offset as number };
 }
 
 async function canonicalFuturePath(value: string): Promise<string> {
@@ -194,5 +207,52 @@ export class WorkspacePolicy {
       if (error instanceof ManagerError) throw error;
       throw new ManagerError(400);
     }
+  }
+
+  /** Current-directory metadata only; no recursion, file reads, or symlink following. */
+  async browseEntries(value: unknown, extraProtectedRoots: readonly string[] = []): Promise<LocalWorkspacePage> {
+    requireThat(this.#browser !== null);
+    const query = localBrowseQuery(value);
+    const directory = await this.#directory(query, true);
+    const excluded = [...this.#protected, ...extraProtectedRoots];
+    if (query.path !== "") requireThat(!excluded.some(root => overlaps(directory, root)));
+    const search = query.query.normalize("NFKC").toLocaleLowerCase();
+    const entries: LocalWorkspaceEntry[] = [];
+    try {
+      let scanned = 0;
+      const handle = await opendir(directory);
+      for await (const entry of handle) {
+        // Fail explicitly rather than quietly searching an arbitrary prefix.
+        requireThat(++scanned <= 20_000, 413);
+        if (entry.isSymbolicLink() || (!entry.isDirectory() && !entry.isFile()) || /[\x00-\x1f\x7f]/u.test(entry.name)) continue;
+        if (!entry.name.normalize("NFKC").toLocaleLowerCase().includes(search)) continue;
+        const childPath = query.path ? `${query.path}/${entry.name}` : entry.name;
+        try { relativePath(childPath); } catch { continue; }
+        const child = path.join(directory, entry.name);
+        if (excluded.some(root => overlaps(child, root))) continue;
+        try {
+          const metadata = await lstat(child);
+          if (metadata.isSymbolicLink() || (!metadata.isDirectory() && !metadata.isFile()) || await realpath(child) !== child) continue;
+          entries.push({ name: entry.name, path: childPath, kind: metadata.isDirectory() ? "directory" : "file", modifiedAt: metadata.mtimeMs });
+        } catch { /* Concurrent removal or inaccessible metadata is not a selectable entry. */ }
+      }
+    } catch (error) {
+      if (error instanceof ManagerError) throw error;
+      throw new ManagerError(400);
+    }
+    const collator = new Intl.Collator("zh-CN", { numeric: true, sensitivity: "base" });
+    const byName = (left: LocalWorkspaceEntry, right: LocalWorkspaceEntry) =>
+      collator.compare(left.name, right.name) || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+    entries.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+      if (query.sort === "name-desc") return -byName(left, right);
+      if (query.sort === "modified-desc") return right.modifiedAt - left.modifiedAt || byName(left, right);
+      if (query.sort === "modified-asc") return left.modifiedAt - right.modifiedAt || byName(left, right);
+      return byName(left, right);
+    });
+    const page = entries.slice(query.offset, query.offset + DIRECTORY_LIMIT);
+    const nextOffset = query.offset + page.length < entries.length ? query.offset + page.length : null;
+    return { ...query, entries: page, total: entries.length, nextOffset, truncated: nextOffset !== null,
+      directories: page.filter(entry => entry.kind === "directory").map(({ name, path }) => ({ name, path })) };
   }
 }

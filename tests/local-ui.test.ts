@@ -11,10 +11,18 @@ type Run = {
   path?: string;
   error?: string;
 };
+type TerminalSession = {
+  label: string;
+  sessionName?: string | null;
+  generation: string;
+  path: string;
+  since: number;
+};
 type State = {
   defaultWorkspace: Workspace;
   browser: { defaultRoot: string; roots: { id: string; label: string }[] };
   runs: Run[];
+  sessions?: TerminalSession[];
   csrfToken: string;
 };
 type Call = { route: string; method: string; headers: Record<string, string>; body?: any };
@@ -116,7 +124,9 @@ async function fixture(state = initialState()) {
     else if (route === "/api/local/state") value = state;
     else if (route === "/api/local/browse") {
       const { root, path } = call.body;
-      value = { root, path, directories: path === "pi_projects" ? [{ name: "项目 A", path: "pi_projects/项目 A" }] : [], truncated: false };
+      const directories = path === "pi_projects" ? [{ name: "项目 A", path: "pi_projects/项目 A" }] : [];
+      const entries = directories.map((directory) => ({ ...directory, kind: "directory", modifiedAt: 1735689600000 }));
+      value = { ...call.body, root, path, directories, entries, total: entries.length, nextOffset: null, truncated: false };
     } else if (route === "/api/local/start") value = run({ workspace: call.body.workspace });
     else if (route === "/api/local/stop") value = run({ id: call.body.id, state: "stopping" });
     else throw new Error(`unexpected API route ${route}`);
@@ -154,6 +164,13 @@ async function fixture(state = initialState()) {
       await timer[1].callback();
       await settle();
     },
+    async advance(delay: number) {
+      const timer = [...timers].find(([, value]) => value.delay === delay);
+      assert.ok(timer, `expected a ${delay}ms timer`);
+      timers.delete(timer[0]);
+      await timer[1].callback();
+      await settle();
+    },
   };
 }
 
@@ -174,7 +191,87 @@ test("local renderers serve a Chinese no-credential page and private revalidated
   assert.match(html.body, /lang="zh-CN"/);
   assert.match(html.body, /href="\/sessions\/"[^>]*>本地会话<\/a>/);
   assert.match(html.body, /<script src="\/local.js" defer><\/script>/);
-  assert.doesNotMatch(html.body, /<input\b|<iframe\b|credential|版本目录|独立审批/i);
+  assert.match(html.body, /<input[^>]+id="local-search"[^>]+type="search"/);
+  assert.doesNotMatch(html.body, /<iframe\b|credential|版本目录|独立审批|type="password"/i);
+});
+
+// Break caught: dropping enhanced browse defaults, treating files as launchable folders, or losing the selected folder while listing changes.
+test("enhanced browse sends defaults, safely renders files, and retains the current folder", async () => {
+  const f = await fixture();
+  f.handlers.set("/api/local/browse", (call) => ({
+    ...call.body,
+    directories: [{ name: "子目录", path: "pi_projects/项目 A/子目录" }],
+    entries: [
+      { name: "子目录", path: "pi_projects/项目 A/子目录", kind: "directory", modifiedAt: 1735689600000 },
+      { name: "说明 <b>文件-b>.md", path: "pi_projects/项目 A/说明 <b>文件-b>.md", kind: "file", modifiedAt: 1735776000000 },
+    ],
+    query: "",
+    sort: "name-asc",
+    offset: 0,
+    total: 2,
+    nextOffset: null,
+    truncated: false,
+  }));
+  await f.button("项目 A").fire();
+  const browse = f.calls.at(-1)!;
+  assert.deepEqual(browse.body, { root: "projects", path: "pi_projects/项目 A", query: "", sort: "name-asc", offset: 0 });
+  assert.match(f.get("local-browser-status").textContent, /当前文件夹/);
+  const directory = f.get("local-directories").children[0]?.children[0];
+  assert.equal(directory?.tagName, "BUTTON");
+  assert.equal(directory?.textContent, "子目录");
+  const file = f.get("local-directories").children.find(item => item.textContent.includes("说明 <b>文件-b>.md"));
+  assert.ok(file, "file entry should be listed as literal text");
+  assert.equal(file.children.some(child => child.tagName === "BUTTON"), false, "files must never be navigable controls");
+  assert.match(f.get("local-workspace").textContent, /pi_projects\/项目 A/);
+  assert.equal(f.get("local-start").disabled, false, "listing a file must not clear the selected folder");
+});
+
+// Break caught: issuing a request on every keystroke or allowing an older filtered response to overwrite a newer query.
+test("debounced search invalidates older browse responses while preserving the selected folder", async () => {
+  const f = await fixture();
+  const old = deferred<unknown>();
+  f.handlers.set("/api/local/browse", (call) => {
+    if (call.body.query === "old") return old.promise;
+    return {
+      ...call.body, directories: [], entries: [], truncated: false,
+      total: 0, nextOffset: null,
+    };
+  });
+  const search = f.get("local-search");
+  search.value = "old";
+  await search.fire("input");
+  assert.equal(f.calls.filter(call => call.route.endsWith("/browse") && call.body?.query === "old").length, 0);
+  await f.advance(250);
+  assert.equal(f.calls.at(-1)?.body.query, "old");
+  search.value = "new";
+  await search.fire("input");
+  await f.advance(250);
+  assert.equal(f.calls.at(-1)?.body.query, "new");
+  old.resolve({ root: "projects", path: "pi_projects", directories: [{ name: "过期目录", path: "pi_projects/过期目录" }], entries: [], query: "old", sort: "name-asc", offset: 0, total: 1, nextOffset: null, truncated: false });
+  await settle();
+  assert.doesNotMatch(f.get("local-directories").textContent, /过期目录/);
+  assert.match(f.get("local-workspace").textContent, /pi_projects/);
+  assert.equal(f.get("local-start").disabled, false, "filtering does not deselect the current folder");
+  assert.match(f.get("local-browser-status").textContent, /没有匹配/);
+});
+
+// Break caught: omitting a page cursor or letting list navigation change the workspace selected for launching.
+test("enhanced pagination and sort keep the folder selected and use the exact browse cursor", async () => {
+  const f = await fixture();
+  f.handlers.set("/api/local/browse", (call) => ({
+    ...call.body, directories: [], entries: [], truncated: false,
+    total: 201, nextOffset: call.body.offset === 0 ? 200 : null,
+  }));
+  await f.button("项目 A").fire();
+  f.get("local-sort").value = "modified-desc";
+  await f.get("local-sort").fire("change");
+  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "pi_projects/项目 A", query: "", sort: "modified-desc", offset: 0 });
+  await f.get("local-next-page").fire();
+  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "pi_projects/项目 A", query: "", sort: "modified-desc", offset: 200 });
+  assert.match(f.get("local-workspace").textContent, /pi_projects\/项目 A/);
+  assert.equal(f.get("local-start").disabled, false);
+  await f.get("local-prev-page").fire();
+  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "pi_projects/项目 A", query: "", sort: "modified-desc", offset: 0 });
 });
 
 // Break caught: selecting a browser root instead of the server's saved default folder.
@@ -182,7 +279,7 @@ test("server default is selected automatically and normal refresh keeps that def
   const f = await fixture();
   assert.match(f.get("local-workspace").textContent, /pi_projects/);
   assert.equal(f.get("local-start").disabled, false);
-  assert.deepEqual(f.calls.find((call) => call.route.endsWith("/browse"))?.body, workspace);
+  assert.deepEqual(f.calls.find((call) => call.route.endsWith("/browse"))?.body, { ...workspace, query: "", sort: "name-asc", offset: 0 });
   await f.button("项目 A").fire();
   assert.match(f.get("local-workspace").textContent, /pi_projects\/项目 A/);
   assert.equal(f.get("local-start").disabled, false);
@@ -277,9 +374,11 @@ test("double click cannot submit a second start while the first reply is pending
 test("browse blocks start until validated and ignores a late result from an older root", async () => {
   const f = await fixture();
   const hold = deferred<unknown>();
-  f.handlers.set("/api/local/browse", (call) => call.body.root === "projects" ? hold.promise : {
-    root: "scratch", path: call.body.path,
-    directories: call.body.path === "" ? [{ name: "scratch-project", path: "scratch-project" }] : [], truncated: false,
+  f.handlers.set("/api/local/browse", (call) => {
+    if (call.body.root === "projects") return hold.promise;
+    const directories = call.body.path === "" ? [{ name: "scratch-project", path: "scratch-project" }] : [];
+    const entries = directories.map((directory) => ({ ...directory, kind: "directory", modifiedAt: 1735689600000 }));
+    return { ...call.body, directories, entries, total: entries.length, nextOffset: null, truncated: false };
   });
   const oldNavigation = f.button("项目 A").fire();
   await settle();
@@ -288,7 +387,7 @@ test("browse blocks start until validated and ignores a late result from an olde
   assert.equal(f.calls.filter((call) => call.route.endsWith("/start")).length, 0);
   f.get("local-root").value = "scratch";
   await f.get("local-root").fire("change");
-  hold.resolve({ root: "projects", path: "pi_projects/项目 A", directories: [], truncated: false });
+  hold.resolve({ root: "projects", path: "pi_projects/项目 A", directories: [], entries: [], query: "", sort: "name-asc", offset: 0, total: 0, nextOffset: null, truncated: false });
   await oldNavigation;
   assert.equal(f.get("local-root").value, "scratch");
   assert.equal(f.get("local-start").disabled, true, "roots are browse-only");
@@ -301,9 +400,9 @@ test("parent/root navigation selects the exact folder and cannot navigate above 
   const f = await fixture();
   await f.button("项目 A").fire();
   await f.get("local-parent").fire();
-  assert.deepEqual(f.calls.at(-1)?.body, workspace);
+  assert.deepEqual(f.calls.at(-1)?.body, { ...workspace, query: "", sort: "name-asc", offset: 0 });
   await f.get("local-home").fire();
-  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "" });
+  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "", query: "", sort: "name-asc", offset: 0 });
   assert.equal(f.get("local-parent").disabled, true);
   assert.equal(f.get("local-start").disabled, true);
   assert.match(f.get("local-browser-status").textContent, /根目录.*浏览|进入.*子文件夹/);
@@ -320,15 +419,15 @@ test("browse errors stay visible, block start, and offer a retry without resetti
   assert.equal(f.get("local-start").disabled, true);
   await f.poll();
   assert.match(f.get("local-browser-status").textContent, /目录不可访问/);
-  f.handlers.set("/api/local/browse", (call) => ({ ...call.body, directories: [], truncated: false }));
+  f.handlers.set("/api/local/browse", (call) => ({ ...call.body, directories: [], entries: [], total: 0, nextOffset: null, truncated: false }));
   await f.get("local-browse-retry").fire();
   assert.equal(f.get("local-start").disabled, false);
-  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "pi_projects/项目 A" });
+  assert.deepEqual(f.calls.at(-1)?.body, { root: "projects", path: "pi_projects/项目 A", query: "", sort: "name-asc", offset: 0 });
 });
 
 for (const page of [
-  { root: "scratch", path: "pi_projects/项目 A", directories: [], truncated: false },
-  { root: "projects", path: "pi_projects/项目 A", directories: [{ name: "escape", path: "../outside" }], truncated: false },
+  { root: "scratch", path: "pi_projects/项目 A", directories: [], entries: [], query: "", sort: "name-asc", offset: 0, total: 0, nextOffset: null, truncated: false },
+  { root: "projects", path: "pi_projects/项目 A", directories: [{ name: "escape", path: "../outside" }], entries: [{ name: "escape", path: "../outside", kind: "directory", modifiedAt: 1735689600000 }], query: "", sort: "name-asc", offset: 0, total: 1, nextOffset: null, truncated: false },
 ]) {
   test(`mismatched or escaping browse response never selects a workspace: ${JSON.stringify(page)}`, async () => {
     const f = await fixture();
@@ -339,15 +438,16 @@ for (const page of [
   });
 }
 
-test("folder labels and server errors are literal text; truncation is explained", async () => {
+test("folder labels and server errors are literal text; pagination is explained", async () => {
   const f = await fixture();
   const name = '<img src=x onerror="injected=true">';
   f.handlers.set("/api/local/browse", (call) => ({
-    ...call.body, directories: [{ name, path: `${call.body.path}/${name}` }], truncated: true,
+    ...call.body, directories: [{ name, path: `${call.body.path}/${name}` }],
+    entries: [{ name, path: `${call.body.path}/${name}`, kind: "directory", modifiedAt: 1735689600000 }], total: 1, nextOffset: null, truncated: true,
   }));
   await f.button("项目 A").fire();
   assert.equal(f.button(name).textContent, name);
-  assert.equal(f.get("local-truncated").hidden, false);
+  assert.match(f.output.html.body, /结果已分页显示。可使用上一页和下一页浏览更多文件夹和文件。/);
   f.handlers.set("/api/local/start", () => f.reply(400, { error: "<script>failed</script>" }));
   await f.get("local-start").fire();
   assert.match(f.get("local-status").textContent, /<script>failed<\/script>/);
@@ -392,7 +492,7 @@ test("unavailable initial state does not browse or start until explicit refresh 
   f.state.csrfToken = "valid-new-csrf";
   await f.get("local-refresh").fire();
   assert.equal(f.get("local-start").disabled, false);
-  assert.deepEqual(f.calls.at(-1)?.body, workspace);
+  assert.deepEqual(f.calls.at(-1)?.body, { ...workspace, query: "", sort: "name-asc", offset: 0 });
 });
 
 test("poll failure preserves launch intent, then recovers using fresh in-memory CSRF", async () => {
@@ -443,6 +543,34 @@ test("existing runs open explicitly and stop requires confirmation for that exac
   assert.deepEqual(f.calls.at(-1)?.body, { id: "old-run" });
   assert.equal(f.calls.at(-1)?.headers["X-Pi-Local-Csrf"], "internal-csrf-not-for-display");
   assert.match(f.get("local-runs").textContent, /正在停止/);
+});
+
+// Break caught: exposing a stop control for an unmanaged terminal, duplicating a managed path, or retaining vanished terminal sessions.
+test("validated terminal sessions are deduplicated, open-only, and reconcile on polling", async () => {
+  const state = initialState();
+  state.runs = [run({ id: "web-run", state: "ready", path: "/s/web-run/" })];
+  state.sessions = [
+    { label: "duplicate terminal", generation: "gen-1", path: "/s/web-run/", since: 1735689600000 },
+    { label: "终端会话", sessionName: null, generation: "gen-2", path: "/s/terminal-run/", since: 1735776000000 },
+    { label: "invalid terminal", generation: "gen-3", path: "/s/terminal-run/?secret", since: 1735776000000 },
+  ];
+  const f = await fixture(state);
+  const cards = f.get("local-runs").children;
+  assert.equal(cards.filter(card => card.textContent.includes("web-run")).length, 1);
+  assert.match(cards.find(card => card.textContent.includes("web-run"))!.textContent, /网页启动/);
+  assert.equal(cards.filter(card => card.textContent.includes("duplicate terminal")).length, 0);
+  assert.equal(cards.filter(card => card.textContent.includes("invalid terminal")).length, 0);
+  const terminal = cards.find(card => card.textContent.includes("终端会话"));
+  assert.ok(terminal, "validated terminal session should be shown");
+  assert.match(terminal.textContent, /终端启动/);
+  assert.match(terminal.textContent, /打开/);
+  assert.doesNotMatch(terminal.textContent, /停止/, "terminal cards are never stop-capable");
+  await f.button("打开", terminal).fire();
+  assert.deepEqual(f.navigations, ["/s/terminal-run/"]);
+  state.sessions = [];
+  await f.poll();
+  assert.doesNotMatch(f.get("local-runs").textContent, /终端会话/);
+  assert.match(f.get("local-runs").textContent, /web-run/);
 });
 
 test("stopped history shows an empty instance list without deleting the stored response", async () => {
@@ -547,9 +675,14 @@ test("local Chromium verifies real DOM, CSP, mobile layout and matching-run redi
     calls.push({ route: url.pathname, method: request.method(), headers: request.headers(), body });
     let value: unknown;
     if (url.pathname === "/api/local/state") value = state;
-    else if (url.pathname === "/api/local/browse") value = {
-      ...body, directories: body.path === "pi_projects" ? [{ name: "中文 项目", path: "pi_projects/中文 项目" }] : [], truncated: false,
-    };
+    else if (url.pathname === "/api/local/browse") {
+      const allEntries = body.path === "pi_projects" ? [
+        { name: "中文 项目", path: "pi_projects/中文 项目", kind: "directory", modifiedAt: 1735776000000 },
+        { name: "README.md", path: "pi_projects/README.md", kind: "file", modifiedAt: 1735689600000 },
+      ] : [];
+      const entries = body.query ? allEntries.filter((entry) => entry.name.toLowerCase().includes(body.query.toLowerCase())) : allEntries;
+      value = { ...body, directories: entries.filter((entry) => entry.kind === "directory"), entries, total: entries.length, nextOffset: null, truncated: false };
+    }
     else if (url.pathname === "/api/local/start") {
       startAttempts++;
       if (startAttempts === 1) {
@@ -572,8 +705,36 @@ test("local Chromium verifies real DOM, CSP, mobile layout and matching-run redi
   await page.goto("http://localhost/");
   await page.waitForFunction(() => !(document.getElementById("local-start") as HTMLButtonElement).disabled);
   assert.equal(page.url(), "http://localhost/");
-  assert.equal(await page.locator("input").count(), 0);
+  assert.equal(await page.locator('input[type="search"]#local-search').count(), 1);
+  assert.equal(await page.locator('input[type="password"]').count(), 0);
   assert.equal(await page.getByRole("link", { name: "本地会话" }).getAttribute("href"), "/sessions/");
+  assert.equal(await page.getByRole("button", { name: "README.md", exact: true }).count(), 0, "files are not folder controls");
+  const initialWorkspace = await page.locator("#local-workspace").innerText();
+  await page.locator("#local-directories li", { hasText: "README.md" }).click();
+  assert.equal(await page.locator("#local-workspace").innerText(), initialWorkspace, "choosing a file never changes the workspace");
+  const searched = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/api/local/browse") return false;
+    const body = request.postDataJSON() as any;
+    return body.query === "readme" && body.sort === "name-asc" && body.offset === 0;
+  });
+  await page.locator("#local-search").fill("readme");
+  await searched;
+  await page.waitForFunction(() => document.getElementById("local-browser-status")?.textContent?.includes("当前文件夹"));
+  assert.match(await page.locator("#local-directories").innerText(), /README\.md/);
+  const sorted = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/api/local/browse") return false;
+    const body = request.postDataJSON() as any;
+    return body.query === "readme" && body.sort === "modified-desc" && body.offset === 0;
+  });
+  await page.locator("#local-sort").selectOption("modified-desc");
+  await sorted;
+  const cleared = page.waitForRequest((request) => {
+    if (new URL(request.url()).pathname !== "/api/local/browse") return false;
+    const body = request.postDataJSON() as any;
+    return body.query === "" && body.sort === "modified-desc" && body.offset === 0;
+  });
+  await page.locator("#local-search-clear").click();
+  await cleared;
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "停止", exact: true }).click();
   assert.equal(calls.filter((call) => call.route.endsWith("/stop")).length, 0);
@@ -651,12 +812,14 @@ test("Chromium drives the real temporary local service: root guard, Chinese 400,
   await mkdir(path.join(projects, "private"));
   await mkdir(path.join(temporary, "bin"));
   const launcher = path.join(temporary, "bin", "isolated-launcher");
+  const docker = path.join(temporary, "bin", "isolated-docker");
   // Exercise the actual service/launcher process boundary without invoking pirun or Docker.
   await writeFile(launcher, "#!/bin/sh\nprintf 'fixture-private-output' >&2\nexit 7\n", { mode: 0o700 });
+  await writeFile(docker, '#!/bin/sh\necho "Error: No such container: $2" >&2\nexit 1\n', { mode: 0o700 });
   service = await startLocalService({
     port: 0, chatPort: 0, home, workspaceRoots: { projects },
     defaultWorkspace: { root: "projects", path: "pi_projects" }, stateRoot: path.join(temporary, "state"),
-    launcher, dockerExecutable: launcher, hubCli: path.join(temporary, "unused-hub.mjs"),
+    launcher, dockerExecutable: docker, hubCli: path.join(temporary, "unused-hub.mjs"),
     protectedRoots: [path.join(projects, "private")],
   });
   const origin = new URL(service.url).origin;
@@ -707,7 +870,11 @@ test("Chromium drives the real temporary local service: root guard, Chinese 400,
   assert.equal(response.status(), 202);
   const created = await response.json();
   assert.match(created.id, /^pi-local-[a-f0-9]{24}$/);
-  await page.waitForFunction(() => document.getElementById("local-runs")?.textContent?.includes("启动失败"));
+  // Confirmed absent containers leave the runtime list, including failed starts.
+  // The pending request must still reconcile and unlock the next explicit start.
+  await page.waitForFunction(() => document.getElementById("local-status")?.textContent?.includes("已停止"));
+  assert.doesNotMatch((await page.locator("#local-runs").textContent())!, new RegExp(created.id));
+  assert.equal(await page.locator("#local-start").isDisabled(), false);
   assert.match((await page.locator("#local-status").textContent())!, /本地服务状态/);
   assert.equal(page.url(), service.url, "failure must not enter a session or auto-restart");
   assert.equal(starts.length, 2, "one rejected request and one explicit accepted request");

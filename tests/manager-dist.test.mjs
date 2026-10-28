@@ -37,7 +37,9 @@ async function fixture() {
     "tsconfig.json",
     "vite.config.ts",
     "docs/source-provenance.md",
+    "docs/commercial-use.md",
     "docs/migration-inventory.json",
+    "NOTICE",
     "LICENSE",
     "README.md",
   ]) {
@@ -202,6 +204,16 @@ test("distribution verification refuses output symlinks", async (t) => {
 
 test("the actual packed artifact verifies itself and contains the complete runtime probe", async (t) => {
   const packed = await packFixture(t);
+
+  await t.test("ships unchanged MIT terms and the commercial attribution guidance", () => {
+    assert.equal(readFileSync(path.join(packed, "LICENSE"), "utf8"), readFileSync(path.join(root, "LICENSE"), "utf8"));
+    for (const name of ["NOTICE", "docs/commercial-use.md", "docs/source-provenance.md"]) {
+      assert.equal(lstatSync(path.join(packed, name)).isFile(), true, name);
+    }
+    const notice = readFileSync(path.join(packed, "NOTICE"), "utf8");
+    for (const author of ["deflating", "kkkiio", "swordfate3"]) assert.ok(notice.includes(author));
+    assert.match(notice, /encouraged, not required/);
+  });
 
   await t.test("includes the manager task store and contracts in the real archive", () => {
     const files = listFiles(packed);

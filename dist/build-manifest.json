@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": {
     "count": 146,
-    "sha256": "9195755a1eb0d69807b9d0264fc2e3e756b476725d7cab2edf0cea00443bc1ab",
+    "sha256": "6b36f2e3a295b36fe7fd4ea9af6ce3fa97d0a9fef69ede8102b67db9c235a16f",
     "files": [
       {
         "path": "bin/pi-manager-admin.mjs",
@@ -498,7 +498,7 @@
       },
       {
         "path": "package.json",
-        "sha256": "252d257fe52df3f6276ce3736b4cee75fbcc486294c292633d1a344928f142eb"
+        "sha256": "7e2da2b8e312c1f536d2fc6aea4c5f7c34406fbf9b60c0e3b99a9eb78e98bff5"
       },
       {
         "path": "protocol/connection-config.ts",
@@ -592,11 +592,11 @@
   },
   "outputs": {
     "count": 7,
-    "sha256": "ef7a1d39c282b2401f0879a51848d11115aecd52987318f90a37130c4d96d2b2",
+    "sha256": "238f6992258b5c8484cc3f3341b5b7a2efba8c8e9c3193a97841b71cd5104c20",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "19741a98137c1c114edb0b0a92bcd87263302f8a28ce15875dec743fb92c2142"
+        "sha256": "8e44b64c3bbe5dba0eb09fd56b19b9b700c27a24ab4b71a741754557020a4d7c"
       },
       {
         "path": "manager/pi-manager-admin.mjs",

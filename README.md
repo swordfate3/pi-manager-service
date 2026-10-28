@@ -78,3 +78,9 @@ npm run verify:dist
 - 网页升级／回退 Pi、安装更新扩展尚未开放；版本列表仅供查询。
 
 更多：[登录与备份](docs/local-workbench.md) · [管理员参考](docs/administrator-guide.md) · [Docker 教程](docs/docker-quickstart.md) · [来源与许可](docs/source-provenance.md)
+
+## 许可与商用署名
+
+使用 [MIT](LICENSE)，允许商用与闭源集成。商业及非商业分发均须保留原有版权和许可声明；
+推荐标注项目名称与仓库来源，具体见 [商用署名指引](docs/commercial-use.md) 和 [NOTICE](NOTICE)。
+标准 MIT 不强制要求网站页脚署名，依赖与素材另遵其各自许可。

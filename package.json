@@ -60,7 +60,9 @@
     "dist/",
     "scripts/manager-dist.mjs",
     "docs/source-provenance.md",
+    "docs/commercial-use.md",
     "docs/migration-inventory.json",
+    "NOTICE",
     "LICENSE",
     "README.md"
   ]

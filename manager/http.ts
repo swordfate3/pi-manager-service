@@ -24,11 +24,12 @@ export function boundary(req: IncomingMessage, origin: string) {
   header(req, "authorization"); header(req, "x-pi-manager-token"); header(req, "cookie"); header(req, "content-type");
   requireThat(req.url && req.url.length <= 512 && !/[\\%?#]/.test(req.url));
 }
-export async function jsonBody(req: IncomingMessage): Promise<unknown> {
+export async function jsonBody(req: IncomingMessage, maxBytes = 8192): Promise<unknown> {
+  requireThat(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= 32768);
   requireThat(header(req, "content-type") === "application/json");
-  const declared = header(req, "content-length"); requireThat(!declared || Number(declared) <= 8192, 413);
+  const declared = header(req, "content-length"); requireThat(!declared || Number(declared) <= maxBytes, 413);
   const chunks: Buffer[] = []; let size = 0;
-  for await (const chunk of req) { size += chunk.length; requireThat(size <= 8192, 413); chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; requireThat(size <= maxBytes, 413); chunks.push(chunk); }
   try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
   catch { throw new ManagerError(400); }
 }

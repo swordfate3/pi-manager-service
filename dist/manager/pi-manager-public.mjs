@@ -209,15 +209,16 @@ function boundary(req, origin) {
 	header(req, "content-type");
 	requireThat(req.url && req.url.length <= 512 && !/[\\%?#]/.test(req.url));
 }
-async function jsonBody(req) {
+async function jsonBody(req, maxBytes = 8192) {
+	requireThat(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= 32768);
 	requireThat(header(req, "content-type") === "application/json");
 	const declared = header(req, "content-length");
-	requireThat(!declared || Number(declared) <= 8192, 413);
+	requireThat(!declared || Number(declared) <= maxBytes, 413);
 	const chunks = [];
 	let size = 0;
 	for await (const chunk of req) {
 		size += chunk.length;
-		requireThat(size <= 8192, 413);
+		requireThat(size <= maxBytes, 413);
 		chunks.push(chunk);
 	}
 	try {

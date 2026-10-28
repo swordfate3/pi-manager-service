@@ -2,7 +2,7 @@
 import http, { createServer, request } from "node:http";
 import { chmod, copyFile, lstat, mkdir, open, opendir, readFile, readdir, realpath, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, scrypt, sign, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, randomUUID, scrypt, sign, timingSafeEqual } from "node:crypto";
 import { chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import net, { isIP } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
@@ -1101,7 +1101,7 @@ var ForwardQueue = class {
 //#endregion
 //#region hub/pi-launches.ts
 var hex$4 = (v, n) => typeof v === "string" && new RegExp(`^[a-f0-9]{${n}}$`).test(v);
-var object$2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+var object$3 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 var text$1 = (v, limit) => typeof v === "string" && v.length > 0 && v.length <= limit && !/[\p{Cc}\p{Cs}]/u.test(v);
 var workspacePath = (v) => typeof v === "string" && v.length <= 1024 && !/[\\\p{Cc}\p{Cs}]/u.test(v) && (v === "" || v.split("/").every((part) => !!part && part !== "." && part !== ".."));
 var basename = (v) => text$1(v, 255) && v !== "." && v !== ".." && !/[\\/]/u.test(v);
@@ -1118,7 +1118,7 @@ function launchRequest(value) {
 	if (Object.keys(value).sort().join(",") !== "id,label,path,policy_revision,workspace_revision" || !hex$4(value.id, 32) || !hex$4(value.policy_revision, 64) || !hex$4(value.workspace_revision, 64) || !workspacePath(value.path) || !text$1(value.label, 80) || value.label.trim() !== value.label) throw new Error("Invalid exact launch request");
 }
 function job$1(value) {
-	if (!object$2(value) || !hex$4(value.id, 32) || !workspacePath(value.path) || !text$1(value.label, 80) || ![
+	if (!object$3(value) || !hex$4(value.id, 32) || !workspacePath(value.path) || !text$1(value.label, 80) || ![
 		"queued",
 		"starting",
 		"running",
@@ -1145,7 +1145,7 @@ function compareNames(a, b) {
 }
 function launchResponse(suffix, value, method = "GET") {
 	if (suffix === "/launch-config") {
-		if (!object$2(value) || typeof value.enabled !== "boolean" || !text$1(value.rootLabel, 80) || !workspacePath(value.defaultPath) || !hex$4(value.revision, 64) || !Number.isSafeInteger(value.maxActive) || Number(value.maxActive) < 1 || Number(value.maxActive) > 16) throw new Error("Invalid launch configuration");
+		if (!object$3(value) || typeof value.enabled !== "boolean" || !text$1(value.rootLabel, 80) || !workspacePath(value.defaultPath) || !hex$4(value.revision, 64) || !Number.isSafeInteger(value.maxActive) || Number(value.maxActive) < 1 || Number(value.maxActive) > 16) throw new Error("Invalid launch configuration");
 		return {
 			enabled: value.enabled,
 			rootLabel: value.rootLabel,
@@ -1159,9 +1159,9 @@ function launchResponse(suffix, value, method = "GET") {
 		const selected = query.get("path") ?? "";
 		const cursor = query.get("cursor");
 		const expectedParent = selected === "" ? null : selected.split("/").slice(0, -1).join("/");
-		if (!object$2(value) || value.path !== selected || value.parent !== expectedParent || !hex$4(value.revision, 64) || !Array.isArray(value.entries) || value.entries.length > 200 || typeof value.truncated !== "boolean" || value.nextCursor !== void 0 && !basename(value.nextCursor)) throw new Error("Invalid workspace listing");
+		if (!object$3(value) || value.path !== selected || value.parent !== expectedParent || !hex$4(value.revision, 64) || !Array.isArray(value.entries) || value.entries.length > 200 || typeof value.truncated !== "boolean" || value.nextCursor !== void 0 && !basename(value.nextCursor)) throw new Error("Invalid workspace listing");
 		const entries = value.entries.map((entry) => {
-			if (!object$2(entry) || !basename(entry.name) || entry.path !== `${selected ? `${selected}/` : ""}${entry.name}`) throw new Error("Invalid directory child");
+			if (!object$3(entry) || !basename(entry.name) || entry.path !== `${selected ? `${selected}/` : ""}${entry.name}`) throw new Error("Invalid directory child");
 			return {
 				name: entry.name,
 				path: entry.path
@@ -1178,7 +1178,7 @@ function launchResponse(suffix, value, method = "GET") {
 		};
 	}
 	if (suffix === "/launches" && method === "GET") {
-		if (!object$2(value) || !Array.isArray(value.jobs)) throw new Error("Invalid launch list");
+		if (!object$3(value) || !Array.isArray(value.jobs)) throw new Error("Invalid launch list");
 		if (value.jobs.length > 256) throw new Error("Too many launch records");
 		const jobs = value.jobs.map(job$1);
 		if (new Set(jobs.map((row) => row.id)).size !== jobs.length) throw new Error("Duplicate launch record");
@@ -1189,7 +1189,7 @@ function launchResponse(suffix, value, method = "GET") {
 	return result;
 }
 function attachLaunchSessions(value, resolve) {
-	if (!object$2(value)) return value;
+	if (!object$3(value)) return value;
 	if (Array.isArray(value.jobs)) return { jobs: value.jobs.map((row) => attachLaunchSessions(row, resolve)) };
 	if (!hex$4(value.run_id, 32) || value.status !== "running") return value;
 	const sessionUrl = resolve(value.run_id);
@@ -1222,7 +1222,7 @@ var modes = [
 	"disabled"
 ];
 var hex$3 = (value, length) => typeof value === "string" && new RegExp(`^[a-f0-9]{${length}}$`).test(value);
-var object$1 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
+var object$2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 var label = (value, max = 256) => typeof value === "string" && value.length > 0 && value.length <= max && !/\p{Cc}/u.test(value);
 var service = (value) => typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value);
 var exact = (value, fields) => Object.keys(value).sort().join(",") === [...fields].sort().join(",");
@@ -1238,7 +1238,7 @@ function details(value, depth = 0) {
 	if (value === null || typeof value === "boolean" || typeof value === "number" && Number.isFinite(value)) return value;
 	if (typeof value === "string" && value.length <= 2e3 && !/[\p{Cc}\p{Cs}]/u.test(value)) return value;
 	if (Array.isArray(value) && value.length <= 128) return value.map((item) => details(item, depth + 1));
-	if (object$1(value) && Object.keys(value).length <= 64) {
+	if (object$2(value) && Object.keys(value).length <= 64) {
 		const safe = Object.create(null);
 		for (const [key, item] of Object.entries(value)) {
 			if (!/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/.test(key) || /token|password|secret|authorization|credential|environment|mount|template|private/i.test(key)) throw new GateManagementError();
@@ -1249,7 +1249,7 @@ function details(value, depth = 0) {
 	throw new GateManagementError();
 }
 function task(value) {
-	if (!object$1(value) || !kinds.includes(String(value.kind)) || !hex$3(value.id, 32) || !hex$3(value.revision, 64) || !label(value.status, 64) || !label(value.stage, 128) || !label(value.title) || !label(value.target) || !Array.isArray(value.actions) || value.actions.length > 3 || value.actions.some((v) => !actions.includes(String(v)))) throw new GateManagementError();
+	if (!object$2(value) || !kinds.includes(String(value.kind)) || !hex$3(value.id, 32) || !hex$3(value.revision, 64) || !label(value.status, 64) || !label(value.stage, 128) || !label(value.title) || !label(value.target) || !Array.isArray(value.actions) || value.actions.length > 3 || value.actions.some((v) => !actions.includes(String(v)))) throw new GateManagementError();
 	const result = {
 		kind: String(value.kind),
 		id: value.id,
@@ -1274,13 +1274,13 @@ function task(value) {
 		result.created_at = Number(value.created_at);
 	}
 	if (value.details !== void 0) {
-		if (!object$1(value.details) || JSON.stringify(value.details).length > 16384) throw new GateManagementError();
+		if (!object$2(value.details) || JSON.stringify(value.details).length > 16384) throw new GateManagementError();
 		result.details = details(value.details);
 	}
 	return result;
 }
 function policy(value) {
-	if (!object$1(value) || !policyKinds.includes(String(value.kind)) || !service(value.id) || !hex$3(value.revision, 64) || !modes.includes(String(value.mode))) throw new GateManagementError();
+	if (!object$2(value) || !policyKinds.includes(String(value.kind)) || !service(value.id) || !hex$3(value.revision, 64) || !modes.includes(String(value.mode))) throw new GateManagementError();
 	const result = {
 		kind: String(value.kind),
 		id: value.id,
@@ -1298,7 +1298,7 @@ function policy(value) {
 	return result;
 }
 function receipt(value) {
-	if (!object$1(value) || !hex$3(value.decision_id, 32) || !["recorded", "delivery_unknown"].includes(String(value.status))) throw new GateManagementError();
+	if (!object$2(value) || !hex$3(value.decision_id, 32) || !["recorded", "delivery_unknown"].includes(String(value.status))) throw new GateManagementError();
 	return {
 		decision_id: value.decision_id,
 		status: value.status,
@@ -1319,7 +1319,7 @@ var GateManagementProvider = class {
 		} catch {
 			throw new GateManagementError();
 		}
-		if (!object$1(credential) || !exact(credential, ["token"]) || !hex$3(credential.token, 64)) throw new GateManagementError();
+		if (!object$2(credential) || !exact(credential, ["token"]) || !hex$3(credential.token, 64)) throw new GateManagementError();
 		const payload = value === void 0 ? void 0 : JSON.stringify(value);
 		const data = await new Promise((resolve, reject) => {
 			let done = false;
@@ -1382,7 +1382,7 @@ var GateManagementProvider = class {
 			throw new GateManagementError();
 		}
 		if (suffix === "") {
-			if (!object$1(data) || !Array.isArray(data.tasks) || data.tasks.length > 512 || !Array.isArray(data.policies) || data.policies.length > 128) throw new GateManagementError();
+			if (!object$2(data) || !Array.isArray(data.tasks) || data.tasks.length > 512 || !Array.isArray(data.policies) || data.policies.length > 128) throw new GateManagementError();
 			return {
 				tasks: data.tasks.map(task),
 				policies: data.policies.map(policy)
@@ -1432,7 +1432,7 @@ async function body$1(request) {
 		request.once("aborted", failed);
 	});
 	const value = JSON.parse(raw.toString("utf8"));
-	if (!object$1(value)) throw new Error();
+	if (!object$2(value)) throw new Error();
 	return value;
 }
 function createGateManagementApi(config, management, resolveSession = () => void 0) {
@@ -3377,7 +3377,7 @@ var portalCss = `:root{color-scheme:light;font-family:Inter,-apple-system,BlinkM
 var runtimeVersion = (value) => typeof value === "string" && value.length <= 64 && value.trim() === value && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value);
 var hex$1 = (value) => typeof value === "string" && value.length === 32 && /^[a-f0-9]{32}$/.test(value);
 var word = (value) => typeof value === "string" && value.trim() === value && /^[a-z_]{1,64}$/.test(value);
-var object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+var object$1 = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 var catalogQuery = (value) => typeof value === "string" && value.length <= 64 && /^[0-9.]*$/.test(value);
 var catalogCursor = (value) => typeof value === "string" && value.length <= 256 && [...value].every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127);
 var states$1 = [
@@ -3399,9 +3399,9 @@ var RuntimeUpdateError = class extends Error {
 	}
 };
 function job(value) {
-	if (!object(value) || !hex$1(value.id) || !runtimeVersion(value.version) || !states$1.includes(value.status) || !word(value.stage) || !Array.isArray(value.targets)) throw new RuntimeUpdateError();
+	if (!object$1(value) || !hex$1(value.id) || !runtimeVersion(value.version) || !states$1.includes(value.status) || !word(value.stage) || !Array.isArray(value.targets)) throw new RuntimeUpdateError();
 	const targets = value.targets.map((target) => {
-		if (!object(target) || !hex$1(target.run_id) || !word(target.status)) throw new RuntimeUpdateError();
+		if (!object$1(target) || !hex$1(target.run_id) || !word(target.status)) throw new RuntimeUpdateError();
 		const result = {
 			run_id: target.run_id,
 			status: target.status
@@ -3434,7 +3434,7 @@ function job(value) {
 	return result;
 }
 function catalog(value) {
-	if (!object(value) || ![
+	if (!object$1(value) || ![
 		"fresh",
 		"stale",
 		"unavailable"
@@ -3442,7 +3442,7 @@ function catalog(value) {
 	const result = {
 		status: value.status,
 		versions: value.versions.map((entry) => {
-			if (!object(entry) || !runtimeVersion(entry.version)) throw new RuntimeUpdateError();
+			if (!object$1(entry) || !runtimeVersion(entry.version)) throw new RuntimeUpdateError();
 			return { version: entry.version };
 		})
 	};
@@ -3457,7 +3457,7 @@ function catalog(value) {
 	return result;
 }
 function readiness(value) {
-	if (!object(value) || ![
+	if (!object$1(value) || ![
 		"ready",
 		"blocked",
 		"unavailable"
@@ -3465,7 +3465,7 @@ function readiness(value) {
 	const result = {
 		status: value.status,
 		consumers: value.consumers.map((consumer) => {
-			if (!object(consumer) || !hex$1(consumer.run_id) || typeof consumer.ready !== "boolean") throw new RuntimeUpdateError();
+			if (!object$1(consumer) || !hex$1(consumer.run_id) || typeof consumer.ready !== "boolean") throw new RuntimeUpdateError();
 			const projected = {
 				run_id: consumer.run_id,
 				ready: consumer.ready
@@ -3500,7 +3500,7 @@ var GateRuntimeUpdates = class {
 		} catch {
 			throw new RuntimeUpdateError();
 		}
-		if (!object(credential) || Object.keys(credential).join(",") !== "token" || typeof credential.token !== "string" || !/^[a-f0-9]{64}$/.test(credential.token)) throw new RuntimeUpdateError();
+		if (!object$1(credential) || Object.keys(credential).join(",") !== "token" || typeof credential.token !== "string" || !/^[a-f0-9]{64}$/.test(credential.token)) throw new RuntimeUpdateError();
 		const token = credential.token;
 		const payload = value ? JSON.stringify(value) : void 0;
 		return new Promise((resolve, reject) => {
@@ -3558,7 +3558,7 @@ var GateRuntimeUpdates = class {
 	}
 	async status() {
 		const value = await this.request("GET", "/v1/runtime-updates");
-		if (!object(value) || !object(value.policy) || ![
+		if (!object$1(value) || !object$1(value.policy) || ![
 			"manual",
 			"auto",
 			"disabled"
@@ -3570,7 +3570,7 @@ var GateRuntimeUpdates = class {
 		};
 	}
 	async catalog(options = {}) {
-		if (!object(options) || Object.keys(options).some((key) => key !== "query" && key !== "cursor") || options.query !== void 0 && !catalogQuery(options.query) || options.cursor !== void 0 && !catalogCursor(options.cursor)) throw new RuntimeUpdateError(400);
+		if (!object$1(options) || Object.keys(options).some((key) => key !== "query" && key !== "cursor") || options.query !== void 0 && !catalogQuery(options.query) || options.cursor !== void 0 && !catalogCursor(options.cursor)) throw new RuntimeUpdateError(400);
 		const search = new URLSearchParams({
 			query: options.query ?? "",
 			cursor: options.cursor ?? ""
@@ -5829,6 +5829,436 @@ var LocalStore = class LocalStore {
 	}
 };
 //#endregion
+//#region manager/local-rpc-dialogs.ts
+var MAX_FRAME_BYTES = 256 * 1024;
+var MAX_REQUEST_BYTES = 32 * 1024;
+var MAX_ANSWER_BYTES = 4096;
+var MAX_PENDING = 8;
+var MAX_TIMEOUT_MS = 12e4;
+var STATE_TIMEOUT_MS = 1500;
+var COMPLETED_LIMIT = 128;
+var COMPLETED_TTL_MS = 5 * 6e4;
+var SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+var METHODS = new Set([
+	"confirm",
+	"select",
+	"input",
+	"editor"
+]);
+function object(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function safeId(value) {
+	return typeof value === "string" && SAFE_ID.test(value);
+}
+function managerError(status) {
+	return new ManagerError(status);
+}
+function boundedDialog(dialog) {
+	return Buffer.byteLength(JSON.stringify(dialog), "utf8") <= MAX_REQUEST_BYTES ? dialog : null;
+}
+var LocalRpcDialogs = class {
+	#output;
+	#input;
+	#pending = /* @__PURE__ */ new Map();
+	#admitting = /* @__PURE__ */ new Map();
+	#scopes = /* @__PURE__ */ new Map();
+	#queries = /* @__PURE__ */ new Map();
+	#completed = /* @__PURE__ */ new Map();
+	#buffer = Buffer.alloc(0);
+	#discarding = false;
+	#closed = false;
+	#onData = (chunk) => this.#consume(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	#onOutputStop = () => this.close();
+	#onInputError = () => this.close();
+	constructor(output, input) {
+		this.#output = output;
+		this.#input = input;
+		output.on("data", this.#onData);
+		output.on("error", this.#onOutputStop);
+		output.on("end", this.#onOutputStop);
+		input.on("error", this.#onInputError);
+	}
+	async snapshot(sessionId) {
+		this.#validateSessionArgument(sessionId);
+		await this.#ensureSession(sessionId);
+		const now = Date.now();
+		for (const [id, pending] of this.#pending) {
+			if (pending.dialog.deadline <= now) {
+				this.#cancelPending(id);
+				continue;
+			}
+			return {
+				...pending.dialog,
+				options: pending.dialog.options ? [...pending.dialog.options] : void 0
+			};
+		}
+		return null;
+	}
+	async respond(sessionId, body, authorize) {
+		this.#validateSessionArgument(sessionId);
+		const answer = this.#answer(body);
+		const pending = this.#pending.get(answer.id);
+		if (!pending || pending.sessionId !== sessionId || pending.decisionId || this.#decisionUsed(answer.decisionId)) throw managerError(409);
+		if (answer.kind === "confirmed" && pending.dialog.method !== "confirm") throw managerError(400);
+		if (answer.kind === "value") {
+			if (pending.dialog.method === "confirm") throw managerError(400);
+			if (pending.dialog.method === "select" && !pending.dialog.options?.includes(answer.value)) throw managerError(400);
+		}
+		pending.decisionId = answer.decisionId;
+		await this.#ensureSession(sessionId);
+		if (this.#pending.get(answer.id) !== pending || pending.dialog.deadline <= Date.now()) {
+			if (this.#pending.get(answer.id) === pending) this.#cancelPending(answer.id);
+			throw managerError(409);
+		}
+		authorize?.();
+		clearTimeout(pending.timer);
+		this.#pending.delete(answer.id);
+		this.#remember(answer.id, answer.decisionId);
+		const response = answer.kind === "confirmed" ? {
+			type: "extension_ui_response",
+			id: answer.id,
+			confirmed: answer.value
+		} : answer.kind === "value" ? {
+			type: "extension_ui_response",
+			id: answer.id,
+			value: answer.value
+		} : {
+			type: "extension_ui_response",
+			id: answer.id,
+			cancelled: true
+		};
+		try {
+			await this.#write(response);
+		} catch {
+			throw managerError(409);
+		}
+		return { state: "delivered" };
+	}
+	close() {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#output.off("data", this.#onData);
+		this.#output.off("error", this.#onOutputStop);
+		this.#output.off("end", this.#onOutputStop);
+		this.#input.off("error", this.#onInputError);
+		for (const pending of this.#pending.values()) {
+			clearTimeout(pending.timer);
+			this.#sendCancellation(pending.dialog.id);
+		}
+		this.#pending.clear();
+		this.#admitting.clear();
+		this.#scopes.clear();
+		for (const query of this.#queries.values()) {
+			clearTimeout(query.timer);
+			query.reject(managerError(409));
+		}
+		this.#queries.clear();
+		this.#completed.clear();
+		this.#buffer = Buffer.alloc(0);
+		this.#discarding = false;
+	}
+	#consume(chunk) {
+		if (this.#closed) return;
+		let offset = 0;
+		while (offset < chunk.length) {
+			if (this.#discarding) {
+				const newline = chunk.indexOf(10, offset);
+				if (newline < 0) return;
+				this.#discarding = false;
+				offset = newline + 1;
+				continue;
+			}
+			const newline = chunk.indexOf(10, offset);
+			const end = newline < 0 ? chunk.length : newline;
+			const part = chunk.subarray(offset, end);
+			if (this.#buffer.length + part.length > MAX_FRAME_BYTES) {
+				this.#buffer = Buffer.alloc(0);
+				if (newline < 0) {
+					this.#discarding = true;
+					return;
+				}
+				offset = newline + 1;
+				continue;
+			}
+			if (part.length) this.#buffer = this.#buffer.length ? Buffer.concat([this.#buffer, part]) : Buffer.from(part);
+			if (newline < 0) return;
+			let frame = this.#buffer;
+			this.#buffer = Buffer.alloc(0);
+			if (frame.at(-1) === 13) frame = frame.subarray(0, -1);
+			if (frame.length) this.#frame(frame);
+			offset = newline + 1;
+		}
+	}
+	#frame(frame) {
+		let record;
+		try {
+			const line = new TextDecoder("utf-8", { fatal: true }).decode(frame);
+			record = JSON.parse(line);
+		} catch {
+			return;
+		}
+		if (!object(record)) return;
+		if (record.type === "extension_ui_request" && record.method === "setStatus" && record.statusText === void 0) {
+			this.#lifecycle(record.statusKey);
+			return;
+		}
+		if (record.type === "response") {
+			this.#stateResponse(record);
+			return;
+		}
+		if (record.type !== "extension_ui_request" || !METHODS.has(record.method)) return;
+		this.#admit(record, frame.length);
+	}
+	async #admit(record, frameBytes) {
+		const id = safeId(record.id) ? record.id : void 0;
+		if (!id) return;
+		this.#pruneCompleted();
+		if (this.#closed || this.#pending.has(id) || this.#admitting.has(id) || this.#completed.has(id)) return;
+		const dialog = this.#dialog(record, frameBytes);
+		if (!dialog) {
+			this.#rejectSource(id);
+			return;
+		}
+		if (this.#pending.size + this.#admitting.size >= MAX_PENDING) {
+			this.#rejectSource(id);
+			return;
+		}
+		this.#admitting.set(id, dialog);
+		try {
+			const sessionId = await this.#querySession();
+			if (this.#closed || !this.#admitting.has(id)) return;
+			const existingSession = this.#pending.values().next().value?.sessionId;
+			if (existingSession !== void 0 && existingSession !== sessionId) this.#cancelAll();
+			if (dialog.deadline <= Date.now()) {
+				this.#rejectSource(id);
+				return;
+			}
+			const timer = setTimeout(() => this.#cancelPending(id), Math.max(0, dialog.deadline - Date.now()));
+			timer.unref?.();
+			this.#pending.set(id, {
+				dialog,
+				sessionId,
+				timer
+			});
+		} catch {
+			if (!this.#closed) this.#rejectSource(id);
+		} finally {
+			this.#admitting.delete(id);
+		}
+	}
+	#dialog(record, frameBytes) {
+		if (frameBytes > MAX_REQUEST_BYTES || !safeId(record.id) || typeof record.title !== "string" || !METHODS.has(record.method)) return null;
+		if (Object.hasOwn(record, "timeout") && (typeof record.timeout !== "number" || !Number.isFinite(record.timeout) || record.timeout <= 0)) return null;
+		const timeout = typeof record.timeout === "number" ? Math.min(record.timeout, MAX_TIMEOUT_MS) : MAX_TIMEOUT_MS;
+		const base = {
+			id: record.id,
+			method: record.method,
+			title: record.title,
+			deadline: Date.now() + timeout
+		};
+		switch (base.method) {
+			case "confirm":
+				if (typeof record.message !== "string") return null;
+				return boundedDialog({
+					...base,
+					message: record.message
+				});
+			case "select":
+				if (!Array.isArray(record.options) || record.options.length < 1 || record.options.length > 1e3 || !record.options.every((option) => typeof option === "string")) return null;
+				return boundedDialog({
+					...base,
+					options: [...record.options]
+				});
+			case "input":
+				if (record.placeholder !== void 0 && typeof record.placeholder !== "string") return null;
+				return boundedDialog({
+					...base,
+					placeholder: record.placeholder
+				});
+			case "editor":
+				if (record.prefill !== void 0 && typeof record.prefill !== "string") return null;
+				return boundedDialog({
+					...base,
+					prefill: record.prefill
+				});
+		}
+	}
+	/** Matched Web emits clear-only status keys: no prompt body, visible status or RPC patch. */
+	#lifecycle(key) {
+		if (typeof key !== "string") return;
+		const ended = /^pi-web-host-rpc-ui-v1:end:([a-f0-9]{32})$/.exec(key);
+		if (ended) {
+			const id = this.#scopes.get(ended[1]);
+			this.#scopes.delete(ended[1]);
+			if (!id) return;
+			if (this.#pending.has(id)) this.#cancelPending(id);
+			else if (this.#admitting.delete(id)) this.#rejectSource(id);
+			return;
+		}
+		const start = /^pi-web-host-rpc-ui-v1:start:([a-f0-9]{32}):(confirm|select|input|editor):([a-f0-9]{64})$/.exec(key);
+		if (!start || this.#scopes.has(start[1]) || this.#scopes.size >= MAX_PENDING) return;
+		const selected = [...this.#pending.values()].map((p) => p.dialog).concat([...this.#admitting.values()]).find((d) => ![...this.#scopes.values()].includes(d.id) && d.method === start[2] && createHash("sha256").update(d.title).digest("hex") === start[3]);
+		if (selected) this.#scopes.set(start[1], selected.id);
+	}
+	#answer(body) {
+		if (!object(body) || !safeId(body.id) || !safeId(body.decisionId)) throw managerError(400);
+		const answerKeys = [
+			"confirmed",
+			"value",
+			"cancelled"
+		].filter((key) => Object.hasOwn(body, key));
+		const allowed = new Set([
+			"id",
+			"decisionId",
+			...answerKeys
+		]);
+		if (answerKeys.length !== 1 || Object.keys(body).some((key) => !allowed.has(key))) throw managerError(400);
+		if (answerKeys[0] === "confirmed") {
+			if (typeof body.confirmed !== "boolean") throw managerError(400);
+			return {
+				id: body.id,
+				decisionId: body.decisionId,
+				kind: "confirmed",
+				value: body.confirmed
+			};
+		}
+		if (answerKeys[0] === "value") {
+			if (typeof body.value !== "string" || Buffer.byteLength(body.value, "utf8") > MAX_ANSWER_BYTES) throw managerError(400);
+			return {
+				id: body.id,
+				decisionId: body.decisionId,
+				kind: "value",
+				value: body.value
+			};
+		}
+		if (body.cancelled !== true) throw managerError(400);
+		return {
+			id: body.id,
+			decisionId: body.decisionId,
+			kind: "cancelled"
+		};
+	}
+	async #ensureSession(expected) {
+		if (this.#closed) throw managerError(409);
+		let current;
+		try {
+			current = await this.#querySession();
+		} catch {
+			this.#cancelAll();
+			throw managerError(409);
+		}
+		let sourceChanged = false;
+		for (const [id, pending] of [...this.#pending]) {
+			if (pending.sessionId === current) continue;
+			sourceChanged = true;
+			this.#cancelPending(id);
+		}
+		if (current !== expected || sourceChanged) throw managerError(409);
+	}
+	#querySession() {
+		if (this.#closed || !this.#writerUsable()) return Promise.reject(managerError(409));
+		const id = `pi-host-ui-state-${randomUUID()}`;
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				if (!this.#queries.get(id)) return;
+				this.#queries.delete(id);
+				reject(managerError(409));
+			}, STATE_TIMEOUT_MS);
+			this.#queries.set(id, {
+				timer,
+				resolve,
+				reject
+			});
+			this.#write({
+				type: "get_state",
+				id
+			}).catch(() => {
+				const query = this.#queries.get(id);
+				if (!query) return;
+				clearTimeout(query.timer);
+				this.#queries.delete(id);
+				query.reject(managerError(409));
+			});
+		});
+	}
+	#stateResponse(record) {
+		if (typeof record.id !== "string") return;
+		const query = this.#queries.get(record.id);
+		if (!query) return;
+		clearTimeout(query.timer);
+		this.#queries.delete(record.id);
+		if (record.command === "get_state" && record.success === true && object(record.data) && typeof record.data.sessionId === "string" && record.data.sessionId.length > 0) query.resolve(record.data.sessionId);
+		else query.reject(managerError(409));
+	}
+	#cancelAll() {
+		for (const id of [...this.#pending.keys()]) this.#cancelPending(id);
+	}
+	#cancelPending(id) {
+		const pending = this.#pending.get(id);
+		if (!pending) return;
+		clearTimeout(pending.timer);
+		this.#pending.delete(id);
+		this.#remember(id, pending.decisionId);
+		this.#sendCancellation(id);
+	}
+	#rejectSource(id) {
+		if (this.#closed) return;
+		this.#remember(id);
+		this.#sendCancellation(id);
+	}
+	#sendCancellation(id) {
+		if (!this.#writerUsable()) return;
+		try {
+			this.#input.write(JSON.stringify({
+				type: "extension_ui_response",
+				id,
+				cancelled: true
+			}) + "\n", () => void 0);
+		} catch {}
+	}
+	#write(record) {
+		if (this.#closed || !this.#writerUsable()) return Promise.reject(managerError(409));
+		const line = JSON.stringify(record) + "\n";
+		return new Promise((resolve, reject) => {
+			try {
+				this.#input.write(line, (error) => error ? reject(error) : resolve());
+			} catch (error) {
+				reject(error);
+			}
+		});
+	}
+	#writerUsable() {
+		return !this.#input.destroyed && !this.#input.writableEnded && !this.#input.writableFinished;
+	}
+	#decisionUsed(decisionId) {
+		this.#pruneCompleted();
+		for (const pending of this.#pending.values()) if (pending.decisionId === decisionId) return true;
+		for (const completed of this.#completed.values()) if (completed.decisionId === decisionId) return true;
+		return false;
+	}
+	#remember(id, decisionId) {
+		this.#pruneCompleted();
+		this.#completed.delete(id);
+		this.#completed.set(id, {
+			decisionId,
+			expires: Date.now() + COMPLETED_TTL_MS
+		});
+		while (this.#completed.size > COMPLETED_LIMIT) {
+			const oldest = this.#completed.keys().next().value;
+			if (oldest === void 0) break;
+			this.#completed.delete(oldest);
+		}
+	}
+	#pruneCompleted() {
+		const now = Date.now();
+		for (const [id, completed] of this.#completed) if (completed.expires <= now) this.#completed.delete(id);
+	}
+	#validateSessionArgument(sessionId) {
+		if (typeof sessionId !== "string" || sessionId.length === 0 || Buffer.byteLength(sessionId, "utf8") > 4096) throw managerError(400);
+	}
+};
+//#endregion
 //#region manager/local-launcher.ts
 var exec = promisify(execFile);
 /** Host-only owner service. Browser input never becomes an executable, flags, or mount list. */
@@ -5960,13 +6390,14 @@ var LocalLauncher = class LocalLauncher {
 				]
 			});
 			run.pid = child.pid;
-			child.stdout.resume();
+			const dialogs = new LocalRpcDialogs(child.stdout, child.stdin);
 			child.stderr.resume();
 			const exited = new Promise((resolve) => {
 				let ended = false;
 				const finish = () => {
 					if (ended) return;
 					ended = true;
+					dialogs.close();
 					this.#serial(async () => {
 						this.#live.delete(id);
 						if (run.state !== "stopped") {
@@ -5982,7 +6413,8 @@ var LocalLauncher = class LocalLauncher {
 			});
 			this.#live.set(id, {
 				child,
-				exited
+				exited,
+				dialogs
 			});
 			await this.#save();
 			return this.#view(run);
@@ -6079,6 +6511,33 @@ var LocalLauncher = class LocalLauncher {
 		}
 		if (changed) await this.#save();
 	}
+	#ownedDialogs(generation) {
+		requireThat(isHubGeneration(generation));
+		if (this.#closing) return void 0;
+		const run = [...this.#runs.values()].find((run) => run.state === "ready" && run.path === `/s/${generation}/`);
+		return run ? this.#live.get(run.id)?.dialogs : void 0;
+	}
+	async dialogs(generation, sessionId) {
+		const owner = this.#ownedDialogs(generation);
+		if (!owner) return {
+			available: false,
+			dialog: null
+		};
+		const dialog = await owner.snapshot(sessionId);
+		requireThat(this.#ownedDialogs(generation) === owner, 409);
+		return {
+			available: true,
+			dialog
+		};
+	}
+	async respondDialog(generation, sessionId, body, authorize) {
+		const owner = this.#ownedDialogs(generation);
+		requireThat(owner, 409);
+		return owner.respond(sessionId, body, () => {
+			requireThat(this.#ownedDialogs(generation) === owner, 409);
+			authorize?.();
+		});
+	}
 	stop(value) {
 		return this.#serial(async () => {
 			const request = record(value);
@@ -6094,6 +6553,7 @@ var LocalLauncher = class LocalLauncher {
 			requireThat(container, 409);
 			run.state = "stopping";
 			delete run.path;
+			this.#live.get(run.id)?.dialogs.close();
 			await this.#save();
 			const operation = (async () => {
 				try {
@@ -6131,7 +6591,10 @@ var LocalLauncher = class LocalLauncher {
 		if (this.#poll) clearInterval(this.#poll);
 		await this.#tail;
 		await Promise.allSettled([...this.#stops]);
-		for (const live of this.#live.values()) live.child.stdin.end();
+		for (const live of this.#live.values()) {
+			live.dialogs.close();
+			live.child.stdin.end();
+		}
 		await Promise.race([Promise.all([...this.#live.values()].map((live) => live.exited)), new Promise((resolve) => {
 			setTimeout(resolve, 3e3).unref();
 		})]);
@@ -6150,15 +6613,16 @@ function header(req, name) {
 	requireThat(values.length <= 1);
 	return values[0];
 }
-async function jsonBody(req) {
+async function jsonBody(req, maxBytes = 8192) {
+	requireThat(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= 32768);
 	requireThat(header(req, "content-type") === "application/json");
 	const declared = header(req, "content-length");
-	requireThat(!declared || Number(declared) <= 8192, 413);
+	requireThat(!declared || Number(declared) <= maxBytes, 413);
 	const chunks = [];
 	let size = 0;
 	for await (const chunk of req) {
 		size += chunk.length;
-		requireThat(size <= 8192, 413);
+		requireThat(size <= maxBytes, 413);
 		chunks.push(chunk);
 	}
 	try {
@@ -7244,6 +7708,33 @@ async function startLocalService(value) {
 				sessions,
 				csrfToken: session.csrf
 			});
+			return;
+		}
+		if (req.url?.startsWith("/api/local/dialogs/")) {
+			const url = new URL(req.url, origin), match = new RegExp(`^/api/local/dialogs/(${HUB_GENERATION_SOURCE})$`).exec(url.pathname);
+			requireThat(match, 404);
+			const validSession = (value) => {
+				requireThat(typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value));
+				return value;
+			};
+			if (req.method === "GET") {
+				requireThat([...url.searchParams.keys()].length === 1 && url.searchParams.has("session"));
+				const result = await launcher.dialogs(match[1], validSession(url.searchParams.get("session")));
+				auth.revalidate(session);
+				reply(res, 200, {
+					protocol: "pi-host-rpc-ui-v1",
+					...result,
+					...result.available ? { csrfToken: session.csrf } : {}
+				});
+			} else {
+				requireThat(req.method === "POST" && !url.search, 404);
+				boundary(req, true);
+				auth.checkCsrf(header(req, "x-pi-local-csrf"), session);
+				const body = record(await jsonBody(req, 32768));
+				auth.revalidate(session);
+				const { sessionId, ...answer } = body;
+				reply(res, 200, await launcher.respondDialog(match[1], validSession(sessionId), answer, () => auth.revalidate(session)));
+			}
 			return;
 		}
 		if (req.url?.startsWith("/api/local/")) {

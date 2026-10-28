@@ -23,10 +23,10 @@
 
 **Interfaces:** `LocalRpcDialogs(readable, writable)`, `snapshot(sessionId)`, `respond(sessionId, body)`, `close()`; launcher uses generation-scoped lookup and exposes `dialogs(generation, sessionId)` / `respondDialog(generation, body)`.
 
-- [ ] Write failing tests with PassThrough streams: literal confirm request maps to exact `extension_ui_response`; select rejects values not in options; cancellation cannot turn into approval; Unicode framing survives chunk splits; oversized unrelated line does not block next request.
-- [ ] Run `node --import ./tests/register-ts.mjs --test tests/local-rpc-dialogs.test.ts`, observe feature-missing failure.
-- [ ] Implement minimal bounded parser, session query correlation, deadlines, duplicate-decision fencing and cleanup. Query `get_state` for request binding and before response; standard responses only.
-- [ ] Run covering tests and existing `tests/local-launcher-lifecycle.test.ts`; inspect that no dialog text enters LocalStore.
+- [x] Write failing tests with PassThrough streams: literal confirm request maps to exact `extension_ui_response`; select rejects values not in options; cancellation cannot turn into approval; Unicode framing survives chunk splits; oversized unrelated line does not block next request.
+- [x] Run `node --import ./tests/register-ts.mjs --test tests/local-rpc-dialogs.test.ts`, observe feature-missing failure.
+- [x] Implement minimal bounded parser, session query correlation, deadlines, duplicate-decision fencing and cleanup. Query `get_state` for request binding and before response; standard responses only.
+- [x] Run covering tests and existing `tests/local-launcher-lifecycle.test.ts`; inspect that no dialog text enters LocalStore.
 
 ### Task 2: Authenticated instance API
 
@@ -34,9 +34,9 @@
 
 **Interfaces:** GET/POST `/api/local/dialogs/<generation>` as defined by the spec, with existing login and X-Pi-Local-Csrf.
 
-- [ ] Write API tests against real temporary workbench and controlled launcher: unauthenticated 401, wrong Origin/CSRF 403, unknown/terminal generation unavailable, exact active request answered once, no raw stdin commands accepted.
-- [ ] Run tests and observe routes missing; implement routes with strict body keys and bounded JSON input.
-- [ ] Re-run API, authentication and lifecycle regression tests.
+- [x] Write API tests against real temporary workbench and controlled launcher: unauthenticated 401, wrong Origin/CSRF 403, unknown/terminal generation unavailable, exact active request answered once, no raw stdin commands accepted.
+- [x] Run tests and observe routes missing; implement routes with strict body keys and bounded JSON input.
+- [x] Re-run API, authentication and lifecycle regression tests.
 
 ### Task 3: Current chat dialog UI
 
@@ -44,14 +44,17 @@
 
 **Interfaces:** Browser client parses the exact protocol, generation and session identity, uses authenticated same-origin requests and returns explicit unavailable on non-hosted deployments.
 
-- [ ] Write failing protocol tests rejecting unknown methods, oversized fields and malformed envelopes; ensure cancellation/confirm/select/input/editor JSON bodies match host API.
-- [ ] Implement client and responsive modal with pure text preview, four widgets and explicit cancellation. Poll while prompt active; abort stale requests and never retry a decision after an uncertain delivery.
-- [ ] Run protocol tests, typechecks and browser acceptance with a real isolated Pi. Capture and inspect desktop/mobile screenshots per webui-visual-check.
+- [x] Write failing protocol tests rejecting unknown methods, oversized fields and malformed envelopes; ensure cancellation/confirm/select/input/editor JSON bodies match host API.
+- [x] Implement client and responsive modal with pure text preview, four widgets and explicit cancellation. Poll while prompt active; abort stale requests and never retry a decision after an uncertain delivery.
+- [x] Run protocol tests, typechecks and browser acceptance with a real isolated Pi. Capture and inspect desktop/mobile screenshots per webui-visual-check.
 
 ### Task 4: Delivery and operational boundaries
 
 **Files:** README and `docs/local-workbench.md` in Manager, `docs/terminal-prompts.md` and `docs/development-log.md` in Web, both tracked dist outputs.
 
-- [ ] Build both projects, verify dist and package tests, perform independent review of identity/timeout/authorization boundaries.
-- [ ] Record exact supported cases and unimplemented TUI/custom controls; do not claim all extension authorizations work.
+- [x] Build both projects, verify dist and package tests, perform independent review of identity/timeout/authorization boundaries.
+- [x] Record exact supported cases and unimplemented TUI/custom controls; do not claim all extension authorizations work.
 - [ ] Update only verified deployment artifacts; preserve existing Pi processes and state. If a running workload prevents safe rollout, report the precise remaining action rather than restarting it.
+
+Development acceptance: `docs/validation/2026-10-28-hosted-rpc-dialogs.md`.
+Deployment is held: two live website-created Pi instances would be affected by workbench restart.

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Readable, Writable } from "node:stream";
 
 import { ManagerError } from "./validation.ts";
@@ -66,7 +66,8 @@ export class LocalRpcDialogs {
   readonly #output: Readable;
   readonly #input: Writable;
   readonly #pending = new Map<string, PendingDialog>();
-  readonly #admitting = new Set<string>();
+  readonly #admitting = new Map<string, HostRpcDialog>();
+  readonly #scopes = new Map<string, string>();
   readonly #queries = new Map<string, StateQuery>();
   readonly #completed = new Map<string, CompletedDialog>();
   #buffer = Buffer.alloc(0);
@@ -100,7 +101,7 @@ export class LocalRpcDialogs {
     return null;
   }
 
-  async respond(sessionId: string, body: unknown): Promise<{ state: "delivered" }> {
+  async respond(sessionId: string, body: unknown, authorize?: () => void): Promise<{ state: "delivered" }> {
     this.#validateSessionArgument(sessionId);
     const answer = this.#answer(body);
     const pending = this.#pending.get(answer.id);
@@ -118,6 +119,8 @@ export class LocalRpcDialogs {
       throw managerError(409);
     }
 
+    // Recheck the owner's HTTP login and generation after asynchronous state I/O.
+    authorize?.();
     clearTimeout(pending.timer);
     this.#pending.delete(answer.id);
     this.#remember(answer.id, answer.decisionId);
@@ -148,6 +151,7 @@ export class LocalRpcDialogs {
     }
     this.#pending.clear();
     this.#admitting.clear();
+    this.#scopes.clear();
     for (const query of this.#queries.values()) {
       clearTimeout(query.timer);
       query.reject(managerError(409));
@@ -203,6 +207,11 @@ export class LocalRpcDialogs {
     }
     if (!object(record)) return;
 
+    if (record.type === "extension_ui_request" && record.method === "setStatus" && record.statusText === undefined) {
+      this.#lifecycle(record.statusKey);
+      return;
+    }
+
     if (record.type === "response") {
       this.#stateResponse(record);
       return;
@@ -226,7 +235,7 @@ export class LocalRpcDialogs {
       return;
     }
 
-    this.#admitting.add(id);
+    this.#admitting.set(id, dialog);
     try {
       const sessionId = await this.#querySession();
       if (this.#closed || !this.#admitting.has(id)) return;
@@ -265,6 +274,25 @@ export class LocalRpcDialogs {
         if (record.prefill !== undefined && typeof record.prefill !== "string") return null;
         return boundedDialog({ ...base, prefill: record.prefill as string | undefined });
     }
+  }
+
+  /** Matched Web emits clear-only status keys: no prompt body, visible status or RPC patch. */
+  #lifecycle(key: unknown): void {
+    if (typeof key !== "string") return;
+    const ended = /^pi-web-host-rpc-ui-v1:end:([a-f0-9]{32})$/.exec(key);
+    if (ended) {
+      const id = this.#scopes.get(ended[1]); this.#scopes.delete(ended[1]);
+      if (!id) return;
+      if (this.#pending.has(id)) this.#cancelPending(id);
+      else if (this.#admitting.delete(id)) this.#rejectSource(id);
+      return;
+    }
+    const start = /^pi-web-host-rpc-ui-v1:start:([a-f0-9]{32}):(confirm|select|input|editor):([a-f0-9]{64})$/.exec(key);
+    if (!start || this.#scopes.has(start[1]) || this.#scopes.size >= MAX_PENDING) return;
+    const candidates = [...this.#pending.values()].map(p => p.dialog).concat([...this.#admitting.values()]);
+    const selected = candidates.find(d => ![...this.#scopes.values()].includes(d.id) && d.method === start[2] &&
+      createHash("sha256").update(d.title).digest("hex") === start[3]);
+    if (selected) this.#scopes.set(start[1], selected.id);
   }
 
   #answer(body: unknown):

@@ -9,6 +9,8 @@ import type { WorkspaceSelection } from "./api.ts";
 import { WorkspacePolicy } from "./workspaces.ts";
 import { canonical, identifier, keys, record, requireThat } from "./validation.ts";
 import { LocalStore, type StoredRun } from "./local-store.ts";
+import { LocalRpcDialogs } from "./local-rpc-dialogs.ts";
+import { isHubGeneration } from "../protocol/hub-generation.ts";
 
 const exec = promisify(execFile);
 export interface LocalRun {
@@ -16,7 +18,7 @@ export interface LocalRun {
   path?: string; error?: string;
 }
 type RunRecord = StoredRun;
-interface LiveRun { child: ChildProcessWithoutNullStreams; exited: Promise<void> }
+interface LiveRun { child: ChildProcessWithoutNullStreams; exited: Promise<void>; dialogs: LocalRpcDialogs }
 export interface LocalReadiness { sessionPath(runId: string): Promise<string | undefined> }
 
 /** Host-only owner service. Browser input never becomes an executable, flags, or mount list. */
@@ -84,10 +86,11 @@ export class LocalLauncher {
           ...(this.#config.dockerExecutable ? { PI_PIRUN_DOCKER_BIN: this.#config.dockerExecutable } : {}) }, stdio: ["pipe", "pipe", "pipe"] });
       run.pid = child.pid;
       // Never store/return stdout or stderr: extensions can print tokens and conversation content.
-      child.stdout.resume(); child.stderr.resume();
+      const dialogs = new LocalRpcDialogs(child.stdout, child.stdin);
+      child.stderr.resume();
       const exited = new Promise<void>(resolve => {
         let ended = false;
-        const finish = () => { if (ended) return; ended = true;
+        const finish = () => { if (ended) return; ended = true; dialogs.close();
           void this.#serial(async () => { this.#live.delete(id); if (run.state !== "stopped") {
             run.state = run.state === "stopping" ? "stopped" : "failed"; delete run.path;
             if (run.state === "failed") run.error = "Pi 启动或运行进程已退出。请检查本地启动器和 Docker 状态。";
@@ -95,7 +98,7 @@ export class LocalLauncher {
           } }).finally(resolve);
         }; child.once("error", finish); child.once("exit", finish);
       });
-      this.#live.set(id, { child, exited }); await this.#save(); return this.#view(run);
+      this.#live.set(id, { child, exited, dialogs }); await this.#save(); return this.#view(run);
     });
   }
   async #inspect(run: RunRecord): Promise<any | undefined> {
@@ -171,12 +174,32 @@ export class LocalLauncher {
     }
     if (changed) await this.#save();
   }
+  #ownedDialogs(generation: string) {
+    requireThat(isHubGeneration(generation));
+    if (this.#closing) return undefined;
+    const run = [...this.#runs.values()].find(run => run.state === "ready" && run.path === `/s/${generation}/`);
+    return run ? this.#live.get(run.id)?.dialogs : undefined;
+  }
+  async dialogs(generation: string, sessionId: string) {
+    const owner = this.#ownedDialogs(generation);
+    if (!owner) return { available: false, dialog: null };
+    const dialog = await owner.snapshot(sessionId);
+    requireThat(this.#ownedDialogs(generation) === owner, 409);
+    return { available: true, dialog };
+  }
+  async respondDialog(generation: string, sessionId: string, body: unknown, authorize?: () => void) {
+    const owner = this.#ownedDialogs(generation); requireThat(owner, 409);
+    return owner.respond(sessionId, body, () => {
+      requireThat(this.#ownedDialogs(generation) === owner, 409); authorize?.();
+    });
+  }
   stop(value: unknown): Promise<LocalRun> {
     return this.#serial(async () => {
       const request = record(value); keys(request, ["id"]); const run = this.#runs.get(identifier(request.id)); requireThat(run, 404);
       if (["stopped", "failed", "stopping"].includes(run.state)) return this.#view(run);
       const container = await this.#inspect(run);
-      requireThat(container, 409); run.state = "stopping"; delete run.path; await this.#save();
+      requireThat(container, 409); run.state = "stopping"; delete run.path;
+      this.#live.get(run.id)?.dialogs.close(); await this.#save();
       // Stop by inspected immutable ID, not a user-controlled or reusable name. No volume deletion.
       const operation = (async () => {
         try {
@@ -196,7 +219,7 @@ export class LocalLauncher {
     await Promise.allSettled([...this.#stops]);
     // HTTP service shutdown does not delete shared homes or replay pending work.
     // Release stdin so only children launched by this controller can exit cleanly.
-    for (const live of this.#live.values()) live.child.stdin.end();
+    for (const live of this.#live.values()) { live.dialogs.close(); live.child.stdin.end(); }
     await Promise.race([Promise.all([...this.#live.values()].map(live => live.exited)), new Promise(resolve => { const timer = setTimeout(resolve, 3000); timer.unref(); })]);
     await this.#tail; this.#closed=true; if(this.#ownsStore) this.#store.close(); await unlink(this.#lock);
   }

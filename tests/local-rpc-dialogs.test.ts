@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
+import { createHash } from "node:crypto";
 import test from "node:test";
 
 import { LocalRpcDialogs, type HostRpcDialog } from "../manager/local-rpc-dialogs.ts";
@@ -100,6 +101,16 @@ test("cancellation is delivered as cancellation and never converted to approval"
   assert.deepEqual(f.responses(), [{ type: "extension_ui_response", id: "confirm-cancel", cancelled: true }]);
 });
 
+test("revoked owner authorization after state I/O cannot write an approval", async t => {
+  const f = fixture(t);
+  f.request({ type: "extension_ui_request", id: "revoked-owner", method: "confirm", title: "Proceed", message: "No late approval" });
+  await f.dialog();
+  await assert.rejects(f.dialogs.respond(f.session(), {
+    id: "revoked-owner", decisionId: "revoked-decision", confirmed: true,
+  }, () => { throw new Error("login revoked"); }), /login revoked/);
+  assert.deepEqual(f.responses(), []);
+});
+
 test("byte framing preserves split multibyte UTF-8 and treats U+2028 as content", async t => {
   const f = fixture(t);
   const title = "before 界\u2028after";
@@ -135,6 +146,17 @@ test("source timeout cancels the exact id and never sends approval", async t => 
   await eventually(() => f.responses(), records => records.length === 1);
   assert.deepEqual(f.responses(), [{ type: "extension_ui_response", id: "confirm-timeout", cancelled: true }]);
   assert.equal(await f.dialogs.snapshot(f.session()), null);
+});
+
+test("source lifecycle ends remove only the original id, including an in-flight admission", async t => {
+  const f = fixture(t), token = "a".repeat(32);
+  const hash = createHash("sha256").update("Same title").digest("hex");
+  f.request({ type: "extension_ui_request", id: "aborted-a", method: "confirm", title: "Same title", message: "A" });
+  f.request({ type: "extension_ui_request", method: "setStatus", statusKey: `pi-web-host-rpc-ui-v1:start:${token}:confirm:${hash}` });
+  f.request({ type: "extension_ui_request", id: "current-b", method: "confirm", title: "Same title", message: "B" });
+  f.request({ type: "extension_ui_request", method: "setStatus", statusKey: `pi-web-host-rpc-ui-v1:end:${token}` });
+  const current = await f.dialog(); assert.equal(current.id, "current-b");
+  assert.deepEqual(f.responses(), [{ type: "extension_ui_response", id: "aborted-a", cancelled: true }]);
 });
 
 test("a changed source session rejects the answer and cancels stale pending ids", async t => {

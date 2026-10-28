@@ -8,7 +8,7 @@ import { localConfig } from "./local-config.ts";
 import { LocalLauncher } from "./local-launcher.ts";
 import { localBrowseQuery, WorkspacePolicy } from "./workspaces.ts";
 import { header, jsonBody, reply } from "./http.ts";
-import { ManagerError, requireThat } from "./validation.ts";
+import { ManagerError, requireThat, record } from "./validation.ts";
 import { renderLocalPage, renderLocalScript } from "./local-ui.ts";
 import { renderAuthPage, renderAuthScript, renderAccountPage } from "./local-auth-ui.ts";
 import { LocalStore } from "./local-store.ts";
@@ -16,6 +16,7 @@ import { LocalAuth } from "./local-auth.ts";
 import { readSessionCookie } from "./local-security.ts";
 import { canonical } from "./validation.ts";
 import { proxyLocalUpgrade } from "./local-websocket.ts";
+import { HUB_GENERATION_SOURCE } from "../protocol/hub-generation.ts";
 
 /** No browser credentials or asserted identities cross into extension-owned code. */
 export function localProxyHeaders(req:IncomingMessage,host:string,websocket=false) {
@@ -111,6 +112,26 @@ export async function startLocalService(value: unknown) {
     if (req.url === "/api/local/state" && req.method === "GET") {
       const sessions = hub.listSessions().map(({ label, sessionName, generation, path, since }) => ({ label, sessionName, generation, path, since }));
       reply(res, 200, { defaultWorkspace: config.defaultWorkspace, lastWorkspace:store.preference("workspace"),browser: policy.browser(), runs: launcher.list(), sessions, csrfToken:session.csrf }); return;
+    }
+    if (req.url?.startsWith("/api/local/dialogs/")) {
+      const url = new URL(req.url, origin), match = new RegExp(`^/api/local/dialogs/(${HUB_GENERATION_SOURCE})$`).exec(url.pathname);
+      requireThat(match, 404);
+      const validSession = (value: unknown): string => {
+        requireThat(typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)); return value;
+      };
+      if (req.method === "GET") {
+        requireThat([...url.searchParams.keys()].length === 1 && url.searchParams.has("session"));
+        const result = await launcher.dialogs(match[1], validSession(url.searchParams.get("session")));
+        auth.revalidate(session);
+        reply(res, 200, { protocol: "pi-host-rpc-ui-v1", ...result, ...(result.available ? { csrfToken: session.csrf } : {}) });
+      } else {
+        requireThat(req.method === "POST" && !url.search, 404); boundary(req, true);
+        auth.checkCsrf(header(req,"x-pi-local-csrf"),session);
+        const body = record(await jsonBody(req, 32768)); auth.revalidate(session);
+        const { sessionId, ...answer } = body;
+        reply(res, 200, await launcher.respondDialog(match[1], validSession(sessionId), answer, () => auth.revalidate(session)));
+      }
+      return;
     }
     if (req.url?.startsWith("/api/local/")) {
       requireThat(req.method === "POST", 404); boundary(req, true);auth.checkCsrf(header(req,"x-pi-local-csrf"),session); const body = await jsonBody(req);auth.revalidate(session);

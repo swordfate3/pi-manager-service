@@ -12,11 +12,14 @@
 
 - `GET /api/local/dialogs/<generation>?session=<sessionId>`：有效工作台登录、精确 Host/Origin；只查询该 generation 对应的活跃且由本启动器持有的 RPC 子进程。响应 `protocol: pi-host-rpc-ui-v1`、`available`、`csrfToken`、`dialog`（或 null）。不接管终端进程。
 - `POST /api/local/dialogs/<generation>`：同一登录与 CSRF；正文包含 `sessionId`、`id`、`decisionId` 和唯一的 `confirmed`、`value` 或 `cancelled: true`。仅写入该进程 stdin 的标准 UI 回答，不接受任意 RPC 指令。
+- generation复用Hub现有统一语法，接受 legacy 32hex 与当前 `bounded-v2` 的 `b2-<boot>-<slot>-<nonce>`；语法合法不等于拥有该实例。
 - 提交前读取该 RPC 进程的 `get_state`，与请求创建时及浏览器的 sessionId 比较；进程、会话、generation 改变即拒绝。按唯一请求 ID 回答，重复点击不重复写入；不把“已送出”当作扩展操作已经成功。
 
 ## 资源与生命周期
 
 JSONL 按 LF 字节分帧，跨块 UTF-8 不损坏；每行上限 256 KiB，超大行丢弃后恢复解析。只保留四种标准弹窗，无关消息、模型文本和通知不缓存。最多八个待处理请求；单个弹窗最大 32 KiB，回答 UTF-8 最大 4096 字节；完整确认正文不得截断后允许批准。到期取源 timeout 与两分钟上限中较短者。过期发送取消而非确认，来源取消后的旧 ID 不会作用于新请求。关闭进程、停止实例、工作台关闭清理待处理内容。内容不写日志、SQLite、聊天历史或浏览器本地存储。
+
+RPC本身没有来源AbortController结束记录。匹配Web通过公开UI开始／结束事件发出仅清除状态的标准`setStatus`标记，内容为唯一token、方法和标题摘要，不显示状态文字。Manager在开始时关联已知原请求ID，结束只退役该ID，不按标题取消后来的请求；绑定表有界。此机制不修改SDK或源扩展UI函数。
 
 ## 浏览器
 

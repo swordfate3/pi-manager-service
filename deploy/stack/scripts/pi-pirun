@@ -1,0 +1,455 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# The normal interactive shell still supplies legacy credentials from .bashrc.
+# pi-pirun deliberately suppresses .env loading in that shell; PI_PIRUN_SKIP_BASHRC=1
+# remains useful for non-interactive callers that do not need the shell wrapper.
+if [[ -z "${PI_PIRUN_ENV_READY:-}" && "${PI_PIRUN_SKIP_BASHRC:-0}" != 1 ]]; then
+    PI_PIRUN_BOOTSTRAP_WORKSPACE="$(pwd -P)"
+    export PI_PIRUN_ENV_READY=1
+    export PI_PIRUN_SKIP_ENV_FILE=1
+    exec bash -ic 'cd -- "$1" || exit 1; shift; exec 1>&3 2>&4 3>&- 4>&-; exec "$0" "$@"' \
+        "$0" "$PI_PIRUN_BOOTSTRAP_WORKSPACE" "$@" 3>&1 4>&2 1>/dev/null 2>/dev/null
+fi
+
+# The memory extension needs a stable host-owned identity for this exact
+# workspace. The workspace bind source is the same canonical path.
+# shellcheck disable=SC1090
+PI_PIRUN_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PI_PIRUN_CONFIG_DIR="$(cd -- "${PI_PIRUN_CONFIG_DIR:-$PI_PIRUN_SCRIPT_DIR/..}" && pwd -P)"
+export PI_PIRUN_CONFIG_DIR
+PI_QQ_RUNTIME_DIR="${PI_QQ_RUNTIME_DIR:-$PI_PIRUN_CONFIG_DIR/state/qq-runtime}"
+export PI_QQ_RUNTIME_DIR
+if [[ -v PI_PIRUN_IMAGE ]]; then
+    if [[ -z "$PI_PIRUN_IMAGE" ]]; then
+        printf 'pi-pirun: explicit PI_PIRUN_IMAGE is empty\n' >&2
+        exit 1
+    fi
+else
+    PI_PIRUN_RECEIPT="$PI_PIRUN_CONFIG_DIR/config/stack.json"
+    if [[ ! -r "$PI_PIRUN_RECEIPT" ]] || ! PI_PIRUN_IMAGE="$(
+        /usr/bin/python3 -c '
+import json
+import re
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        receipt = json.load(stream)
+    image = receipt.get("piImage")
+except (OSError, ValueError, AttributeError):
+    raise SystemExit(1)
+
+if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
+    raise SystemExit(1)
+sys.stdout.write(image)
+' "$PI_PIRUN_RECEIPT"
+    )"; then
+        printf 'pi-pirun: immutable Pi image receipt is missing or invalid: %s\n' "$PI_PIRUN_RECEIPT" >&2
+        exit 1
+    fi
+fi
+PI_PIRUN_WEB_TERMINAL="${PI_PIRUN_WEB_TERMINAL:-off}"
+case "$PI_PIRUN_WEB_TERMINAL" in
+    off) ;;
+    on)
+        printf 'pi-pirun: terminal mode is not supported by pi-stack; no credential or Pi container created\n' >&2
+        exit 2
+        ;;
+    *) printf 'pi-pirun: PI_PIRUN_WEB_TERMINAL must be on or off\n' >&2; exit 2 ;;
+esac
+source "$PI_PIRUN_SCRIPT_DIR/host-identity.sh"
+PI_SCOPED_MEMORY_HOST_WORKSPACE="$(pwd -P)"
+
+PI_PIRUN_DOCKER_BIN="${PI_PIRUN_DOCKER_BIN:-docker}"
+PI_PIRUN_MOUNT_BASHRC="${PI_PIRUN_MOUNT_BASHRC:-on}"
+PI_PIRUN_SSH="${PI_PIRUN_SSH:-auto}"
+PI_PIRUN_VSCODE="${PI_PIRUN_VSCODE:-auto}"
+PI_PIRUN_MODELS_DIR="${PI_PIRUN_MODELS_DIR:-$PI_PIRUN_CONFIG_DIR/config/pi-models}"
+PI_PIRUN_WEB_HUB="${PI_PIRUN_WEB_HUB:-auto}"
+export PI_PIRUN_DOCKER_BIN
+
+# Only a validated Compose name, never a command or shell fragment. This lets
+# a local controller identify its own child without changing ordinary launches.
+if [[ -v PI_PIRUN_DOCKER_NAME ]] \
+    && [[ ! "$PI_PIRUN_DOCKER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$ ]]; then
+    printf 'pi-pirun: PI_PIRUN_DOCKER_NAME must be a Docker name of 1-128 characters\n' >&2
+    exit 2
+fi
+
+canonicalize_path() {
+    local candidate="$1"
+
+    if [[ "$candidate" != /* ]]; then
+        candidate="$PWD/$candidate"
+    fi
+    if command -v readlink >/dev/null 2>&1; then
+        readlink -m -- "$candidate" 2>/dev/null || printf '%s\n' "$candidate"
+    else
+        printf '%s\n' "$candidate"
+    fi
+}
+
+add_env_if_set() {
+    local variable_name="$1"
+
+    if [[ -v "$variable_name" ]]; then
+        docker_args+=(-e "$variable_name")
+    fi
+}
+
+add_readonly_bind_mount() {
+    docker_args+=(-v "$1:$2:ro")
+}
+
+PI_QQ_ATTACHMENTS_EXPLICIT=0
+if [[ -v PI_QQ_ATTACHMENTS_DIR ]]; then
+    PI_QQ_ATTACHMENTS_EXPLICIT=1
+fi
+PI_QQ_SOURCE_DIR="${PI_QQ_SOURCE_DIR:-/mnt/c/Users/fate/AppData/Local/Temp}"
+PI_QQ_ATTACHMENTS_DIR="${PI_QQ_ATTACHMENTS_DIR:-$PI_SCOPED_MEMORY_HOST_WORKSPACE/.pi-attachments}"
+PI_QQ_BRIDGE="${PI_QQ_BRIDGE:-$PI_PIRUN_SCRIPT_DIR/pi-qq-bridge}"
+PI_SSH_DIR="${PI_SSH_DIR:-$HOME/.ssh}"
+PI_BASHRC_FILE="${PI_BASHRC_FILE:-$HOME/.bashrc}"
+PI_HF_TOKEN_FILE="${PI_HF_TOKEN_FILE:-$HOME/.cache/huggingface/token}"
+
+PI_PIRUN_ATTACHMENTS="${PI_PIRUN_ATTACHMENTS:-auto}"
+case "$PI_PIRUN_ATTACHMENTS" in
+    on)
+        attachments_enabled=1
+        ;;
+    off)
+        attachments_enabled=0
+        ;;
+    auto)
+        attachments_enabled=0
+        if [[ -d "$PI_QQ_SOURCE_DIR" && -x "$PI_QQ_BRIDGE" ]]; then
+            attachments_enabled=1
+        fi
+        ;;
+    *)
+        printf 'pi-pirun: PI_PIRUN_ATTACHMENTS must be on, off, or auto\n' >&2
+        exit 2
+        ;;
+esac
+
+lifecycle_started=0
+web_hub_run_id=""
+cleanup_pirun() {
+    local exit_status=$?
+
+    trap - EXIT INT TERM HUP
+    if [[ -n "$web_hub_run_id" ]]; then
+        if ! /usr/bin/python3 "$PI_PIRUN_SCRIPT_DIR/pi-web-hub-session" close "$web_hub_run_id" >/dev/null; then
+            printf 'pi-pirun: Hub cleanup pending; retry %s/pi-web-hub-session close %s\n' "$PI_PIRUN_SCRIPT_DIR" "$web_hub_run_id" >&2
+        fi
+    fi
+    if (( lifecycle_started )); then
+        pi_qq_lifecycle_leave "$exit_status" || true
+    fi
+    exit "$exit_status"
+}
+trap cleanup_pirun EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+if (( attachments_enabled )); then
+    PI_QQ_WORKSPACE_CANONICAL="$PI_SCOPED_MEMORY_HOST_WORKSPACE"
+    PI_QQ_ATTACHMENTS_CANONICAL="$(canonicalize_path "$PI_QQ_ATTACHMENTS_DIR")"
+    PI_QQ_WORKSPACE_KEY="${PI_QQ_WORKSPACE_KEY:-$(printf '%s\n' "$PI_QQ_WORKSPACE_CANONICAL" | sha256sum | cut -c1-16)}"
+    PI_QQ_LIFECYCLE_KEY="${PI_QQ_LIFECYCLE_KEY:-$(printf '%s\n%s\n' "$PI_QQ_WORKSPACE_CANONICAL" "$PI_QQ_ATTACHMENTS_CANONICAL" | sha256sum | cut -c1-16)}"
+    PI_QQ_CLEANUP_ATTACHMENTS=0
+    if (( ! PI_QQ_ATTACHMENTS_EXPLICIT )) \
+        && [[ "$PI_QQ_ATTACHMENTS_CANONICAL" == "$PI_QQ_WORKSPACE_CANONICAL/.pi-attachments" ]]; then
+        PI_QQ_CLEANUP_ATTACHMENTS=1
+    fi
+
+    PI_QQ_LIFECYCLE_LIB="${PI_QQ_LIFECYCLE_LIB:-$PI_PIRUN_SCRIPT_DIR/pi-qq-lifecycle.sh}"
+    if [[ ! -r "$PI_QQ_LIFECYCLE_LIB" ]]; then
+        printf 'pi-pirun: attachment lifecycle library is unavailable: %s\n' "$PI_QQ_LIFECYCLE_LIB" >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "$PI_QQ_LIFECYCLE_LIB"
+    if ! pi_qq_lifecycle_enter; then
+        printf 'pi-pirun: unable to initialize QQ attachment lifecycle\n' >&2
+        exit 1
+    fi
+    lifecycle_started=1
+fi
+
+# Keep the model-provider file in a host directory that Windows CC Switch can
+# manage. The directory is separate from pi-home, which owns the remaining Pi
+# state such as extensions, sessions and skills.
+PI_PIRUN_MODELS_DIR="$(canonicalize_path "$PI_PIRUN_MODELS_DIR")"
+if [[ -e "$PI_PIRUN_MODELS_DIR" && ! -d "$PI_PIRUN_MODELS_DIR" ]]; then
+    printf 'pi-pirun: model directory is not a directory: %s\n' "$PI_PIRUN_MODELS_DIR" >&2
+    exit 1
+fi
+mkdir -p -- "$PI_PIRUN_MODELS_DIR"
+
+# Do not load .env from either the workspace or the Compose directory.
+# The explicit empty env file also overrides inherited COMPOSE_ENV_FILES.
+export COMPOSE_DISABLE_ENV_FILE=1
+export PI_PIRUN_HOST_WORKSPACE="$PI_SCOPED_MEMORY_HOST_WORKSPACE"
+export PI_PIRUN_HOST_MODELS="$PI_PIRUN_MODELS_DIR"
+export PI_PIRUN_IMAGE
+docker_args=(
+    compose --project-name pi-stack
+    --project-directory "$PI_PIRUN_CONFIG_DIR"
+    --env-file /dev/null -f "$PI_PIRUN_CONFIG_DIR/compose.yaml"
+)
+docker_args+=(run --rm --no-deps --pull never --interactive)
+if [[ -v PI_PIRUN_DOCKER_NAME ]]; then
+    docker_args+=(--name "$PI_PIRUN_DOCKER_NAME")
+    docker_args+=(--label "cn.swordfate.pi.local-id=$PI_PIRUN_DOCKER_NAME")
+fi
+if [[ ! -t 0 || ! -t 1 ]]; then
+    docker_args+=(-T)
+fi
+
+# Managed restart is intentionally limited to the normal saved interactive TUI.
+# Maintenance, print/RPC, ephemeral, extension-disabled and non-TTY calls retain
+# the direct historical launch path.
+managed_runtime_needed=1
+if [[ ! -t 0 || ! -t 1 ]]; then
+    managed_runtime_needed=0
+fi
+if (( managed_runtime_needed )) \
+    && ! /usr/bin/python3 "$PI_PIRUN_CONFIG_DIR/runtime/pi_launch_policy.py" "$@"; then
+    managed_runtime_needed=0
+fi
+
+for variable_name in \
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+    SUB2API_OPENAI_API_KEY SUB2API_DEEPSEEK_API_KEY SUB2API_ZHIPU_API_KEY \
+    PI_SCOPED_MEMORY_WORKSPACE_ID PI_SCOPED_MEMORY_WORKSPACE_ROOT \
+    PI_VSCODE_BRIDGE_URL PI_VSCODE_BRIDGE_TOKEN PI_VSCODE_BRIDGE_SOCKET \
+    PI_VSCODE_TERMINAL_ID PI_VSCODE_STATUS_BAR PI_VSCODE_DISABLED_TOOLS \
+    PI_VSCODE_PERMISSION PI_VSCODE_MCP_IDLE_TIMEOUT PI_VSCODE_BUILTIN_AGENTS_DIR; do
+    add_env_if_set "$variable_name"
+done
+
+if (( attachments_enabled )); then
+    add_readonly_bind_mount "$PI_QQ_ATTACHMENTS_DIR" /workspace/.pi-attachments
+fi
+
+# Pass only the single host token file, read-only. The token is deliberately
+# not copied into .bashrc, .env, the project workspace, or the image.
+if [[ -r "$PI_HF_TOKEN_FILE" ]]; then
+    add_readonly_bind_mount "$PI_HF_TOKEN_FILE" /run/secrets/huggingface-token
+    docker_args+=(-e HF_TOKEN_PATH=/run/secrets/huggingface-token)
+fi
+
+if [[ "$PI_PIRUN_MOUNT_BASHRC" != off && -f "$PI_BASHRC_FILE" ]]; then
+    add_readonly_bind_mount "$PI_BASHRC_FILE" /home/node/.bashrc
+fi
+
+if [[ "$PI_PIRUN_SSH" != off && -d "$PI_SSH_DIR" ]]; then
+    add_readonly_bind_mount "$PI_SSH_DIR" /run/host-ssh
+fi
+
+case "$PI_PIRUN_WEB_HUB" in
+    auto|on|off) ;;
+    *) printf 'pi-pirun: PI_PIRUN_WEB_HUB must be auto, on, or off\n' >&2; exit 2 ;;
+esac
+
+# An explicit host-side setting is an all-or-nothing caller choice. In
+# particular, a runtime/runs-only setting must never accidentally select the
+# legacy manager Hub while leaving the requested local Hub unspecified.
+web_hub_host_override=0
+web_hub_host_override_invalid=0
+for variable_name in \
+    PI_PIRUN_WEB_HUB_HOST_CONFIG PI_PIRUN_WEB_HUB_HOST_CLI \
+    PI_PIRUN_WEB_HUB_RUNTIME_DIR PI_PIRUN_WEB_HUB_RUNS_DIR; do
+    if [[ -v "$variable_name" ]]; then
+        web_hub_host_override=1
+        if [[ -z "${!variable_name}" ]]; then
+            web_hub_host_override_invalid=1
+        fi
+    fi
+done
+if (( web_hub_host_override )) \
+    && { [[ ! -v PI_PIRUN_WEB_HUB_HOST_CONFIG ]] || [[ ! -v PI_PIRUN_WEB_HUB_HOST_CLI ]]; }; then
+    web_hub_host_override_invalid=1
+fi
+
+agent_workspace_needed=1
+case "${1:-}" in
+    install|remove|update|list|config|help|--help|-h|--version|-v) agent_workspace_needed=0 ;;
+esac
+web_session_needed=$agent_workspace_needed
+for arg in "$@"; do
+    case "$arg" in --no-extensions|-ne) web_session_needed=0 ;; esac
+done
+if (( agent_workspace_needed && web_hub_host_override_invalid )); then
+    printf 'pi-pirun: explicit local Hub overrides must be non-empty and include both PI_PIRUN_WEB_HUB_HOST_CONFIG and PI_PIRUN_WEB_HUB_HOST_CLI\n' >&2
+    exit 2
+fi
+
+# A regular pirun should join the current host workbench when it is installed.
+# Discover its private paths even with Web registration disabled: opting out of
+# a Web listener must never opt out of administrator-workspace exclusions.
+# config/config.json is private host configuration and, when present, is the
+# authority for nonstandard stateRoot and hubCli locations. The generated Hub
+# config/runtime/runs remain inside that state root. Only an absent primary
+# config uses the fixed stack-local fallback paths.
+web_hub_default_unavailable=0
+if (( agent_workspace_needed && ! web_hub_host_override )); then
+    PI_PIRUN_LOCAL_WORKBENCH_DIR="$PI_PIRUN_CONFIG_DIR/local-workbench"
+    PI_PIRUN_LOCAL_WORKBENCH_CONFIG="$PI_PIRUN_LOCAL_WORKBENCH_DIR/config/config.json"
+    if [[ -d "$PI_PIRUN_LOCAL_WORKBENCH_DIR" ]]; then
+        if [[ -e "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" || -L "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" ]]; then
+            web_hub_defaults=""
+            if web_hub_defaults="$(
+                /usr/bin/python3 - "$PI_PIRUN_LOCAL_WORKBENCH_CONFIG" "$PI_PIRUN_LOCAL_WORKBENCH_DIR" <<'PY'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+config = Path(sys.argv[1])
+workbench = Path(sys.argv[2]).resolve()
+flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
+
+try:
+    descriptor = os.open(config, flags)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 8192):
+            raise ValueError('unsafe workbench config')
+        raw = stream.read(8193)
+    if len(raw) > 8192:
+        raise ValueError('oversized workbench config')
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError('invalid workbench config')
+
+    def configured_path(name):
+        candidate = value.get(name)
+        if not isinstance(candidate, str) or not candidate or '\x00' in candidate:
+            raise ValueError('invalid workbench path')
+        path = Path(candidate)
+        if not path.is_absolute():
+            path = workbench / path
+        path = path.resolve()
+        if any(character in str(path) for character in '\n\r'):
+            raise ValueError('unsafe workbench path')
+        return path
+
+    state_root = configured_path('stateRoot')
+    hub_cli = configured_path('hubCli')
+    print(state_root / 'chat.json')
+    print(hub_cli)
+    print(state_root / 'chat-runtime')
+    print(state_root / 'launches')
+except (OSError, ValueError, TypeError, json.JSONDecodeError):
+    raise SystemExit(1)
+PY
+            )"; then
+                mapfile -t web_hub_default_paths <<<"$web_hub_defaults"
+                if (( ${#web_hub_default_paths[@]} != 4 )) || \
+                    [[ -z "${web_hub_default_paths[0]}" || -z "${web_hub_default_paths[1]}" || \
+                       -z "${web_hub_default_paths[2]}" || -z "${web_hub_default_paths[3]}" ]]; then
+                    web_hub_default_unavailable=1
+                else
+                    export PI_PIRUN_WEB_HUB_HOST_CONFIG="${web_hub_default_paths[0]}"
+                    export PI_PIRUN_WEB_HUB_HOST_CLI="${web_hub_default_paths[1]}"
+                    export PI_PIRUN_WEB_HUB_RUNTIME_DIR="${web_hub_default_paths[2]}"
+                    export PI_PIRUN_WEB_HUB_RUNS_DIR="${web_hub_default_paths[3]}"
+                fi
+            else
+                web_hub_default_unavailable=1
+            fi
+        else
+            export PI_PIRUN_WEB_HUB_HOST_CONFIG="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/chat.json"
+            export PI_PIRUN_WEB_HUB_HOST_CLI="$PI_PIRUN_LOCAL_WORKBENCH_DIR/dist/hub/pi-web-hub.mjs"
+            export PI_PIRUN_WEB_HUB_RUNTIME_DIR="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/chat-runtime"
+            export PI_PIRUN_WEB_HUB_RUNS_DIR="$PI_PIRUN_LOCAL_WORKBENCH_DIR/state/launches"
+        fi
+    fi
+fi
+
+if (( agent_workspace_needed )); then
+    if (( web_hub_default_unavailable )); then
+        printf 'pi-pirun: local workbench private-path configuration is invalid; no Pi started\n' >&2
+        exit 1
+    fi
+    if ! /usr/bin/python3 "$PI_PIRUN_SCRIPT_DIR/pi-web-hub-session" check-workspace \
+        --workspace "$PI_SCOPED_MEMORY_HOST_WORKSPACE" >/dev/null 2>&1; then
+        printf 'pi-pirun: workspace overlaps protected Pi stack, legacy deployment, or Hub credentials; start from a separate project directory\n' >&2
+        exit 2
+    fi
+fi
+# Native package registration is the only supported Web session integration.
+if [[ "$PI_PIRUN_WEB_HUB" != off ]] && (( web_session_needed )); then
+    web_hub_reply=""
+    if web_hub_reply="$(/usr/bin/python3 "$PI_PIRUN_SCRIPT_DIR/pi-web-hub-session" open \
+        --workspace "$PI_SCOPED_MEMORY_HOST_WORKSPACE" --pid "$$")"; then
+        web_hub_run_id="$(/usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["run_id"])' <<<"$web_hub_reply")"
+        web_hub_credential="$(/usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["credential_file"])' <<<"$web_hub_reply")"
+        if [[ -v PI_PIRUN_WEB_HUB_HOST_CONFIG || -v PI_PIRUN_WEB_HUB_HOST_CLI ]]; then
+            web_hub_runtime="$(/usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["runtime_dir"])' <<<"$web_hub_reply")"
+            add_readonly_bind_mount "$web_hub_runtime" /run/pi-web-hub
+            # The package's session_start listener works in RPC without a UI.
+            # Override saved disabled/non-loopback settings only for this mode.
+            docker_args+=(-e PI_WEB_UI_DISABLED=0 -e PI_WEB_UI_HOST=127.0.0.1)
+        else
+            add_readonly_bind_mount "$PI_PIRUN_CONFIG_DIR/state/manager/chat-runtime" /run/pi-web-hub
+        fi
+        add_readonly_bind_mount "$web_hub_credential" /run/secrets/pi-web-session.json
+        docker_args+=(-e PI_WEB_UI_REGISTRY_SOCKET=/run/pi-web-hub/registry.sock)
+        docker_args+=(-e PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/secrets/pi-web-session.json)
+        if [[ -v PI_PIRUN_WEB_HUB_HOST_CONFIG || -v PI_PIRUN_WEB_HUB_HOST_CLI ]]; then
+            printf 'pi-pirun: private local Hub access prepared (registration follows Pi startup)\n' >&2
+        else
+            printf 'pi-pirun: Hub access prepared; phone https://pi.swordfate.cn/sessions/ ; local portal http://127.0.0.1:18300/sessions/ (registration follows Pi startup)\n' >&2
+        fi
+    elif [[ "$PI_PIRUN_WEB_HUB" == on ]]; then
+        printf 'pi-pirun: required Pi Web Hub is unavailable; no Pi started\n' >&2
+        exit 1
+    else
+        printf 'pi-pirun: Hub unavailable; continuing without native Hub registration\n' >&2
+    fi
+fi
+if [[ "$PI_PIRUN_VSCODE" != off ]]; then
+    bridge_mounts=()
+    for arg in "$@"; do
+        case "$arg" in
+            "$HOME"/.vscode-server/extensions/*/bridge/*)
+                extension_root="${arg%/bridge/*}"
+                if [[ -d "$extension_root" ]]; then
+                    already_mounted=0
+                    for mounted_root in "${bridge_mounts[@]}"; do
+                        if [[ "$mounted_root" == "$extension_root" ]]; then
+                            already_mounted=1
+                            break
+                        fi
+                    done
+                    if (( ! already_mounted )); then
+                        bridge_mounts+=("$extension_root")
+                        add_readonly_bind_mount "$extension_root" "$extension_root"
+                    fi
+                fi
+                ;;
+        esac
+    done
+fi
+
+if (( managed_runtime_needed )); then
+    runtime_run_id="$web_hub_run_id"
+    if [[ -z "$runtime_run_id" ]]; then
+        runtime_run_id="$(/usr/bin/python3 -c 'import secrets; print(secrets.token_hex(16))')"
+    fi
+    if [[ ! "$runtime_run_id" =~ ^[0-9a-f]{32}$ ]]; then
+        printf 'pi-pirun: invalid managed runtime identity\n' >&2
+        exit 1
+    fi
+    docker_args+=(--label "cn.swordfate.pi.run-id=$runtime_run_id")
+    docker_args+=(--label "cn.swordfate.pi.lifecycle=1")
+    docker_args+=(-e "PI_RUNTIME_RUN_ID=$runtime_run_id")
+fi
+
+"$PI_PIRUN_DOCKER_BIN" "${docker_args[@]}" pi "$@"

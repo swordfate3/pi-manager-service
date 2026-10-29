@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""Host-only Hub capability lifecycle. Never install this admin helper in Pi."""
+import argparse
+import http.client
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import stat
+import subprocess
+import sys
+
+CONFIG_DIR = Path(os.environ.get('PI_PIRUN_CONFIG_DIR', Path(__file__).resolve().parents[1])).resolve()
+HUB_CLI = '/opt/pi-manager/dist/hub/pi-web-hub.mjs'
+HUB_CONFIG = '/chat/config/config.json'
+SOCKET = '/run/pi-web-hub/registry.sock'
+
+
+def host_mode():
+    # A partial/empty opt-in is an error, never permission to reuse the live Hub.
+    return any(name in os.environ for name in
+               ('PI_PIRUN_WEB_HUB_HOST_CONFIG', 'PI_PIRUN_WEB_HUB_HOST_CLI'))
+
+
+def canonical_host_path(value):
+    if not isinstance(value, str) or not value or '\x00' in value:
+        raise ValueError('Invalid host path')
+    path = Path(value)
+    if not path.is_absolute() or str(path.resolve()) != value:
+        raise ValueError('Host path must be canonical and absolute')
+    return path
+
+
+def read_private(file):
+    descriptor = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or
+                info.st_mode & 0o077 or info.st_nlink != 1 or info.st_size > 8192):
+            raise ValueError('Unsafe private file')
+        raw = stream.read(8193)
+    if len(raw) > 8192:
+        raise ValueError('Oversized private file')
+    return raw
+
+
+def host_settings():
+    config = canonical_host_path(os.environ.get('PI_PIRUN_WEB_HUB_HOST_CONFIG'))
+    cli = canonical_host_path(os.environ.get('PI_PIRUN_WEB_HUB_HOST_CLI'))
+    if not cli.is_file() and workbench_container() is None:
+        raise ValueError('Missing host CLI')
+    value = json.loads(read_private(config))
+    if not isinstance(value, dict):
+        raise ValueError('Invalid host config')
+    host, port = value.get('host', '127.0.0.1'), value.get('port', 16180)
+    if host not in ('127.0.0.1', '::1') or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('Invalid local Hub address')
+    paths = {}
+    for key, default in (('runtimeDir', 'runtime'), ('stateDir', 'state')):
+        candidate = value.get(key, default)
+        if not isinstance(candidate, str) or not candidate or '\x00' in candidate:
+            raise ValueError('Invalid Hub directory')
+        paths[key] = (config.parent / candidate).resolve()
+    runtime, state = paths['runtimeDir'], paths['stateDir']
+    if 'PI_PIRUN_WEB_HUB_RUNTIME_DIR' in os.environ:
+        if canonical_host_path(os.environ['PI_PIRUN_WEB_HUB_RUNTIME_DIR']) != runtime:
+            raise ValueError('Runtime override does not match Hub config')
+    if any(char in str(runtime) for char in ':\n\r'):
+        raise ValueError('Runtime cannot be safely bind-mounted')
+    runs = canonical_host_path(os.environ.get('PI_PIRUN_WEB_HUB_RUNS_DIR', str(runs_directory())))
+    # Never expose administrator state, configs or other run credentials through
+    # the read-only IPC mount; issue exports must also be outside authority state.
+    if (runtime.is_relative_to(state) or state.is_relative_to(runtime) or
+            config.is_relative_to(runtime) or runs.is_relative_to(runtime) or
+            runtime.is_relative_to(runs) or runs.is_relative_to(state) or state.is_relative_to(runs)):
+        raise ValueError('Host Hub directories must be separate')
+    return {'config': config, 'cli': cli, 'runtime': runtime, 'state': state,
+            'host': host, 'port': port}
+
+
+def check_host_alive(settings):
+    # Native loopback HTTP: no curl, inherited proxies, redirects or Docker.
+    connection = http.client.HTTPConnection(settings['host'], settings['port'], timeout=3)
+    try:
+        connection.request('GET', '/api/sessions')
+        response = connection.getresponse()
+        raw = response.read(65537)
+        if response.status != 200 or len(raw) > 65536:
+            raise ValueError('Hub unavailable')
+        body = json.loads(raw)
+        if not isinstance(body, dict) or not isinstance(body.get('sessions'), list):
+            raise ValueError('Incompatible local Hub')
+    finally:
+        connection.close()
+
+
+def docker(*args):
+    # All output (including private file reads) is captured, never forwarded.
+    return subprocess.run([os.environ.get('PI_PIRUN_DOCKER_BIN', 'docker'), *args],
+                          capture_output=True, check=True, timeout=15).stdout
+
+
+def hub_node(*args):
+    return docker('exec', '--user', '1000:1000', 'pi-stack-chat', 'node', *args)
+
+
+def workbench_container():
+    # Host terminal launches use the CLI shipped in the recorded image. The
+    # workbench itself already has that CLI and must not exec recursively.
+    if os.environ.get('PI_PIRUN_IN_WORKBENCH') == '1':
+        return None
+    receipt = CONFIG_DIR / 'local-workbench/config/container.json'
+    if not receipt.exists():
+        return None
+    value = json.loads(read_private(receipt))
+    name = value.get('containerName') if isinstance(value, dict) else None
+    if not isinstance(name, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}', name):
+        raise ValueError('Invalid workbench container receipt')
+    return name
+
+
+def hub_command(command, *args):
+    if host_mode():
+        settings = host_settings()
+        container = workbench_container()
+        if container:
+            return json.loads(docker('exec', '--user', f'{os.getuid()}:{os.getgid()}',
+                                     container, 'node', HUB_CLI, command,
+                                     '--config', str(settings['config']), *args))
+        return json.loads(subprocess.run(
+            ['node', str(settings['cli']), command, '--config', str(settings['config']), *args],
+            capture_output=True, check=True, timeout=15).stdout)
+    return json.loads(hub_node(HUB_CLI, command, '--config', HUB_CONFIG, *args))
+
+
+def private_directory(directory):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise ValueError('Unsafe runtime directory')
+
+
+def write_private(file, value):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = os.open(file, flags, 0o600)
+    with os.fdopen(descriptor, 'w') as stream:
+        json.dump(value, stream)
+        stream.write('\n')
+
+
+def runs_directory():
+    return Path(os.environ.get('PI_PIRUN_WEB_HUB_RUNS_DIR',
+                               str(CONFIG_DIR / 'state/pi-web-hub/runs'))).resolve()
+
+
+def check_workspace(workspace):
+    project = Path(workspace).resolve()
+    # Current and legacy administrator trees are never agent projects.
+    protected_paths = [CONFIG_DIR, runs_directory(), CONFIG_DIR.parent / 'pi-docker',
+                       CONFIG_DIR.parent / 'pi-deploy-gate']
+    if host_mode():
+        settings = host_settings()
+        protected_paths.extend((settings['config'].parent, settings['state'], settings['runtime']))
+    for protected in protected_paths:
+        if project.is_relative_to(protected) or protected.is_relative_to(project):
+            raise ValueError('Workspace overlaps host administrator paths')
+
+
+def runs_root():
+    directory = runs_directory()
+    private_directory(directory)
+    return directory
+
+
+def check_run_id(run_id):
+    if not isinstance(run_id, str) or not re.fullmatch('[0-9a-f]{32}', run_id):
+        raise ValueError('Invalid run ID')
+    return run_id
+
+
+def erase_run(directory):
+    # Exact known files only: no recursive removal, no broad globs.
+    for name in ('credential.json', 'launch.json'):
+        (directory / name).unlink(missing_ok=True)
+    directory.rmdir()
+
+
+def close_run(run_id):
+    check_run_id(run_id)
+    directory = runs_root() / run_id
+    if directory.exists() or directory.is_symlink():
+        private_directory(directory)
+    reply = hub_command('revoke', '--run-id', run_id)
+    if reply.get('revoked') is not True:
+        raise ValueError('Revocation failed')
+    if directory.exists():
+        erase_run(directory)
+
+
+def open_run(workspace, pid):
+    check_workspace(workspace)
+    settings = host_settings() if host_mode() else None
+    if settings:
+        check_host_alive(settings)
+    else:
+        state = json.loads(docker('inspect', '--format', '{{json .State}}', 'pi-stack-chat'))
+        if not state.get('Running') or state.get('Health', {}).get('Status') != 'healthy':
+            raise ValueError('Hub unavailable')
+    root = runs_root()
+    export_name = 'export-' + secrets.token_hex(16) + '.json'
+    export = str(root / export_name) if settings else '/chat/exports/' + export_name
+    run_id = None
+    directory = None
+    try:
+        label = re.sub(r'[\x00-\x1f\x7f]', '_', Path(workspace).name)[:85] or 'workspace'
+        issued = hub_command('issue', '--output', export,
+                             '--label', label + ' · ' + export[-37:-29])
+        run_id = check_run_id(issued.get('runId'))
+        # Record the non-secret identifier before any private export read can
+        # fail, so failed revocations always have a recoverable host record.
+        directory = root / run_id
+        directory.mkdir(mode=0o700)
+        write_private(directory / 'launch.json', {'run_id': run_id, 'workspace': workspace, 'pid': pid})
+        expected_socket = str(settings['runtime'] / 'registry.sock') if settings else SOCKET
+        if issued.get('socketPath') != expected_socket or issued.get('credentialFile') != export:
+            raise ValueError('Incompatible Hub configuration')
+        raw = (read_private(export) if settings else
+               hub_node('-e', 'process.stdout.write(require("fs").readFileSync(process.argv[1]));', export))
+        if len(raw) > 8192:
+            raise ValueError('Oversized credential')
+        credential = json.loads(raw)
+        if (not isinstance(credential, dict) or credential.get('run_id') != run_id or
+                not isinstance(credential.get('token'), str) or
+                not re.fullmatch('[0-9a-f]{64}', credential['token'])):
+            raise ValueError('Invalid credential')
+        write_private(directory / 'credential.json', credential)
+        result = {'run_id': run_id, 'credential_file': str(directory / 'credential.json')}
+        if settings:
+            # Fail closed if the private export cannot be consumed and removed.
+            Path(export).unlink()
+            result['runtime_dir'] = str(settings['runtime'])
+        return result
+    except Exception:
+        if run_id:
+            try:
+                if hub_command('revoke', '--run-id', run_id).get('revoked') is not True:
+                    raise ValueError('Revocation failed')
+                if directory:
+                    erase_run(directory)
+            except Exception:
+                # Keep evidence when the Hub is unavailable; never claim a revoke.
+                print(f'pi-web-hub-session: failed-open cleanup pending; retry {Path(__file__).resolve()} close {run_id}',
+                      file=sys.stderr)
+        raise
+    finally:
+        try:
+            if settings:
+                Path(export).unlink(missing_ok=True)
+            else:
+                hub_node('-e', 'require("fs").unlinkSync(process.argv[1]);', export)
+        except Exception:
+            print('pi-web-hub-session: temporary export cleanup needs administrator retry', file=sys.stderr)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    opening = commands.add_parser('open')
+    opening.add_argument('--workspace', required=True)
+    opening.add_argument('--pid', required=True, type=int)
+    checking = commands.add_parser('check-workspace')
+    checking.add_argument('--workspace', required=True)
+    closing = commands.add_parser('close')
+    closing.add_argument('run_id')
+    args = parser.parse_args()
+    try:
+        if args.command == 'open':
+            result = open_run(args.workspace, args.pid)
+        elif args.command == 'check-workspace':
+            check_workspace(args.workspace)
+            result = {'safe_workspace': True}
+        else:
+            close_run(args.run_id)
+            result = {'closed': True}
+        print(json.dumps(result))  # No token in public CLI output.
+        return 0
+    except Exception:
+        print('pi-web-hub-session: operation failed; check Hub health and private runtime permissions',
+              file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

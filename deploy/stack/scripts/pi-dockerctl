@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+stack_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+container_workbench() {
+    local receipt="$stack_root/local-workbench/config/container.json" values
+    [[ -e "$receipt" ]] || return 1
+    values="$(node --input-type=module - "$receipt" <<'JS'
+import fs from 'node:fs';
+const file=process.argv[2],s=fs.lstatSync(file);
+if(!s.isFile()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o077)||s.nlink!==1)throw Error('Unsafe workbench receipt');
+const r=JSON.parse(fs.readFileSync(file,'utf8'));
+if(!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(r.containerName)||!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(r.composeProject)||typeof r.image!=='string'||!r.image)throw Error('Invalid workbench receipt');
+console.log(r.image);console.log(r.containerName);console.log(r.composeProject);
+JS
+    )" || exit 1
+    mapfile -t workbench_values <<<"$values"
+    export PI_WORKBENCH_IMAGE="${workbench_values[0]}" COMPOSE_DISABLE_ENV_FILE=1
+    unset COMPOSE_FILE COMPOSE_ENV_FILES COMPOSE_PROFILES COMPOSE_PROJECT_NAME
+    workbench_compose=("${PI_PIRUN_DOCKER_BIN:-docker}" compose --project-name "${workbench_values[2]}" --project-directory "$stack_root" --env-file /dev/null -f "$stack_root/workbench.compose.json")
+}
+workbench_link() {
+    node --input-type=module - "$stack_root/local-workbench/config/config.json" <<'JS'
+import {readFileSync} from 'node:fs';
+let config = {};
+try { config = JSON.parse(readFileSync(process.argv[2], 'utf8')); }
+catch (error) { if (error.code !== 'ENOENT') throw error; }
+const origin = config.publicOrigin ?? `http://127.0.0.1:${config.port ?? 18403}`;
+console.log(`工作台：${origin}/（账号登录 → 选目录 → 启动并进入会话）`);
+JS
+}
+usage() {
+    printf '%s\n' \
+      'pi-dockerctl — pi-stack 集中入口（不自动读取 .env）' \
+      '  up                    启动新 Manager 四权限面，不启动/停止已有 Pi' \
+      '  down                  停止新 Manager；保留卷、Pi 和旧 Hub/Gate' \
+      '  status                查看本栈；既有 Pi 不自动接管' \
+      '  logs [chat|public|admin|executor]' \
+      '  config                输出 Compose（不含凭据值）' \
+      '  links                 显示当前工作台与兼容管理入口' \
+      '  pirun [Pi args...]    在当前项目新建临时 Pi 容器' \
+      '  update [--ref REF]     从远程 Git 提交构建并更新工作台，不使用本地源码' \
+      '  rollback              恢复上一版工作台镜像，不回滚数据库' \
+      '  local [up|down|status|logs|links|password] 登录工作台与本机账号恢复' \
+      '  legacy [args...]      原 pi-dockerctl（旧 Hub/Gate 回退入口）' \
+      '  --help' \
+      '新 Manager 当前不开放 Pi 更新/回退、扩展安装及既有容器接管。'
+}
+action="${1:---help}"
+shift || true
+case "$action" in
+    --help|-h|help) [[ $# == 0 ]] || exit 2; usage; exit 0 ;;
+    pirun) exec "$stack_root/scripts/pirun" "$@" ;;
+    update|rollback) exec node "$stack_root/scripts/pi-workbench-update.mjs" "$action" --stack "$stack_root" "$@" ;;
+    local)
+        case "${1:-links}" in
+            up|down|status|logs|password)
+                if container_workbench; then
+                    [[ $# == 1 ]] || exit 2
+                    case "$1" in
+                        up) exec "${workbench_compose[@]}" up -d --no-build --pull never --wait --wait-timeout 60 workbench ;;
+                        down) exec "${workbench_compose[@]}" stop workbench ;;
+                        status) exec "${workbench_compose[@]}" ps -a workbench ;;
+                        logs) exec "${workbench_compose[@]}" logs --tail 50 workbench ;;
+                        password)
+                            tty_args=(-i); if [[ -t 0 && -t 1 ]]; then tty_args+=(-t); fi
+                            exec "${PI_PIRUN_DOCKER_BIN:-docker}" exec "${tty_args[@]}" --user "$(id -u):$(id -g)" "${workbench_values[1]}" node /opt/pi-manager/dist/manager/pi-manager-local.mjs account-reset --config "$stack_root/local-workbench/config/container-config.json" ;;
+                    esac
+                fi ;;
+        esac
+        case "${1:-links}" in
+            links) [[ $# -le 1 ]] || exit 2; workbench_link; exit 0 ;;
+            password) [[ $# == 1 ]] || exit 2
+                exec node "$stack_root/local-workbench/dist/manager/pi-manager-local.mjs" account-reset --config "$stack_root/local-workbench/config/config.json" ;;
+            up) [[ $# == 1 ]] || exit 2
+                systemctl --user link "$stack_root/systemd/pi-local-workbench.service"
+                systemctl --user daemon-reload
+                exec systemctl --user start pi-local-workbench.service ;;
+            down) [[ $# == 1 ]] || exit 2; exec systemctl --user stop pi-local-workbench.service ;;
+            status) [[ $# == 1 ]] || exit 2; exec systemctl --user status pi-local-workbench.service --no-pager ;;
+            logs) [[ $# == 1 ]] || exit 2; exec journalctl --user -u pi-local-workbench.service -n 50 --no-pager ;;
+            *) usage >&2; exit 2 ;;
+        esac ;;
+    legacy) exec /home/fate/docker_files/pi-dockerctl "$@" ;;
+    links) [[ $# == 0 ]] || exit 2
+        workbench_link
+        printf '%s\n' '兼容本机会话：http://127.0.0.1:18300/sessions/' '兼容公共管理：http://127.0.0.1:18301/' '兼容独立管理员：http://127.0.0.1:18302/' '公网工作台由其自身登录保护，需保持 HTTPS 和反向隧道；不可暴露内部 Hub 或兼容管理端口。'; exit 0 ;;
+    up|down|status|config) [[ $# == 0 ]] || { usage >&2; exit 2; } ;;
+    logs) [[ $# -le 1 ]] || exit 2; case "${1:-chat}" in chat|public|admin|executor) ;; *) exit 2 ;; esac ;;
+    *) usage >&2; exit 2 ;;
+esac
+[[ -r "$stack_root/config/stack.json" ]] || { printf 'pi-stack 尚未安装；先执行部署初始化。\n' >&2; exit 1; }
+# No eval/source and no ambient Compose overrides.
+export PI_STACK_IMAGE="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).managerImage)' "$stack_root/config/stack.json")"
+export PI_PIRUN_IMAGE="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1])).piImage)' "$stack_root/config/stack.json")"
+export PI_PIRUN_HOST_WORKSPACE="/tmp"
+export PI_PIRUN_HOST_MODELS="$stack_root/config/pi-models"
+export COMPOSE_DISABLE_ENV_FILE=1
+unset COMPOSE_FILE COMPOSE_ENV_FILES COMPOSE_PROFILES
+compose=("${PI_PIRUN_DOCKER_BIN:-docker}" compose --project-name pi-stack --project-directory "$stack_root" --env-file /dev/null -f "$stack_root/compose.yaml")
+case "$action" in
+    up) "${compose[@]}" up -d --wait --wait-timeout 45 --no-build --pull never executor chat public admin ;;
+    down) "${compose[@]}" stop public admin chat executor ;;
+    status) "${compose[@]}" ps -a ;;
+    config) "${compose[@]}" --profile interactive config ;;
+    logs) "${compose[@]}" logs --tail 80 "${1:-chat}" ;;
+esac

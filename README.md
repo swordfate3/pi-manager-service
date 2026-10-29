@@ -10,6 +10,7 @@
 | --- | --- |
 | 已有 `pirun`，想在网页选目录、启动聊天 | [单账号工作台](docs/local-workbench.md) |
 | 从零用 Docker 部署 Manager | [Docker 部署教程](docs/docker-quickstart.md) |
+| 已有 pi-stack，想直接从 GitHub 构建并更新工作台镜像 | [远程源码与 Compose 工作台](docs/remote-compose.md) |
 | 需要独立审批、原生 Pi 后端或 MCP | [多角色教程](docs/manager-tutorial.md) |
 
 注意：Docker 入门模板只部署 Manager，不会自动安装 Pi。单账号工作台需要已有可用的 `pirun` 和已启用的 Pi Web 扩展；两种部署方式的配置不能混用。

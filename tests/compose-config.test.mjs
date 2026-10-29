@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import {runInNewContext} from 'node:vm';
 import {mkdtemp,mkdir,writeFile,readFile,symlink} from 'node:fs/promises';
 import {renderStack} from '../deploy/compose/configure.mjs';
 const commit='b'.repeat(40),image='sha256:'+'a'.repeat(64);
@@ -42,6 +43,9 @@ test('optional tunnel uses only the dedicated read-only key and existing Pi imag
  assert.equal(s.tunnel.volumes.length,2);assert(s.tunnel.volumes.every(v=>v.read_only));
  assert(!s.hub.volumes.some(v=>v.source.endsWith('tunnel_ed25519')));
  assert(!s.pi.volumes.some(v=>v.source.endsWith('tunnel_ed25519')));
+ const health=s.hub.healthcheck.test.at(-1);let checked=false;
+ runInNewContext(health,{require(name){assert.equal(name,'node:http');return {get(options,ready){assert.equal(options.headers.host,'pi.example.test');assert.equal(options.port,19403);checked=true;ready({statusCode:200,resume(){}});return {setTimeout(){},on(){},destroy(){}};}};},process:{exit(code){assert.equal(code,0);}}});
+ assert(checked,'health check must explicitly preserve the configured Host header');
 });
 test('invalid image, root and model alias fail before publishing files',async()=>{
  for(const kind of ['image','root','models']){

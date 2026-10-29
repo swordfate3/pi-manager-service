@@ -12,6 +12,7 @@ import secrets
 import stat
 import subprocess
 import sys
+import time
 
 
 HUB_CONTAINER = "pi-stack-hub"
@@ -78,7 +79,20 @@ def cli(command: str, *arguments: str) -> dict:
         argv = ["node", *common]
     else:
         argv = ["docker", "exec", "--user", "1000:1000", HUB_CONTAINER, "node", *common]
-    completed = subprocess.run(argv, capture_output=True, check=True, timeout=20)
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            completed = subprocess.run(argv, capture_output=True, check=True, timeout=20)
+            break
+        except subprocess.CalledProcessError as error:
+            # The CLI and the live registry share a short-lived writer lock.
+            # Only this known pre-write failure is safe to retry. Never steal
+            # locks or retry an ambiguous credential publication.
+            busy = b"Hub state lock busy; trusted recovery may be required" in (error.stderr or b"")
+            published = command == "issue" and "--output" in arguments and Path(arguments[arguments.index("--output") + 1]).exists()
+            if not busy or published or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1 + secrets.randbelow(100) / 1000)
     if len(completed.stdout) > 8192:
         raise ValueError("Oversized Hub response")
     value = json.loads(completed.stdout)

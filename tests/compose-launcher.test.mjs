@@ -113,6 +113,12 @@ log = os.environ['FAKE_NODE_LOG' if tool == 'node' else 'FAKE_DOCKER_LOG']
 with open(log, 'a', encoding='utf-8') as stream:
     stream.write(json.dumps({'tool': tool, 'args': args, 'workspace_id': os.environ.get('PI_SCOPED_MEMORY_WORKSPACE_ID'), 'workspace_root': os.environ.get('PI_SCOPED_MEMORY_WORKSPACE_ROOT'), 'compose_env': {key: os.environ[key] for key in os.environ if key.startswith('COMPOSE_')}}) + '\\n')
 command = next((value for value in ('issue', 'revoke') if value in args), None)
+if command == 'issue' and os.environ.get('FAKE_LOCK_BUSY'):
+    marker = pathlib.Path(os.environ['PI_STACK_ROOT']) / 'data/busy-once'
+    if not marker.exists():
+        marker.touch()
+        print('Error: Hub state lock busy; trusted recovery may be required', file=sys.stderr)
+        raise SystemExit(1)
 if command == 'issue':
     output = args[args.index('--output') + 1]
     pathlib.Path(output).write_text(json.dumps({'run_id': 'a' * 32, 'token': 'b' * 64}) + '\\n', encoding='utf-8')
@@ -175,6 +181,15 @@ else:
   t.after(async () => rm(temporary, {recursive: true, force: true}));
   return {temporary, root, bin, workspace, home, legacy, screenshotSource, dockerLog, nodeLog, run, start, records};
 }
+
+test('a transient Hub writer lock is retried without publishing duplicate credentials',async t=>{
+  const f=await fixture(t);
+  const result=f.run(['--mode','rpc'],{FAKE_LOCK_BUSY:'1'});
+  assert.equal(result.status,0,result.stderr);
+  const rows=await f.records(f.dockerLog);
+  assert.equal(rows.filter(r=>r.args.includes('issue')).length,2);
+  assert.equal(rows.filter(r=>r.args.includes('revoke')).length,1);
+});
 
 function optionValue(args, option) {
   const index = args.indexOf(option);

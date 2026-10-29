@@ -16,7 +16,7 @@ const base=await mkdtemp(path.join(tmpdir(),'pi-clean-compose-accept-')),home=ba
 for(const p of [workspace,source,agent,root+'/config',root+'/pi-models',root+'/internal/bin',root+'/data/memory'])await mkdir(p,{recursive:true,mode:0o700});
 const env={...process.env,HOME:home,PI_STACK_ROOT:root,COMPOSE_DISABLE_ENV_FILE:'1'};
 for(const k of Object.keys(env))if(k.startsWith('COMPOSE_')&&k!=='COMPOSE_DISABLE_ENV_FILE')delete env[k];
-const docker=args=>execFileSync('docker',args,{encoding:'utf8',timeout:90000,maxBuffer:2*1024*1024,env}).trim();
+const docker=args=>execFileSync('docker',args,{encoding:'utf8',timeout:90000,maxBuffer:2*1024*1024,env,stdio:['pipe','pipe','pipe']}).trim();
 const compose=['compose','--project-name','pi-stack','--project-directory',root,'--env-file','/dev/null','-f',root+'/compose.yaml'];
 async function port(){const server=createServer();await new Promise(r=>server.listen(0,'127.0.0.1',r));const n=server.address().port;await new Promise(r=>server.close(r));return n;}
 const hubPort=await port(),chatPort=await port();
@@ -26,6 +26,11 @@ await writeFile(root+'/pi-models/models.json','{"providers":{}}',{mode:0o600});
 await writeFile(root+'/data/memory/host-id','11111111-1111-4111-8111-111111111111\n',{mode:0o600});
 await writeFile(agent+'/settings.json',JSON.stringify({extensions:['/opt/pi-web-ui/extensions/mirror-server.ts'],packages:[],skills:[]}),{mode:0o600});
 const {compose:spec}=await renderStack({root,commit,ref:'acceptance',dockerGid:(await stat('/var/run/docker.sock')).gid});
+// Test-only stderr capture, under synthetic data. Production intentionally
+// discards extension stderr because it may contain user secrets.
+await writeFile(root+'/data/test-launch','#!/usr/bin/env bash\nexec /opt/pi-stack/bin/pirun "$@" 2>>"$PI_STACK_ROOT/data/test-launch.stderr"\n',{mode:0o700});
+const runtime=JSON.parse(await readFile(root+'/internal/hub-runtime.json','utf8'));runtime.launcher=root+'/data/test-launch';
+await writeFile(root+'/internal/hub-runtime.json',JSON.stringify(runtime),{mode:0o600});
 spec.services.hub.image=image;
 // Replace ALL five external volumes, not just agent settings. This test must
 // neither use production state nor create named volumes as a side effect.
@@ -50,7 +55,10 @@ try{
  const login=await http('/api/auth/setup',{username:'acceptance',password:randomBytes(24).toString('hex')});assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];csrf=(await http('/api/local/state')).value.csrfToken;
  assert.equal((await http('/api/local/browse',{root:'projects',path:'demo'})).status,200);assert.equal((await http('/api/local/browse',{root:'projects',path:'..'})).status,400);pass('login and configured workspace selection work; escapes rejected');
  for(let i=0;i<2;i++){const result=await http('/api/local/start',{key:'acceptance-'+i,workspace:{root:'projects',path:'demo'}});assert.equal(result.status,202);webIds.push(result.value.id);}
- const ready=await waitFor(async()=>{const state=(await http('/api/local/state')).value;return state.runs?.filter(r=>webIds.includes(r.id)&&r.state==='ready').length===2?state:undefined;},'web-created Pi did not register');
+ const ready=await waitFor(async()=>{const state=(await http('/api/local/state')).value;
+  await writeFile(base+'/readiness-private.json',JSON.stringify(state),{mode:0o600});
+  for(const id of webIds){try{await writeFile(base+'/'+id+'.log',docker(['logs',id]),{mode:0o600});}catch{}}
+  return state.runs?.filter(r=>webIds.includes(r.id)&&r.state==='ready').length===2?state:undefined;},'web-created Pi did not register');
  for(const run of ready.runs.filter(r=>webIds.includes(r.id))){
   assert.equal((await http(run.path)).status,200);
   const info=JSON.parse(docker(['inspect','--format','{"uid":{{json .Config.User}},"mounts":{{json .Mounts}}}',run.id]));assert.equal(info.uid,'1000:1000');assert(!info.mounts.some(m=>m.Source.includes('docker.sock')||m.Source.endsWith('/data/hub')));
@@ -59,13 +67,13 @@ try{
  await writeFile(source+'/QQ_acceptance.png','synthetic screenshot fixture');
  await waitFor(async()=>{try{return (await readFile(workspace+'/.pi-attachments/latest.png','utf8'))==='synthetic screenshot fixture';}catch{return false;}},'QQ screenshot did not arrive');
  assert.equal((await http('/api/local/stop',{id:webIds[0]})).status,202);
- await waitFor(async()=>!(await http('/api/local/state')).value.runs.some(r=>r.id===webIds[0]),'first Pi did not disappear');
+ await waitFor(async()=>(await http('/api/local/state')).value.runs.find(r=>r.id===webIds[0])?.state==='stopped','first Pi did not stop');
  assert.equal(await readFile(workspace+'/.pi-attachments/latest.png','utf8'),'synthetic screenshot fixture');pass('first exit preserves attachments while another Pi is active');
  terminal=spawn(root+'/internal/bin/pirun',['--mode','rpc'],{cwd:workspace,env,stdio:['pipe','pipe','pipe']});let log='';
  terminal.stdout.on('data',b=>log=(log+b).slice(-16000));terminal.stderr.on('data',b=>log=(log+b).slice(-16000));
  await waitFor(async()=>{if(terminal.exitCode!==null){await writeFile(base+'/terminal-private.log',log,{mode:0o600});throw Error('terminal Pi exited; private log retained at '+base);}return (await http('/api/local/state')).value.sessions.length===2;},'terminal Pi did not join Hub');pass('terminal pirun joins the same Hub using only image-owned CLI');
  assert.equal((await http('/api/local/stop',{id:webIds[1]})).status,202);
- await waitFor(async()=>!(await http('/api/local/state')).value.runs.some(r=>r.id===webIds[1]),'second Pi did not stop');
+ await waitFor(async()=>(await http('/api/local/state')).value.runs.find(r=>r.id===webIds[1])?.state==='stopped','second Pi did not stop');
  docker([...compose,'stop','hub']);
  await writeFile(source+'/QQ_after_hub_stop.png','screenshot after Hub stop');
  await waitFor(async()=>{try{return (await readFile(workspace+'/.pi-attachments/latest.png','utf8'))==='screenshot after Hub stop';}catch{return false;}},'terminal did not take over screenshot watcher');

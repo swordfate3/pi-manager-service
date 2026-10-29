@@ -1,18 +1,24 @@
 # syntax=docker/dockerfile:1
 ARG NODE_IMAGE=node:24.22.1-bookworm-slim
 ARG DOCKER_IMAGE=docker:29.3.0-cli
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 FROM ${DOCKER_IMAGE} AS docker-cli
 FROM ${NODE_IMAGE} AS build
+RUN mkdir /node-runtime-libs \
+    && ldd /usr/local/bin/node | awk '$3 ~ /^\// {print $3} $1 ~ /^\// {print $1}' \
+       | xargs -r cp --parents -L -t /node-runtime-libs
 WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY . .
 RUN npm run build && npm run verify:dist
 
-FROM ${NODE_IMAGE} AS runtime
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    bash python3 git openssh-client curl ca-certificates util-linux procps \
-    && rm -rf /var/lib/apt/lists/*
+FROM ${PYTHON_IMAGE} AS runtime
+# Both official runtime images use Debian bookworm. Copy the Node binary and
+# its actual dynamic-library closure, including the loader, on either CPU arch.
+# Bash/coreutils/flock already exist in the Python image; no apt/network here.
+COPY --from=build /node-runtime-libs/ /
+COPY --from=build /usr/local/bin/node /usr/local/bin/node
 COPY --from=docker-cli /usr/local/bin/docker /usr/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
 WORKDIR /opt/pi-manager
@@ -20,8 +26,11 @@ COPY --from=build /build/dist/ ./dist/
 COPY --from=build /build/node_modules/ws/ ./node_modules/ws/
 COPY --from=build /build/deploy/stack/ ./deploy/stack/
 COPY --from=build /build/runtime/ ./runtime/
-RUN chmod 755 deploy/stack/scripts/* \
+RUN ln -s /usr/local/bin/python3 /usr/bin/python3 \
+    && chmod 755 deploy/stack/scripts/* \
     && node --check dist/manager/pi-manager-local.mjs \
+    && python3 -c 'import http.client,fcntl,ssl' \
+    && bash --version >/dev/null && command -v flock >/dev/null \
     && docker --version && docker compose version
 ENV NODE_ENV=production
 USER 1000:1000

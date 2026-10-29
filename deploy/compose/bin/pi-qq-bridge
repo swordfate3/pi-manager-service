@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Mirror stable QQ screenshots into a Pi workspace attachment directory."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+
+IMAGE_SUFFIXES = {".png"}
+DEFAULT_SOURCE_DIR = Path(os.environ["PI_QQ_SOURCE_DIR"]) if os.environ.get("PI_QQ_SOURCE_DIR") else None
+DEFAULT_TARGET_DIR = Path(os.environ.get("PI_QQ_ATTACHMENTS_DIR", str(Path.cwd() / ".pi-attachments")))
+if os.environ.get("PI_QQ_LOCK_FILE"):
+    DEFAULT_LOCK_FILE = Path(os.environ["PI_QQ_LOCK_FILE"])
+elif os.environ.get("PI_STACK_ROOT"):
+    DEFAULT_LOCK_FILE = Path(os.environ["PI_STACK_ROOT"]) / "data/screenshots/pi-qq-bridge.lock"
+else:
+    DEFAULT_LOCK_FILE = None
+
+
+def _image_candidates(source_dir: Path) -> list[Path]:
+    if not source_dir.is_dir():
+        return []
+
+    candidates = []
+    for path in source_dir.iterdir():
+        if not path.is_file() or not path.name.startswith("QQ_"):
+            continue
+        if path.suffix.lower() in IMAGE_SUFFIXES:
+            candidates.append(path)
+    return candidates
+
+
+def _file_key(path: Path) -> tuple[str, int, int]:
+    stat = path.stat()
+    return str(path), stat.st_size, stat.st_mtime_ns
+
+
+def _snapshot(candidates: list[Path]) -> dict[str, tuple[str, int, int]] | None:
+    snapshot: dict[str, tuple[str, int, int]] = {}
+    try:
+        for path in candidates:
+            snapshot[path.name] = _file_key(path)
+    except FileNotFoundError:
+        return None
+    return snapshot
+
+
+def _copy_atomic(source: Path, target: Path) -> None:
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        with source.open("rb") as source_file, temporary.open("wb") as target_file:
+            shutil.copyfileobj(source_file, target_file)
+        os.replace(temporary, target)
+    finally:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+
+
+def _unlink_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _stable_candidates(
+    source_dir: Path,
+    *,
+    stability_wait: float = 0.4,
+) -> tuple[list[Path], bool]:
+    """Return all candidates if the source directory stayed unchanged."""
+
+    if not source_dir.is_dir():
+        return [], False
+
+    before_candidates = _image_candidates(source_dir)
+    before = _snapshot(before_candidates)
+    if before is None:
+        return [], False
+
+    if stability_wait > 0:
+        time.sleep(stability_wait)
+
+    after_candidates = _image_candidates(source_dir)
+    after = _snapshot(after_candidates)
+    if after is None or before != after:
+        return [], False
+    return after_candidates, True
+
+
+def _remove_stale_mirrors(target_dir: Path, source_names: set[str]) -> None:
+    """Remove only bridge-owned QQ images no longer present at the source."""
+
+    for path in target_dir.glob("QQ_*.png"):
+        if path.name in source_names:
+            continue
+        _unlink_quietly(path)
+
+
+def copy_latest_if_stable(
+    source_dir: Path,
+    target_dir: Path,
+    *,
+    stability_wait: float = 0.4,
+) -> Path | None:
+    """Mirror stable QQ images and return the target ``latest.png``.
+
+    A screenshot can appear in the Temp directory before QQ has finished
+    writing it. Two identical directory observations plus post-copy checks
+    avoid exposing a partially-written image to Pi.
+    """
+
+    candidates, stable = _stable_candidates(
+        source_dir,
+        stability_wait=stability_wait,
+    )
+    if not stable:
+        return None
+
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    source_names = {path.name for path in candidates}
+    _remove_stale_mirrors(target_dir, source_names)
+
+    if not candidates:
+        _unlink_quietly(target_dir / "latest.png")
+        return None
+
+    expected_keys = _snapshot(candidates)
+    if expected_keys is None:
+        return None
+
+    for source in candidates:
+        mirror = target_dir / source.name
+        try:
+            _copy_atomic(source, mirror)
+            if _file_key(source) != expected_keys[source.name]:
+                _unlink_quietly(mirror)
+                return None
+        except OSError:
+            _unlink_quietly(mirror)
+            return None
+
+    newest = max(candidates, key=lambda path: expected_keys[path.name][2])
+    latest = target_dir / "latest.png"
+    try:
+        _copy_atomic(newest, latest)
+        if _file_key(newest) != expected_keys[newest.name]:
+            _unlink_quietly(latest)
+            return None
+    except OSError:
+        _unlink_quietly(latest)
+        return None
+    return latest
+
+
+def _acquire_lock(lock_path: Path):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock_file.close()
+        return None
+    return lock_file
+
+
+def run_watcher(
+    source_dir: Path,
+    target_dir: Path,
+    lock_path: Path,
+    *,
+    interval: float = 1.0,
+    stability_wait: float = 0.4,
+) -> int:
+    lock_file = _acquire_lock(lock_path)
+    if lock_file is None:
+        return 0
+
+    last_snapshot: dict[str, tuple[str, int, int]] | None = None
+    try:
+        while True:
+            candidates = _image_candidates(source_dir)
+            current_snapshot = _snapshot(candidates)
+            if current_snapshot is not None and current_snapshot != last_snapshot:
+                copied = copy_latest_if_stable(
+                    source_dir,
+                    target_dir,
+                    stability_wait=stability_wait,
+                )
+                after_candidates = _image_candidates(source_dir)
+                after_snapshot = _snapshot(after_candidates)
+                if (
+                    after_snapshot is not None
+                    and after_snapshot == current_snapshot
+                    and (copied is not None or not after_candidates)
+                ):
+                    last_snapshot = after_snapshot
+                if copied is not None:
+                    print(f"mirrored {len(after_candidates)} QQ images; latest: {copied}", flush=True)
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE_DIR)
+    parser.add_argument("--target", type=Path, default=DEFAULT_TARGET_DIR)
+    parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK_FILE)
+    parser.add_argument("--interval", type=float, default=1.0)
+    parser.add_argument("--stability-wait", type=float, default=0.4)
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="mirror the current stable images once and exit",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = _parse_args()
+    if args.source is None or args.lock is None:
+        raise SystemExit("pi-qq-bridge: source and durable lock paths are required")
+    if args.once:
+        copied = copy_latest_if_stable(
+            args.source,
+            args.target,
+            stability_wait=args.stability_wait,
+        )
+        if copied is not None:
+            print(copied)
+        return 0
+    return run_watcher(
+        args.source,
+        args.target,
+        args.lock,
+        interval=max(args.interval, 0.1),
+        stability_wait=max(args.stability_wait, 0.0),
+    )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

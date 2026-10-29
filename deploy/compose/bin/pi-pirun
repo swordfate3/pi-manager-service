@@ -1,0 +1,265 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() {
+    printf 'pi-pirun: %s\n' "$1" >&2
+    exit "${2:-1}"
+}
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -v PI_STACK_ROOT ]]; then
+    [[ -n "$PI_STACK_ROOT" && "$PI_STACK_ROOT" == /* ]] || fail 'PI_STACK_ROOT must be an absolute canonical path'
+    resolved_root="$(cd -- "$PI_STACK_ROOT" 2>/dev/null && pwd -P)" || fail 'PI_STACK_ROOT is unavailable'
+    [[ "$resolved_root" == "$PI_STACK_ROOT" ]] || fail 'PI_STACK_ROOT must be canonical'
+else
+    resolved_root="$(cd -- "$script_dir/../.." && pwd -P)" || fail 'cannot resolve installed stack root'
+fi
+readonly PI_STACK_ROOT="$resolved_root"
+export PI_STACK_ROOT
+
+workspace="$(pwd -P)" || fail 'cannot resolve current workspace'
+if [[ "$workspace" == "$PI_STACK_ROOT" || "$workspace" == "$PI_STACK_ROOT"/* || "$PI_STACK_ROOT" == "$workspace"/* ]]; then
+    fail 'workspace overlaps the protected Pi stack root' 2
+fi
+
+config_file="$PI_STACK_ROOT/config/pi.json"
+models_file="$PI_STACK_ROOT/pi-models/models.json"
+compose_file="$PI_STACK_ROOT/compose.yaml"
+[[ -f "$config_file" && ! -L "$config_file" ]] || fail "missing fixed launcher config: $config_file"
+[[ -f "$compose_file" && ! -L "$compose_file" ]] || fail "missing Compose file: $compose_file"
+[[ -d "$PI_STACK_ROOT/pi-models" && ! -L "$PI_STACK_ROOT/pi-models" ]] || fail 'pi-models must be a real directory'
+[[ "$(cd -- "$PI_STACK_ROOT/pi-models" && pwd -P)" == "$PI_STACK_ROOT/pi-models" ]] || fail 'pi-models must not resolve outside the stack'
+[[ -f "$models_file" && ! -L "$models_file" ]] || fail "models.json must be a real file: $models_file"
+
+config_values="$({ python3 - "$config_file" "$models_file" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+config_file, models_file = map(Path, sys.argv[1:])
+try:
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    models = json.loads(models_file.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(config, dict) or not isinstance(models, (dict, list)):
+    raise SystemExit(1)
+if set(config) != {"image", "screenshots", "mounts", "volumes"}:
+    raise SystemExit(1)
+image = config["image"]
+if not isinstance(image, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", image) is None:
+    raise SystemExit(1)
+screenshots = config["screenshots"]
+if not isinstance(screenshots, dict) or set(screenshots) != {"enabled", "source"}:
+    raise SystemExit(1)
+enabled, source = screenshots["enabled"], screenshots["source"]
+if type(enabled) is not bool or not isinstance(source, str) or not source.startswith("/") or any(c in source for c in "\0\r\n"):
+    raise SystemExit(1)
+mounts = config["mounts"]
+if not isinstance(mounts, dict) or set(mounts) != {"ssh", "bashrc", "huggingface"} or any(type(mounts[k]) is not bool for k in mounts):
+    raise SystemExit(1)
+volumes = config["volumes"]
+keys = {"home", "runtime", "agent", "credentials", "huggingface"}
+if not isinstance(volumes, dict) or set(volumes) != keys:
+    raise SystemExit(1)
+if any(not isinstance(volumes[k], str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", volumes[k]) is None for k in keys):
+    raise SystemExit(1)
+print(image)
+print("1" if enabled else "0")
+print(source)
+print("1" if mounts["ssh"] else "0")
+print("1" if mounts["bashrc"] else "0")
+print("1" if mounts["huggingface"] else "0")
+PY
+} 2>/dev/null)" || fail 'config/pi.json or pi-models/models.json is invalid'
+mapfile -t config_lines <<< "$config_values"
+(( ${#config_lines[@]} == 6 )) || fail 'launcher configuration is incomplete'
+readonly screenshot_enabled="${config_lines[1]}"
+readonly screenshot_source="${config_lines[2]}"
+readonly mount_ssh="${config_lines[3]}"
+readonly mount_bashrc="${config_lines[4]}"
+readonly mount_huggingface="${config_lines[5]}"
+
+# shellcheck disable=SC1091
+source "$script_dir/host-identity.sh"
+
+if [[ -v PI_PIRUN_DOCKER_NAME ]]; then
+    [[ "$PI_PIRUN_DOCKER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$ ]] || \
+        fail 'PI_PIRUN_DOCKER_NAME must be a Docker name of 1-128 characters' 2
+    container_name="$PI_PIRUN_DOCKER_NAME"
+    local_launcher_name=1
+else
+    container_name="pi-stack-pi-$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
+    local_launcher_name=0
+fi
+
+docker_args=(
+    compose -f "$compose_file"
+    --env-file /dev/null
+    --project-directory "$PI_STACK_ROOT"
+    --project-name pi-stack
+    run --rm --no-deps --interactive
+)
+if [[ ! -t 0 || ! -t 1 ]]; then
+    docker_args+=(-T)
+fi
+docker_args+=(--name "$container_name")
+if (( local_launcher_name )); then
+    docker_args+=(--label "cn.swordfate.pi.local-id=$container_name")
+fi
+docker_args+=(-v "$workspace:/workspace")
+
+add_env_if_set() {
+    local name="$1"
+    if [[ -v "$name" ]]; then
+        docker_args+=(-e "$name")
+    fi
+}
+
+add_readonly_mount() {
+    docker_args+=(-v "$1:$2:ro")
+}
+
+for variable_name in \
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+    SUB2API_OPENAI_API_KEY SUB2API_DEEPSEEK_API_KEY SUB2API_ZHIPU_API_KEY \
+    PI_SCOPED_MEMORY_WORKSPACE_ID PI_SCOPED_MEMORY_WORKSPACE_ROOT \
+    PI_VSCODE_BRIDGE_URL PI_VSCODE_BRIDGE_TOKEN PI_VSCODE_BRIDGE_SOCKET \
+    PI_VSCODE_TERMINAL_ID PI_VSCODE_STATUS_BAR PI_VSCODE_DISABLED_TOOLS \
+    PI_VSCODE_PERMISSION PI_VSCODE_MCP_IDLE_TIMEOUT PI_VSCODE_BUILTIN_AGENTS_DIR; do
+    add_env_if_set "$variable_name"
+done
+
+if [[ -n "${HOME:-}" && "$HOME" == /* ]]; then
+    if [[ "$mount_ssh" == 1 && -d "$HOME/.ssh" ]]; then
+        add_readonly_mount "$HOME/.ssh" /run/host-ssh
+    fi
+    if [[ "$mount_bashrc" == 1 && -f "$HOME/.bashrc" ]]; then
+        add_readonly_mount "$HOME/.bashrc" /home/node/.bashrc
+    fi
+    if [[ "$mount_huggingface" == 1 && -f "$HOME/.cache/huggingface/token" ]]; then
+        add_readonly_mount "$HOME/.cache/huggingface/token" /run/secrets/huggingface-token
+        docker_args+=(-e HF_TOKEN_PATH=/run/secrets/huggingface-token)
+    fi
+fi
+
+lifecycle_started=0
+web_run_id=""
+child_pid=""
+signal_status=0
+
+cleanup_launcher() {
+    local status=$?
+    trap - EXIT INT TERM HUP
+    if [[ -n "$web_run_id" ]]; then
+        if ! python3 "$script_dir/hub-session.py" close "$web_run_id" >/dev/null; then
+            printf 'pi-pirun: Hub credential cleanup is pending for run %s\n' "$web_run_id" >&2
+        fi
+    fi
+    if (( lifecycle_started )); then
+        pi_qq_lifecycle_leave "$status" || true
+    fi
+    exit "$status"
+}
+
+forward_signal() {
+    local signal="$1" status="$2"
+    signal_status="$status"
+    if [[ "$child_pid" =~ ^[0-9]+$ ]]; then
+        kill -s "$signal" "$child_pid" 2>/dev/null || true
+    fi
+}
+
+trap cleanup_launcher EXIT
+trap 'forward_signal INT 130' INT
+trap 'forward_signal TERM 143' TERM
+trap 'forward_signal HUP 129' HUP
+
+if [[ "$screenshot_enabled" == 1 ]]; then
+    [[ -d "$screenshot_source" && ! -L "$screenshot_source" ]] || fail 'configured screenshot source is unavailable or unsafe'
+    [[ "$(cd -- "$screenshot_source" && pwd -P)" == "$screenshot_source" ]] || fail 'configured screenshot source must be canonical'
+    attachments="$workspace/.pi-attachments"
+    [[ ! -L "$attachments" ]] || fail 'workspace attachment path must not be a symbolic link'
+    mkdir -p -m 700 -- "$PI_STACK_ROOT/data/screenshots"
+    [[ -d "$PI_STACK_ROOT/data/screenshots" && ! -L "$PI_STACK_ROOT/data/screenshots" && -O "$PI_STACK_ROOT/data/screenshots" ]] || \
+        fail 'screenshot runtime must be a private stack directory'
+    [[ "$(cd -- "$PI_STACK_ROOT/data/screenshots" && pwd -P)" == "$PI_STACK_ROOT/data/screenshots" ]] || \
+        fail 'screenshot runtime must not resolve outside the stack'
+    export PI_QQ_SOURCE_DIR="$screenshot_source"
+    export PI_QQ_ATTACHMENTS_DIR="$attachments"
+    export PI_QQ_BRIDGE="$script_dir/pi-qq-bridge"
+    export PI_QQ_RUNTIME_DIR="$PI_STACK_ROOT/data/screenshots"
+    export PI_QQ_WORKSPACE_CANONICAL="$workspace"
+    export PI_QQ_WORKSPACE_KEY="$(printf '%s\n' "$workspace" | sha256sum | cut -c1-16)"
+    export PI_QQ_LIFECYCLE_KEY="$(printf '%s\n%s\n' "$workspace" "$attachments" | sha256sum | cut -c1-16)"
+    export PI_QQ_CLEANUP_ATTACHMENTS=1
+    # shellcheck disable=SC1091
+    source "$script_dir/pi-qq-lifecycle.sh"
+    pi_qq_lifecycle_enter || fail 'unable to initialize QQ screenshot lifecycle'
+    lifecycle_started=1
+    add_readonly_mount "$attachments" /workspace/.pi-attachments
+fi
+
+maintenance_command=0
+case "${1:-}" in
+    install|remove|update|list|config|help|--help|-h|--version|-v) maintenance_command=1 ;;
+esac
+
+web_mode="${PI_PIRUN_WEB_HUB:-on}"
+case "$web_mode" in
+    on|off) ;;
+    *) fail 'PI_PIRUN_WEB_HUB must be on or off' 2 ;;
+esac
+if (( ! maintenance_command )) && [[ "$web_mode" == on ]]; then
+    web_reply="$(python3 "$script_dir/hub-session.py" open --workspace "$workspace" --pid "$$")" || \
+        fail 'required Pi Web Hub registration failed'
+    web_values="$({ python3 -c '
+import json,sys
+value=json.load(sys.stdin)
+run_id=value.get("run_id")
+credential=value.get("credential_file")
+if not isinstance(run_id,str) or not isinstance(credential,str): raise SystemExit(1)
+print(run_id); print(credential)
+' <<< "$web_reply"; } 2>/dev/null)" || fail 'Hub registration returned an invalid capability'
+    mapfile -t web_lines <<< "$web_values"
+    (( ${#web_lines[@]} == 2 )) || fail 'Hub registration returned incomplete data'
+    web_run_id="${web_lines[0]}"
+    credential_file="${web_lines[1]}"
+    [[ "$web_run_id" =~ ^[0-9a-f]{32}$ ]] || fail 'Hub registration returned an invalid run ID'
+    [[ "$credential_file" == "$PI_STACK_ROOT/data/hub/launches/"* && -f "$credential_file" && ! -L "$credential_file" ]] || \
+        fail 'Hub registration returned an unsafe credential file'
+    add_readonly_mount "$PI_STACK_ROOT/data/hub/chat-runtime" /run/pi-web-hub
+    add_readonly_mount "$credential_file" /run/secrets/pi-web-session.json
+    docker_args+=(
+        -e PI_WEB_UI_DISABLED=0
+        -e PI_WEB_UI_HOST=127.0.0.1
+        -e PI_WEB_UI_REGISTRY_SOCKET=/run/pi-web-hub/registry.sock
+        -e PI_WEB_UI_REGISTRY_CREDENTIAL_FILE=/run/secrets/pi-web-session.json
+    )
+fi
+
+# Compose behavior is defined entirely by explicit argv. Inherited COMPOSE_*
+# variables must not add files, profiles, project identities, or env sources.
+while IFS= read -r compose_variable; do
+    unset "$compose_variable"
+done < <(compgen -A variable COMPOSE_)
+export COMPOSE_DISABLE_ENV_FILE=1
+docker_args+=(pi "$@")
+
+set +e
+docker "${docker_args[@]}" <&0 &
+child_pid=$!
+wait "$child_pid"
+status=$?
+if (( signal_status != 0 )); then
+    # A trapped signal interrupts Bash's wait before the child is guaranteed
+    # to be reaped. Finish waiting before credential and attachment cleanup.
+    wait "$child_pid" 2>/dev/null || true
+fi
+child_pid=""
+set -e
+if (( signal_status != 0 )); then
+    status="$signal_status"
+fi
+exit "$status"

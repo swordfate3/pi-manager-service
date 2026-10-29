@@ -1,0 +1,14 @@
+.git
+**/node_modules
+.learnings
+.superpowers
+.worktrees
+**/__pycache__
+**/*.pyc
+.env
+.env.*
+**/.ssh
+**/.credentials
+coverage
+test-results
+playwright-report

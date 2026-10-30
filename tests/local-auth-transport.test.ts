@@ -118,7 +118,8 @@ async function fixture(t: test.TestContext) {
   });
   const origin = new URL(service.url).origin;
   const hub = readHubConfig(path.join(stateRoot, "chat.json"));
-  const generation = randomBytes(16).toString("hex");
+  let generation = randomBytes(16).toString("hex");
+  const handoffs: Array<{ token: string; generation: string }> = [];
   const received: Array<{ url: string; headers: import("node:http").IncomingHttpHeaders }> = [];
   let upstreamWebSockets = 0;
   const liveUpstreamWebSockets = new Set<WebSocket>();
@@ -178,7 +179,7 @@ async function fixture(t: test.TestContext) {
   const backendPort = (backend.address() as net.AddressInfo).port;
   const credential = issueSession(hub, path.join(root, "fake-pi-capability.json"), { label: "local transport fake Pi" });
 
-  const register = await bounded(
+  const register = () => bounded(
     new Promise<{ ok: boolean }>((resolve, reject) => {
       const socket = net.createConnection(hub.socketPath, () => {
         socket.write(`${JSON.stringify({ action: "register", ...credential, generation, port: backendPort })}\n`);
@@ -195,7 +196,7 @@ async function fixture(t: test.TestContext) {
     }),
     "legacy fake Pi registration",
   );
-  assert.equal(register.ok, true);
+  assert.equal((await register()).ok, true);
 
   const call = (route: string, body?: unknown, extra: Record<string, string | undefined> = {}): Promise<HttpResult> =>
     bounded(
@@ -260,6 +261,12 @@ async function fixture(t: test.TestContext) {
         "X-Forwarded-For": "198.51.100.45",
       },
     });
+    socket.on("message", raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        if (message.event === "hub_route") handoffs.push(message.payload);
+      } catch { /* Echo tests also send non-JSON frames. */ }
+    });
     await bounded(
       new Promise<void>((resolve, reject) => {
         socket.once("open", resolve);
@@ -322,6 +329,12 @@ async function fixture(t: test.TestContext) {
     service,
     origin,
     generation,
+    handoffs,
+    rotate: async () => {
+      generation = randomBytes(16).toString("hex");
+      assert.equal((await register()).ok, true);
+      return generation;
+    },
     call,
     authenticate,
     authenticated,
@@ -424,6 +437,54 @@ test("workbench state includes terminal-origin registered sessions without adopt
   f.revoke();
   const after = await f.authenticated(session, "/api/local/state");
   assert.equal(after.status, 200); assert.deepEqual((after.value as any).sessions, []);
+});
+
+test("authenticated handoff follows the exact successor through Manager without leaking the capability to Pi", async t => {
+  const f = await fixture(t);
+  const session = await f.authenticate(true);
+  const socket = await f.openWebSocket(session);
+  if (!f.handoffs.length) await bounded(new Promise<void>(resolve => socket.once("message", () => resolve())), "Hub route capability");
+  const capability = f.handoffs[0].token;
+  assert.match(capability, /^[a-f0-9]{48}$/);
+  const headers = { "X-Pi-Web-Handoff": capability };
+  assert.equal((await f.call("/api/session-handoff", {}, headers)).status, 401);
+  assert.equal((await f.authenticated(session, "/api/session-handoff", {}, { ...headers, Origin: "http://wrong.invalid" })).status, 403);
+  assert.equal((await f.authenticated(session, "/api/session-handoff", undefined, headers)).status, 405);
+  assert.equal((await f.authenticated(session, "/api/session-handoff", {}, { "X-Pi-Web-Handoff": "0".repeat(48) })).status, 410);
+  const before = await f.authenticated(session, "/api/session-handoff", {}, headers);
+  assert.equal(before.status, 200, before.text);
+  assert.deepEqual(before.value, { path: `/s/${f.generation}/` });
+  const closed = socketClosed(socket, "rotated generation");
+  const successor = await f.rotate();
+  await closed;
+  const after = await f.authenticated(session, "/api/session-handoff", {}, headers);
+  assert.equal(after.status, 200, after.text);
+  assert.deepEqual(after.value, { path: `/s/${successor}/` });
+  assert.equal((await f.authenticated(session, `/s/${successor}/hello`, undefined, headers)).status, 200);
+  assert.ok(f.received.length > 0);
+  for (const request of f.received) {
+    assert.equal(request.headers["x-pi-web-handoff"], undefined);
+    assert.equal(request.headers.cookie, undefined);
+    assert.equal(request.headers.authorization, undefined);
+  }
+  f.revoke();
+  assert.equal((await f.authenticated(session, "/api/session-handoff", {}, headers)).status, 410);
+});
+
+test("Hub sends browser-facing pings through authenticated Manager and keeps responsive clients connected", async t => {
+  const f = await fixture(t);
+  const session = await f.authenticate(true);
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const socket = await f.openWebSocket(session);
+  // WebSocket clients automatically pong; the Pi-facing leg is independent.
+  for (let interval = 0; interval < 5; interval++) {
+    const ping = bounded(new Promise<void>(resolve => socket.once("ping", () => resolve())), "browser-facing heartbeat", 500);
+    t.mock.timers.tick(20_000);
+    await ping;
+    await new Promise<void>(resolve => setTimeout(resolve, 10));
+    assert.equal(socket.readyState, WebSocket.OPEN);
+  }
+  t.mock.timers.reset();
 });
 
 test("logout, logout-all, and an external LocalStore revocation close authenticated tunnel sockets", { timeout: 10_000 }, async (t) => {

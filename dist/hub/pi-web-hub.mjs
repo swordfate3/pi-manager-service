@@ -1490,6 +1490,48 @@ var ForwardQueue = class {
 	}
 };
 //#endregion
+//#region hub/browser-heartbeat.ts
+/** Hub terminates Pi's WS leg, so its ping/pong cannot keep the browser leg alive. */
+function browserHeartbeat(socket) {
+	let unanswered = 0;
+	let disposed = false;
+	const pong = () => {
+		unanswered = 0;
+	};
+	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
+		clearInterval(timer);
+		socket.off("pong", pong);
+		socket.off("close", dispose);
+		socket.off("error", dispose);
+	};
+	const timer = setInterval(() => {
+		if (disposed) return;
+		if (socket.readyState !== 1) {
+			dispose();
+			return;
+		}
+		if (unanswered >= 3) {
+			dispose();
+			socket.terminate();
+			return;
+		}
+		unanswered++;
+		try {
+			socket.ping();
+		} catch {
+			dispose();
+			socket.terminate();
+		}
+	}, 2e4);
+	timer.unref();
+	socket.on("pong", pong);
+	socket.once("close", dispose);
+	socket.once("error", dispose);
+	return dispose;
+}
+//#endregion
 //#region hub/pi-launches.ts
 var hex$3 = (v, n) => typeof v === "string" && new RegExp(`^[a-f0-9]{${n}}$`).test(v);
 var object$2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -4263,7 +4305,7 @@ function captureHubMetadata(moduleUrl = import.meta.url) {
 	{
 		const embedded = {
 			"version": "0.1.0",
-			"build": "011c3dffe8cf1c235f17aec986e02897dba113a0768a434378d2a2ead9aa3cb6"
+			"build": "4431feb2753a364666f4d31518a6bd0b939a8586c128b2ff09205ff5395823b1"
 		};
 		if (embedded && isStableSemver(embedded.version) && SHA256.test(embedded.build)) return Object.freeze({
 			version: embedded.version,
@@ -5316,6 +5358,7 @@ async function startLockedHub(config, options) {
 				if (!boundedDeflateOffer(request.headers["sec-websocket-extensions"])) delete request.headers["sec-websocket-extensions"];
 				wss.handleUpgrade(request, socket, head, (client) => {
 					webSockets.set(client, session.generation);
+					browserHeartbeat(client);
 					let slowClosing = false;
 					const slowPair = () => {
 						if (slowClosing) return;

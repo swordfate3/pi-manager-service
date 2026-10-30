@@ -21,6 +21,8 @@ import { HUB_GENERATION_SOURCE } from "../protocol/hub-generation.ts";
 /** No browser credentials or asserted identities cross into extension-owned code. */
 export function localProxyHeaders(req:IncomingMessage,host:string,websocket=false) {
   const allowed=new Set(["accept","accept-encoding","accept-language","content-type","content-length","origin","range","if-range","if-none-match","if-modified-since","user-agent","sec-fetch-site","sec-fetch-mode","sec-fetch-dest"]);
+  // This capability belongs to Hub's recovery API, never extension-owned HTTP/WS.
+  if(!websocket && req.method === "POST" && req.url === "/api/session-handoff") allowed.add("x-pi-web-handoff");
   if(websocket) for(const name of ["sec-websocket-key","sec-websocket-version","sec-websocket-protocol","sec-websocket-extensions"]) allowed.add(name);
   const headers:import("node:http").OutgoingHttpHeaders={host};
   for(const [key,value] of Object.entries(req.headers)) if(allowed.has(key)) headers[key]=value;
@@ -151,7 +153,7 @@ export async function startLocalService(value: unknown) {
     }
     // Browser and chat share this origin. Hub still checks exact Origin and its
     // own per-Pi capability route; we do not expose the host launch API there.
-    requireThat(req.url?.startsWith("/s/") || req.url === "/api/sessions", 404);
+    requireThat(req.url?.startsWith("/s/") || req.url === "/api/sessions" || req.url === "/api/session-handoff", 404);
     if(req.method !== "GET" && req.method !== "HEAD") boundary(req,true);
     await new Promise<void>((resolve, reject) => {
       const upstream = request(hub!.url + req.url!.slice(1), { method: req.method, headers: localProxyHeaders(req,new URL(hub!.url).host) }, response => {

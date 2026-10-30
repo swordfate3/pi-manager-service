@@ -27,6 +27,7 @@ import {
   readPrivateJson,
 } from "./config.ts";
 import { ForwardQueue } from "./forward-queue.ts";
+import { browserHeartbeat } from "./browser-heartbeat.ts";
 import { createGateManagementApi } from "./gate-management.ts";
 import { gatewayIdentity } from "./gateway-auth.ts";
 import type { InteractionTarget } from "./interaction-control.ts";
@@ -1119,6 +1120,7 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
         }
         wss.handleUpgrade(request, socket, head, (client) => {
           webSockets.set(client, session.generation);
+          browserHeartbeat(client);
           let slowClosing = false;
           const slowPair = () => {
             if (slowClosing) return;

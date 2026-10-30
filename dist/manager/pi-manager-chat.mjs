@@ -1181,6 +1181,48 @@ var ForwardQueue = class {
 	}
 };
 //#endregion
+//#region hub/browser-heartbeat.ts
+/** Hub terminates Pi's WS leg, so its ping/pong cannot keep the browser leg alive. */
+function browserHeartbeat(socket) {
+	let unanswered = 0;
+	let disposed = false;
+	const pong = () => {
+		unanswered = 0;
+	};
+	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
+		clearInterval(timer);
+		socket.off("pong", pong);
+		socket.off("close", dispose);
+		socket.off("error", dispose);
+	};
+	const timer = setInterval(() => {
+		if (disposed) return;
+		if (socket.readyState !== 1) {
+			dispose();
+			return;
+		}
+		if (unanswered >= 3) {
+			dispose();
+			socket.terminate();
+			return;
+		}
+		unanswered++;
+		try {
+			socket.ping();
+		} catch {
+			dispose();
+			socket.terminate();
+		}
+	}, 2e4);
+	timer.unref();
+	socket.on("pong", pong);
+	socket.once("close", dispose);
+	socket.once("error", dispose);
+	return dispose;
+}
+//#endregion
 //#region hub/pi-launches.ts
 var hex$4 = (v, n) => typeof v === "string" && new RegExp(`^[a-f0-9]{${n}}$`).test(v);
 var object$2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -5133,6 +5175,7 @@ async function startLockedHub(config, options) {
 				if (!boundedDeflateOffer(request.headers["sec-websocket-extensions"])) delete request.headers["sec-websocket-extensions"];
 				wss.handleUpgrade(request, socket, head, (client) => {
 					webSockets.set(client, session.generation);
+					browserHeartbeat(client);
 					let slowClosing = false;
 					const slowPair = () => {
 						if (slowClosing) return;

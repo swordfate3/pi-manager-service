@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "source": {
-    "count": 148,
-    "sha256": "00617addf2a0e20449cc92d4725950c971a1839f7eda942e14bc938391367e42",
+    "count": 149,
+    "sha256": "8ffbc5b4014b994870b12cdd526d351d5a4495f7ac20eab69faaeda23ea41907",
     "files": [
       {
         "path": "bin/pi-manager-admin.mjs",
@@ -157,6 +157,10 @@
         "sha256": "8eaecf28507c7003700c96804b7dd741d57afbe0819092cfbe118c7e8b85a332"
       },
       {
+        "path": "hub/browser-reconnect.ts",
+        "sha256": "eeecba09a0104121aa430371c6919a2906f8b7ac643c5558d9add06b70da836d"
+      },
+      {
         "path": "hub/config.ts",
         "sha256": "42a41a627e918727efe9326693bce9a5ceac089d65b26b379402a74cbc824314"
       },
@@ -226,7 +230,7 @@
       },
       {
         "path": "hub/server.ts",
-        "sha256": "432d8f6018579081d0069cad1aec495042e80742dff90ed9876966a37067baa0"
+        "sha256": "b827cfd039c561b87568cbb363756ecf85c4f0d778eef9b3dd6bc596bca0f141"
       },
       {
         "path": "hub/state-budget.ts",
@@ -354,7 +358,7 @@
       },
       {
         "path": "manager/local-service.ts",
-        "sha256": "253402cc792e28d819d4d7e3275046b2e06aa9f2b9f2935f24310278946401c1"
+        "sha256": "f31b079b8acc66b7f66058b00e0ea2a6f56925b404c007b81d8bb95f89e5f787"
       },
       {
         "path": "manager/local-store.ts",
@@ -600,11 +604,11 @@
   },
   "outputs": {
     "count": 7,
-    "sha256": "9bfb0dfcc8ced86fd42ec5d5e0d2f85e9339ed62d719728f26fc694a882163aa",
+    "sha256": "861ac38c107974ee6eb5f1e3f5ce531c45e5678dcfa8ec20bc8e40e3ad4daf08",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "0930f5544f3315336940aac5590414331b986da899037c3815cd2b79c21d8214"
+        "sha256": "8831262a8d41e1547283dc87262269b02753b0e277e659f23cc40527b900bae5"
       },
       {
         "path": "manager/pi-manager-admin.mjs",
@@ -612,7 +616,7 @@
       },
       {
         "path": "manager/pi-manager-chat.mjs",
-        "sha256": "a647a58d86a4fe9729e697251201e0e19ca2bbbfc559ca0171d81a9fb53db866"
+        "sha256": "1dc5e1e3914c0ced5ee5cede4a72c88c2fd83141b318803071753e07635adb01"
       },
       {
         "path": "manager/pi-manager-executor.mjs",
@@ -620,7 +624,7 @@
       },
       {
         "path": "manager/pi-manager-local.mjs",
-        "sha256": "afb9fa8ceb5baec0ae74d17a2bf1c5cb64c8a91b22c8fc2864e400977f0b8b22"
+        "sha256": "c150c4aaa99daabfdd44b339db64daeca21714b3fb98235511bfd0ac5bf62ef6"
       },
       {
         "path": "manager/pi-manager-public.mjs",

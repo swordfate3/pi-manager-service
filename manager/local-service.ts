@@ -22,7 +22,9 @@ import { HUB_GENERATION_SOURCE } from "../protocol/hub-generation.ts";
 export function localProxyHeaders(req:IncomingMessage,host:string,websocket=false) {
   const allowed=new Set(["accept","accept-encoding","accept-language","content-type","content-length","origin","range","if-range","if-none-match","if-modified-since","user-agent","sec-fetch-site","sec-fetch-mode","sec-fetch-dest"]);
   // This capability belongs to Hub's recovery API, never extension-owned HTTP/WS.
-  if(!websocket && req.method === "POST" && req.url === "/api/session-handoff") allowed.add("x-pi-web-handoff");
+  if(!websocket && req.method === "POST" && req.url === "/api/session-handoff") {
+    allowed.add("x-pi-web-handoff");allowed.add("x-pi-web-reconnect");
+  }
   if(websocket) for(const name of ["sec-websocket-key","sec-websocket-version","sec-websocket-protocol","sec-websocket-extensions"]) allowed.add(name);
   const headers:import("node:http").OutgoingHttpHeaders={host};
   for(const [key,value] of Object.entries(req.headers)) if(allowed.has(key)) headers[key]=value;

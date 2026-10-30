@@ -535,6 +535,153 @@ test("an exact successor's temporary proof timeout does not permanently expire b
   assert.equal((await handoff()).status, 410);
 });
 
+test("a sleeping browser can recover the same Pi runtime after its short handoff has expired", async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const f = await fixture(t, false);
+  const socket = new WebSocket(`${f.url.replace("http", "ws")}s/${f.payload.generation}/ws`, {
+    origin: new URL(f.url).origin,
+  });
+  t.after(() => socket.terminate());
+  const route = await new Promise<{ token: string; reconnect?: string }>((resolve) =>
+    socket.on("message", (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.event === "hub_route") resolve(message.payload);
+    }),
+  );
+  const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+  socket.close();
+  await closed;
+  const next = "2".repeat(32);
+  assert.equal((await f.register(next)).ok, true);
+  now += 60_000;
+  assert.equal((await fetch(`${f.url}s/${f.payload.generation}/`, { method: "HEAD" })).status, 410);
+  const recovered = await fetch(`${f.url}api/session-handoff`, {
+    method: "POST",
+    headers: {
+      Origin: new URL(f.url).origin,
+      "X-Pi-Web-Handoff": route.token,
+      ...(route.reconnect ? { "X-Pi-Web-Reconnect": route.reconnect } : {}),
+    },
+  });
+  assert.equal(recovered.status, 200, "a screen-lock duration must not end access to the exact still-running Pi");
+  assert.equal((await recovered.json()).path, `/s/${next}/`);
+});
+
+async function reconnectBrowser(t: test.TestContext) {
+  const f = await fixture(t, false);
+  const socket = new WebSocket(`${f.url.replace("http", "ws")}s/${f.payload.generation}/ws`, {
+    origin: new URL(f.url).origin,
+  });
+  t.after(() => socket.terminate());
+  const route = await new Promise<{ token: string; reconnect: string }>((resolve) =>
+    socket.on("message", raw => {
+      const message = JSON.parse(raw.toString());
+      if (message.event === "hub_route") resolve(message.payload);
+    }),
+  );
+  assert.equal(typeof route.reconnect, "string");
+  const closed = new Promise<void>(resolve => socket.once("close", () => resolve()));
+  socket.close();
+  await closed;
+  const recover = (ticket = route.reconnect, origin = new URL(f.url).origin) => fetch(`${f.url}api/session-handoff`, {
+    method: "POST", headers: { Origin: origin, "X-Pi-Web-Reconnect": ticket },
+  });
+  return { ...f, liveUrl: () => f.url, route, recover };
+}
+
+test("runtime reconnect survives a Hub reboot without restoring an old generation URL", async t => {
+  const f = await reconnectBrowser(t);
+  await f.reopen();
+  const next = "2".repeat(32);
+  assert.equal((await f.register(next)).ok, true);
+  assert.equal((await fetch(`${f.liveUrl()}s/${f.payload.generation}/`, { method: "HEAD" })).status, 410);
+  const result = await f.recover();
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { path: `/s/${next}/` });
+});
+
+test("runtime reconnect follows repeated generations of the exact same Pi before short handoff expiry", async t => {
+  const f = await reconnectBrowser(t);
+  await f.register("2".repeat(32));
+  await f.register("3".repeat(32));
+  const response = await fetch(`${f.liveUrl()}api/session-handoff`, {
+    method: "POST",
+    headers: {
+      Origin: new URL(f.liveUrl()).origin,
+      "X-Pi-Web-Handoff": f.route.token,
+      "X-Pi-Web-Reconnect": f.route.reconnect,
+    },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { path: `/s/${"3".repeat(32)}/` });
+});
+
+test("short handoff still authorizes a reload's first runtime replacement but its ticket cannot follow another", async t => {
+  const f = await reconnectBrowser(t);
+  const headers = {
+    Origin: new URL(f.liveUrl()).origin,
+    "X-Pi-Web-Handoff": f.route.token,
+    "X-Pi-Web-Reconnect": f.route.reconnect,
+  };
+  await f.register("2".repeat(32), { ...runRuntime, runtimeId: "reloaded-runtime" });
+  const reloaded = await fetch(`${f.liveUrl()}api/session-handoff`, { method: "POST", headers });
+  assert.equal(reloaded.status, 200, "legacy handoff explicitly authorizes the first /reload successor");
+  assert.deepEqual(await reloaded.json(), { path: `/s/${"2".repeat(32)}/` });
+  await f.register("3".repeat(32), { ...runRuntime, runtimeId: "yet-another-runtime" });
+  assert.equal((await fetch(`${f.liveUrl()}api/session-handoff`, { method: "POST", headers })).status, 410);
+});
+
+test("runtime reconnect has no screen-lock wall-clock deadline but revocation still wins", async t => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const f = await reconnectBrowser(t);
+  now += 24 * 60 * 60 * 1000;
+  const next = "2".repeat(32);
+  assert.equal((await f.register(next)).ok, true);
+  assert.equal((await f.recover()).status, 200);
+  revokeSession(f.config, f.runId);
+  assert.equal((await f.recover()).status, 410);
+});
+
+test("runtime reconnect waits through a registration gap but never picks a different Pi runtime", async t => {
+  const f = await reconnectBrowser(t);
+  await f.register(f.payload.generation, runRuntime, "unregister");
+  assert.equal((await f.recover()).status, 202);
+  assert.equal((await f.register("2".repeat(32), { ...runRuntime, runtimeId: "a-different-pi-runtime" })).ok, true);
+  assert.equal((await f.recover()).status, 410);
+});
+
+test("runtime reconnect rejects tampering and cross-origin use and does not need a retained browser record", async t => {
+  const f = await reconnectBrowser(t);
+  const ticket = f.route.reconnect;
+  const tampered = ticket.slice(0, -1) + (ticket.endsWith("0") ? "1" : "0");
+  assert.equal((await f.recover(tampered)).status, 410);
+  assert.equal((await f.recover(ticket, "http://untrusted.invalid")).status, 403);
+  assert.equal((await f.recover("x".repeat(2048))).status, 410);
+  assert.equal((await f.recover()).status, 200);
+});
+
+test("revocation during runtime reconnect proof wins before returning a successor", async t => {
+  const f = await reconnectBrowser(t);
+  const held = f.holdProof();
+  const response = f.recover();
+  const release = await held;
+  revokeSession(f.config, f.runId);
+  release();
+  assert.equal((await response).status, 410);
+});
+
+test("runtime replacement during reconnect proof cannot borrow a previous runtime's ticket", async t => {
+  const f = await reconnectBrowser(t);
+  const held = f.holdProof();
+  const response = f.recover();
+  const release = await held;
+  assert.equal((await f.register(f.payload.generation, { ...runRuntime, runtimeId: "replacement-runtime" })).ok, true);
+  release();
+  assert.equal((await response).status, 410);
+});
+
 test("a paired browser retains pending handoff beyond three minutes and resolves only the exact successor", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);

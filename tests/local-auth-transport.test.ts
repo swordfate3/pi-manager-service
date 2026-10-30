@@ -119,7 +119,7 @@ async function fixture(t: test.TestContext) {
   const origin = new URL(service.url).origin;
   const hub = readHubConfig(path.join(stateRoot, "chat.json"));
   let generation = randomBytes(16).toString("hex");
-  const handoffs: Array<{ token: string; generation: string }> = [];
+  const handoffs: Array<{ token: string; generation: string; reconnect?: string }> = [];
   const received: Array<{ url: string; headers: import("node:http").IncomingHttpHeaders }> = [];
   let upstreamWebSockets = 0;
   const liveUpstreamWebSockets = new Set<WebSocket>();
@@ -182,7 +182,9 @@ async function fixture(t: test.TestContext) {
   const register = () => bounded(
     new Promise<{ ok: boolean }>((resolve, reject) => {
       const socket = net.createConnection(hub.socketPath, () => {
-        socket.write(`${JSON.stringify({ action: "register", ...credential, generation, port: backendPort })}\n`);
+        socket.write(`${JSON.stringify({ action: "register", ...credential, generation, port: backendPort,
+          interaction: { protocol: "pi-web-interactions-v1", runtimeId: "local-transport-runtime", sessionId: "test-session" },
+        })}\n`);
       });
       let data = "";
       socket.setEncoding("utf8");
@@ -467,6 +469,28 @@ test("authenticated handoff follows the exact successor through Manager without 
     assert.equal(request.headers.cookie, undefined);
     assert.equal(request.headers.authorization, undefined);
   }
+  f.revoke();
+  assert.equal((await f.authenticated(session, "/api/session-handoff", {}, headers)).status, 410);
+});
+
+test("runtime reconnect through Manager still requires login and never exposes its ticket to Pi", async t => {
+  const f = await fixture(t);
+  const session = await f.authenticate(true);
+  const socket = await f.openWebSocket(session);
+  if (!f.handoffs.length) await bounded(new Promise<void>(resolve => socket.once("message", () => resolve())), "Hub route capability");
+  const ticket = f.handoffs[0].reconnect;
+  assert.equal(typeof ticket, "string");
+  const headers = { "X-Pi-Web-Reconnect": ticket! };
+  assert.equal((await f.call("/api/session-handoff", {}, headers)).status, 401);
+  assert.equal((await f.authenticated(session, "/api/session-handoff", {}, { ...headers, Origin: "http://wrong.invalid" })).status, 403);
+  const closed = socketClosed(socket, "rotated generation");
+  const successor = await f.rotate();
+  await closed;
+  const recovered = await f.authenticated(session, "/api/session-handoff", {}, headers);
+  assert.equal(recovered.status, 200);
+  assert.deepEqual(recovered.value, { path: `/s/${successor}/` });
+  assert.equal((await f.authenticated(session, `/s/${successor}/hello`, undefined, headers)).status, 200);
+  for (const request of f.received) assert.equal(request.headers["x-pi-web-reconnect"], undefined);
   f.revoke();
   assert.equal((await f.authenticated(session, "/api/session-handoff", {}, headers)).status, 410);
 });

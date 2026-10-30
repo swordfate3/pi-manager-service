@@ -1223,6 +1223,37 @@ function browserHeartbeat(socket) {
 	return dispose;
 }
 //#endregion
+//#region hub/browser-reconnect.ts
+var domain = "pi-web-runtime-reconnect-v1:";
+var signature = (grant, payload) => createHmac("sha256", grant.token).update(domain + payload).digest("hex");
+/** A browser may return to this exact Pi runtime after sleep or a Hub restart.
+* No retained browser records or sliding deadlines: the existing run grant and
+* live runtime identity remain the authority, never an old generation URL.
+*/
+function browserReconnect(grant, runtimeId) {
+	if (!runtimeId || runtimeId.length > 256 || /\p{Cc}/u.test(runtimeId)) return void 0;
+	const payload = Buffer.from(JSON.stringify([grant.run_id, runtimeId])).toString("base64url");
+	return `${payload}.${signature(grant, payload)}`;
+}
+function readBrowserReconnect(config, value) {
+	if (typeof value !== "string" || value.length > 1536 || !/^[A-Za-z0-9_-]+\.[a-f0-9]{64}$/.test(value)) return void 0;
+	try {
+		const [payload, supplied] = value.split(".");
+		const decoded = Buffer.from(payload, "base64url");
+		if (decoded.toString("base64url") !== payload) return void 0;
+		const identity = JSON.parse(decoded.toString("utf8"));
+		if (!Array.isArray(identity) || identity.length !== 2 || typeof identity[0] !== "string" || !/^[a-f0-9]{32}$/.test(identity[0]) || typeof identity[1] !== "string" || !identity[1] || identity[1].length > 256 || /\p{Cc}/u.test(identity[1])) return void 0;
+		const grant = readGrant(config, identity[0]);
+		if (grant.revoked || !timingSafeEqual(Buffer.from(supplied, "hex"), Buffer.from(signature(grant, payload), "hex"))) return void 0;
+		return {
+			grant,
+			runtimeId: identity[1]
+		};
+	} catch {
+		return;
+	}
+}
+//#endregion
 //#region hub/pi-launches.ts
 var hex$4 = (v, n) => typeof v === "string" && new RegExp(`^[a-f0-9]{${n}}$`).test(v);
 var object$2 = (v) => !!v && typeof v === "object" && !Array.isArray(v);
@@ -4920,7 +4951,37 @@ async function startLockedHub(config, options) {
 				pruneHandoffs();
 				const token = request.headers["x-pi-web-handoff"];
 				const item = typeof token === "string" && /^[a-f0-9]{48}$/.test(token) ? handoffs.get(token) : void 0;
-				if (!item) {
+				const reconnect = readBrowserReconnect(config, request.headers["x-pi-web-reconnect"]);
+				const rotatedAgain = item && !item.restart && item.successor && !current(item.successor) && reconnect && reconnect.grant.run_id === item.grant.run_id && equal(reconnect.grant.token, item.grant.token) && (item.originalRuntimeId === void 0 || item.originalRuntimeId === reconnect.runtimeId);
+				if (!item || rotatedAgain) {
+					if (reconnect) {
+						const runtimeId = (session) => session.runtime?.runtimeId ?? session.interaction?.runtimeId;
+						const live = [...sessions.keys()].map(current).filter((session) => session?.grant.run_id === reconnect.grant.run_id);
+						const matches = live.filter((session) => runtimeId(session) === reconnect.runtimeId);
+						if (matches.length === 0 && live.length === 0) {
+							response.writeHead(202, {
+								"Content-Type": "application/json",
+								"Cache-Control": "no-store"
+							}).end(JSON.stringify({ pending: true }));
+							return;
+						}
+						const target = matches.length === 1 ? matches[0] : void 0;
+						const proved = target && await proof(target.grant, target.generation, target.port);
+						const latest = readBrowserReconnect(config, request.headers["x-pi-web-reconnect"]);
+						if (stopped || !target || !latest || current(target.generation) !== target || runtimeId(target) !== reconnect.runtimeId || target.grant.token !== latest.grant.token || target.grant.backendHost !== latest.grant.backendHost) {
+							fail(response, 410);
+							return;
+						}
+						if (!proved) {
+							fail(response, 503);
+							return;
+						}
+						response.writeHead(200, {
+							"Content-Type": "application/json",
+							"Cache-Control": "no-store"
+						}).end(JSON.stringify({ path: `/s/${target.generation}/` }));
+						return;
+					}
 					fail(response, 410);
 					return;
 				}
@@ -5239,6 +5300,7 @@ async function startLockedHub(config, options) {
 							payload: {
 								generation: session.generation,
 								token,
+								reconnect: browserReconnect(session.grant, session.runtime?.runtimeId ?? session.interaction?.runtimeId),
 								...activeRestart ? { restart: {
 									id: activeRestart.id,
 									timeoutMs: 12e4

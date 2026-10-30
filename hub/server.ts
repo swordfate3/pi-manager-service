@@ -28,6 +28,7 @@ import {
 } from "./config.ts";
 import { ForwardQueue } from "./forward-queue.ts";
 import { browserHeartbeat } from "./browser-heartbeat.ts";
+import { browserReconnect, readBrowserReconnect } from "./browser-reconnect.ts";
 import { createGateManagementApi } from "./gate-management.ts";
 import { gatewayIdentity } from "./gateway-auth.ts";
 import type { InteractionTarget } from "./interaction-control.ts";
@@ -822,7 +823,41 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
         pruneHandoffs();
         const token = request.headers["x-pi-web-handoff"];
         const item = typeof token === "string" && /^[a-f0-9]{48}$/.test(token) ? handoffs.get(token) : undefined;
-        if (!item) {
+        const reconnect = readBrowserReconnect(config, request.headers["x-pi-web-reconnect"]);
+        // The ordinary handoff stays pinned to its first successor. A separate
+        // exact-runtime ticket may bridge further address rotations, but never
+        // replace managed restart authority or select a different Pi runtime.
+        const rotatedAgain = item && !item.restart && item.successor && !current(item.successor) && reconnect &&
+          reconnect.grant.run_id === item.grant.run_id && equal(reconnect.grant.token, item.grant.token) &&
+          (item.originalRuntimeId === undefined || item.originalRuntimeId === reconnect.runtimeId);
+        if (!item || rotatedAgain) {
+          if (reconnect) {
+            const runtimeId = (session: Session) => session.runtime?.runtimeId ?? session.interaction?.runtimeId;
+            const live = [...sessions.keys()].map(current).filter((session): session is Session =>
+              session?.grant.run_id === reconnect.grant.run_id);
+            const matches = live.filter(session => runtimeId(session) === reconnect.runtimeId);
+            if (matches.length === 0 && live.length === 0) {
+              response.writeHead(202, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+                .end(JSON.stringify({ pending: true }));
+              return;
+            }
+            const target = matches.length === 1 ? matches[0] : undefined;
+            const proved = target && await proof(target.grant, target.generation, target.port);
+            const latest = readBrowserReconnect(config, request.headers["x-pi-web-reconnect"]);
+            if (stopped || !target || !latest || current(target.generation) !== target ||
+              runtimeId(target) !== reconnect.runtimeId || target.grant.token !== latest.grant.token ||
+              target.grant.backendHost !== latest.grant.backendHost) {
+              fail(response, 410);
+              return;
+            }
+            if (!proved) {
+              fail(response, 503);
+              return;
+            }
+            response.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+              .end(JSON.stringify({ path: `/s/${target.generation}/` }));
+            return;
+          }
           fail(response, 410);
           return;
         }
@@ -1198,6 +1233,7 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
                 payload: {
                   generation: session.generation,
                   token,
+                  reconnect: browserReconnect(session.grant, session.runtime?.runtimeId ?? session.interaction?.runtimeId),
                   ...(activeRestart ? { restart: { id: activeRestart.id, timeoutMs: 120_000 } } : {}),
                 },
               }),

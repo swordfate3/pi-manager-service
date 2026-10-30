@@ -497,6 +497,44 @@ test("management requires one-time pairing, CSRF and origin and sanitizes target
   assert.equal(JSON.stringify(await retry.json()).includes("private"), false);
 });
 
+test("an exact successor's temporary proof timeout does not permanently expire browser recovery", async (t) => {
+  const f = await fixture(t, false);
+  const socket = new WebSocket(`${f.url.replace("http", "ws")}s/${f.payload.generation}/ws`, {
+    origin: new URL(f.url).origin,
+  });
+  t.after(() => socket.terminate());
+  const route = await new Promise<{ token: string }>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.on("message", (raw) => {
+      const message = JSON.parse(raw.toString());
+      if (message.event === "hub_route") resolve(message.payload);
+    });
+  });
+  const next = "2".repeat(32);
+  assert.equal((await f.register(next)).ok, true);
+  const handoff = () =>
+    fetch(`${f.url}api/session-handoff`, {
+      method: "POST",
+      headers: {
+        Origin: new URL(f.url).origin,
+        "X-Pi-Web-Handoff": route.token,
+      },
+    });
+  const held = f.holdProof();
+  const request = handoff();
+  const release = await held;
+  try {
+    assert.equal((await request).status, 503, "a known successor is unavailable, not an invalid capability");
+  } finally {
+    release();
+  }
+  const recovered = await handoff();
+  assert.equal(recovered.status, 200);
+  assert.equal((await recovered.json()).path, `/s/${next}/`);
+  revokeSession(f.config, f.runId);
+  assert.equal((await handoff()).status, 410);
+});
+
 test("a paired browser retains pending handoff beyond three minutes and resolves only the exact successor", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);

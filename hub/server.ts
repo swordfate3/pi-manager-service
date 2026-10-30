@@ -883,13 +883,19 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
         if (
           !successor ||
           successor.grant.run_id !== grant.run_id ||
-          !proved ||
           stopped ||
           current(targetGeneration) !== successor ||
           (item.originalRuntimeId !== undefined && successor.runtime?.runtimeId !== item.originalRuntimeId) ||
           item.expires <= Date.now()
         ) {
           fail(response, 410);
+          return;
+        }
+        // A slow identity endpoint is not evidence that this exact, still-live
+        // successor or its capability expired. Never forward without proof,
+        // but let the browser retry within the unchanged handoff deadline.
+        if (!proved) {
+          fail(response, 503);
           return;
         }
         response
@@ -908,13 +914,16 @@ async function startLockedHub(config: HubConfig, options: { versions?: VersionSt
           response.writeHead(308, { Location: `/s/${route[1]}/`, "Cache-Control": "no-store" }).end();
           return;
         }
-        if (!(await proof(session.grant, session.generation, session.port))) {
-          retire(session.generation);
+        const proved = await proof(session.grant, session.generation, session.port);
+        if (stopped || current(session.generation) !== session || response.destroyed) {
           fail(response, 410);
           return;
         }
-        if (stopped || current(session.generation) !== session || response.destroyed) {
-          fail(response, 410);
+        // A read-only HTTP request must not revoke an existing registration
+        // merely because its fresh backend proof timed out. Registration lease,
+        // explicit unregister, replacement and revocation still own retirement.
+        if (!proved) {
+          fail(response, 503);
           return;
         }
         const upstream = http.request(

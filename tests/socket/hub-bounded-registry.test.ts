@@ -7,6 +7,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { WebSocket, WebSocketServer } from "ws";
 import { initializeHub, issueSession, readHubConfig, revokeSession } from "../../hub/config.ts";
 import { startHub } from "../../hub/server.ts";
 import { isolatedHubCliEnvironment } from "../helpers/hub-cli.ts";
@@ -35,8 +36,11 @@ async function fixture(t: test.TestContext) {
     res.end(JSON.stringify(answer));
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const wss = new WebSocketServer({ server });
   const port = (server.address() as net.AddressInfo).port;
   t.after(async () => {
+    for (const socket of wss.clients) socket.terminate();
+    wss.close();
     await hub.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -362,4 +366,86 @@ test("concurrent backend proof admission is bounded and overload does not retire
   }
   for (const response of await Promise.all(requests)) assert.equal(response.status, 200);
   assert.equal((await fetch(`${f.hub.url}s/${generation}/`)).status, 200);
+});
+
+test("a timed-out route proof is retryable and cannot retire a registered Pi", async (t) => {
+  const f = await fixture(t);
+  const { boot, slot } = (await f.negotiate()).result;
+  const generation = (
+    await f.exchange({
+      action: "bounded_issue",
+      protocol,
+      boot,
+      slot,
+      request_id: "d".repeat(32),
+      port: f.port,
+    })
+  ).result.generation;
+  f.setGeneration(generation);
+  assert.equal(
+    (
+      await f.exchange({
+        action: "bounded_register",
+        protocol,
+        boot,
+        generation,
+        port: f.port,
+      })
+    ).ok,
+    true,
+  );
+  const socket = new WebSocket(`${f.hub.url.replace("http", "ws")}s/${generation}/ws`, {
+    origin: new URL(f.hub.url).origin,
+  });
+  t.after(() => socket.terminate());
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.holdProof(() => held);
+  try {
+    const response = await fetch(`${f.hub.url}s/${generation}/`, {
+      method: "HEAD",
+    });
+    assert.equal(response.status, 503, "temporary proof failure is not an expired session link");
+    assert.equal(f.hub.listSessions().length, 1, "a read-only probe cannot unregister a live Pi");
+    assert.equal(socket.readyState, WebSocket.OPEN, "another tab's failed probe cannot disconnect this tab");
+  } finally {
+    f.holdProof();
+    release();
+  }
+  assert.equal(
+    (await fetch(`${f.hub.url}s/${generation}/`)).status,
+    200,
+    "the same route recovers without registration or returning to the Hub",
+  );
+});
+
+test("grant revocation during a delayed route proof still retires the route", async (t) => {
+  const f = await fixture(t);
+  const generation = "e".repeat(32);
+  f.setGeneration(generation);
+  assert.equal((await f.exchange({ action: "register", generation, port: f.port })).ok, true);
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.holdProof(async () => {
+    entered();
+    await held;
+  });
+  const response = fetch(`${f.hub.url}s/${generation}/`, { method: "HEAD" });
+  await started;
+  revokeSession(f.config, f.credential.run_id);
+  release();
+  assert.equal((await response).status, 410);
+  assert.equal(f.hub.listSessions().length, 0);
 });

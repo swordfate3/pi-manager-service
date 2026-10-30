@@ -4886,8 +4886,12 @@ async function startLockedHub(config, options) {
 					}).end(JSON.stringify({ pending: true }));
 					return;
 				}
-				if (!successor || successor.grant.run_id !== grant.run_id || !proved || stopped || current(targetGeneration) !== successor || item.originalRuntimeId !== void 0 && successor.runtime?.runtimeId !== item.originalRuntimeId || item.expires <= Date.now()) {
+				if (!successor || successor.grant.run_id !== grant.run_id || stopped || current(targetGeneration) !== successor || item.originalRuntimeId !== void 0 && successor.runtime?.runtimeId !== item.originalRuntimeId || item.expires <= Date.now()) {
 					fail(response, 410);
+					return;
+				}
+				if (!proved) {
+					fail(response, 503);
 					return;
 				}
 				response.writeHead(200, {
@@ -4910,13 +4914,13 @@ async function startLockedHub(config, options) {
 					}).end();
 					return;
 				}
-				if (!await proof(session.grant, session.generation, session.port)) {
-					retire(session.generation);
+				const proved = await proof(session.grant, session.generation, session.port);
+				if (stopped || current(session.generation) !== session || response.destroyed) {
 					fail(response, 410);
 					return;
 				}
-				if (stopped || current(session.generation) !== session || response.destroyed) {
-					fail(response, 410);
+				if (!proved) {
+					fail(response, 503);
 					return;
 				}
 				const upstream = http.request({

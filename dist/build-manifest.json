@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": {
     "count": 148,
-    "sha256": "4431feb2753a364666f4d31518a6bd0b939a8586c128b2ff09205ff5395823b1",
+    "sha256": "00617addf2a0e20449cc92d4725950c971a1839f7eda942e14bc938391367e42",
     "files": [
       {
         "path": "bin/pi-manager-admin.mjs",
@@ -226,7 +226,7 @@
       },
       {
         "path": "hub/server.ts",
-        "sha256": "67ac06aa906f6bc115f94e31bc5935337b800e2e0acb313a6ddab0b6b13297c5"
+        "sha256": "432d8f6018579081d0069cad1aec495042e80742dff90ed9876966a37067baa0"
       },
       {
         "path": "hub/state-budget.ts",
@@ -600,11 +600,11 @@
   },
   "outputs": {
     "count": 7,
-    "sha256": "5aacf08e036c34f0954e4ebad925575cd0e19e53b2cc1083d5d375ffdc43200c",
+    "sha256": "9bfb0dfcc8ced86fd42ec5d5e0d2f85e9339ed62d719728f26fc694a882163aa",
     "files": [
       {
         "path": "hub/pi-web-hub.mjs",
-        "sha256": "e33e45ddbc10a5d0f2f7deee99c02f259a52f19e6523fd456d74e23cc33a5aac"
+        "sha256": "0930f5544f3315336940aac5590414331b986da899037c3815cd2b79c21d8214"
       },
       {
         "path": "manager/pi-manager-admin.mjs",
@@ -612,7 +612,7 @@
       },
       {
         "path": "manager/pi-manager-chat.mjs",
-        "sha256": "709d88664c54cc5f3af4a3086cb0a2264816b0551d0db7774e0c8fd59b46136d"
+        "sha256": "a647a58d86a4fe9729e697251201e0e19ca2bbbfc559ca0171d81a9fb53db866"
       },
       {
         "path": "manager/pi-manager-executor.mjs",
@@ -620,7 +620,7 @@
       },
       {
         "path": "manager/pi-manager-local.mjs",
-        "sha256": "1487c95389d157f26f45e830e115ed9c89b8b1897a0a0b1dbfd691016b358b55"
+        "sha256": "afb9fa8ceb5baec0ae74d17a2bf1c5cb64c8a91b22c8fc2864e400977f0b8b22"
       },
       {
         "path": "manager/pi-manager-public.mjs",

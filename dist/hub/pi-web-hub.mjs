@@ -4305,7 +4305,7 @@ function captureHubMetadata(moduleUrl = import.meta.url) {
 	{
 		const embedded = {
 			"version": "0.1.0",
-			"build": "4431feb2753a364666f4d31518a6bd0b939a8586c128b2ff09205ff5395823b1"
+			"build": "00617addf2a0e20449cc92d4725950c971a1839f7eda942e14bc938391367e42"
 		};
 		if (embedded && isStableSemver(embedded.version) && SHA256.test(embedded.build)) return Object.freeze({
 			version: embedded.version,
@@ -5151,8 +5151,12 @@ async function startLockedHub(config, options) {
 					}).end(JSON.stringify({ pending: true }));
 					return;
 				}
-				if (!successor || successor.grant.run_id !== grant.run_id || !proved || stopped || current(targetGeneration) !== successor || item.originalRuntimeId !== void 0 && successor.runtime?.runtimeId !== item.originalRuntimeId || item.expires <= Date.now()) {
+				if (!successor || successor.grant.run_id !== grant.run_id || stopped || current(targetGeneration) !== successor || item.originalRuntimeId !== void 0 && successor.runtime?.runtimeId !== item.originalRuntimeId || item.expires <= Date.now()) {
 					fail(response, 410);
+					return;
+				}
+				if (!proved) {
+					fail(response, 503);
 					return;
 				}
 				response.writeHead(200, {
@@ -5175,13 +5179,13 @@ async function startLockedHub(config, options) {
 					}).end();
 					return;
 				}
-				if (!await proof(session.grant, session.generation, session.port)) {
-					retire(session.generation);
+				const proved = await proof(session.grant, session.generation, session.port);
+				if (stopped || current(session.generation) !== session || response.destroyed) {
 					fail(response, 410);
 					return;
 				}
-				if (stopped || current(session.generation) !== session || response.destroyed) {
-					fail(response, 410);
+				if (!proved) {
+					fail(response, 503);
 					return;
 				}
 				const upstream = http.request({
